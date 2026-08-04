@@ -27,7 +27,11 @@ import {
   type HistQuery,
   type HistChunk,
   type HistEnd,
+  type SiteMode,
+  SITE_MODES,
+  OP_SET_MODE,
 } from '$lib/protocol/messages'
+import { buildPlan } from './planner'
 import {
   RESOLUTIONS,
   DEFAULT_MAX_POINTS,
@@ -59,6 +63,14 @@ export interface SimFaults {
    * how that gets seen rather than only asserted.
    */
   histOutage: { fromMs: number; toMs: number } | null
+  /**
+   * The planner could not run and the box fell back.
+   *
+   * Distinct from having no plan: "nothing is scheduled" and "we do not know
+   * what is scheduled" are different sentences, and only one of them is true
+   * here.
+   */
+  planStale: boolean
 }
 
 export const NO_FAULTS: SimFaults = {
@@ -69,6 +81,7 @@ export const NO_FAULTS: SimFaults = {
   maxProto: PROTO_MAX,
   frameLossRate: 0,
   histOutage: null,
+  planStale: false,
 }
 
 /** Field ids 1–9, frozen permanently. See contract/registry.yaml. */
@@ -157,6 +170,8 @@ export class SimBox {
   #lastReading: Reading | null = null
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
+  #mode: SiteMode = 'automatic'
+  #planRev = 1
 
   /** cmdId -> result, kept so a retry cannot act twice. */
   #idempotency = new Map<string, { leaseId: string; expiresAtMs: number }>()
@@ -208,6 +223,9 @@ export class SimBox {
       case 'cmd':
         this.#onCmd(b as Cmd)
         break
+      case 'plan.get':
+        this.#onPlanGet(typeof id === 'number' ? id : 0)
+        break
       case 'hist.query':
         this.#onHistQuery(id, b as HistQuery)
         break
@@ -228,7 +246,7 @@ export class SimBox {
 
     const fields: Record<string, number> = {}
     const candidate: Record<number, number> = {
-      [FID.MODE]: 1,
+      [FID.MODE]: SITE_MODES.indexOf(this.#mode),
       [FID.GRID_W]: reading.gridW,
       [FID.PV_W]: reading.pvW,
       [FID.BATTERY_W]: reading.batteryW,
@@ -318,7 +336,7 @@ export class SimBox {
     this.#lastReading = reading
 
     const fields: Record<string, number> = {
-      [FID.MODE]: 1,
+      [FID.MODE]: SITE_MODES.indexOf(this.#mode),
       [FID.GRID_W]: reading.gridW,
       [FID.PV_W]: reading.pvW,
       [FID.BATTERY_W]: reading.batteryW,
@@ -383,9 +401,31 @@ export class SimBox {
       this.#bucket
     )
 
+    // The intent is accepted; now it has to actually take effect. A mode
+    // change alters what the planner does, so the plan is remade and pushed
+    // unasked — otherwise the app would show yesterday's intent beside
+    // today's mode and neither would look wrong.
+    if (cmd.op === OP_SET_MODE) {
+      const wanted = cmd.args['mode']
+      if (typeof wanted === 'string' && (SITE_MODES as readonly string[]).includes(wanted)) {
+        this.#mode = wanted as SiteMode
+        this.#planRev += 1
+      }
+    }
+
     // The echo of a requested value is never confirmation. Real confirmation
     // is the driver reading the value back, which may simply not happen.
     if (this.faults.neverConfirm) return
+
+    if (cmd.op === OP_SET_MODE) {
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: SITE_MODES.indexOf(this.#mode),
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
 
     const value = typeof cmd.args['watts'] === 'number' ? cmd.args['watts'] : 0
     this.#cmdResult(cmd.cmdId, 'applied', undefined, {
@@ -393,6 +433,41 @@ export class SimBox {
       src: SRC.BATTERY,
       uptimeMs: this.uptimeMs,
     })
+  }
+
+  #onPlanGet(id: number): void {
+    if (this.faults.booting) {
+      this.#error('E_BOOTING', true, {}, id)
+      return
+    }
+    this.#sendPlan(id)
+  }
+
+  #sendPlan(id?: number): void {
+    const plan = buildPlan({
+      house: this.house,
+      mode: this.#mode,
+      nowMs: this.#now(),
+      uptimeMs: this.uptimeMs,
+      socPermille: this.#socPermille,
+      ceilingW: this.#ceilingW,
+      rev: this.#planRev,
+      stale: this.faults.planStale,
+    })
+
+    this.#send(
+      {
+        lane: LANE_BULK,
+        flags: 0,
+        envelope: { t: 'plan', ...(typeof id === 'number' ? { id } : {}), b: plan },
+      },
+      bulkBucketFor(16000) ?? 16384
+    )
+  }
+
+  /** The mode the site is running in. Read by the planner. */
+  get mode(): SiteMode {
+    return this.#mode
   }
 
   /**

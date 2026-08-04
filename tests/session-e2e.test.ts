@@ -10,7 +10,7 @@ import { Session } from '$lib/protocol/session'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import { decodeFrame } from '$lib/protocol/frame'
-import { PROTO_FLOOR } from '$lib/protocol/messages'
+import { PROTO_FLOOR, SITE_MODES } from '$lib/protocol/messages'
 
 const BUILD = 'test'
 
@@ -73,8 +73,9 @@ describe('session end to end', () => {
 
     expect(session.state.fields.size).toBe(fieldCount)
     expect(session.state.fields.get(3)).not.toBe(pvBefore)
-    // Fields the delta did not mention survive.
-    expect(session.state.fields.get(1)).toBe(1)
+    // Fields the delta did not mention survive. Field 1 is the site mode, an
+    // index into SITE_MODES — 'automatic' is the box's default.
+    expect(session.state.fields.get(1)).toBe(SITE_MODES.indexOf('automatic'))
   })
 
   it('keeps the cadence when nothing changes, without inventing a reading', async () => {

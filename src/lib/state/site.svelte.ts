@@ -12,6 +12,7 @@
  */
 
 import { Session, type SessionState } from '$lib/protocol/session'
+import type { Plan, CmdResult, Guard } from '$lib/protocol/messages'
 import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
@@ -105,6 +106,22 @@ export class SiteStore {
    */
   history(query: HistQuery, onChunk: (chunk: HistChunk) => void): Promise<HistEnd> {
     return this.#session.history(query, onChunk)
+  }
+
+  /** What the box intends to do. */
+  plan(): Promise<Plan> {
+    return this.#session.plan()
+  }
+
+  /**
+   * Express an intent and wait for what actually happened.
+   *
+   * Resolves with the outcome including 'unconfirmed' — the box accepted it
+   * but the hardware never reported back — because that is an answer the UI
+   * has to be able to give, not an error to swallow.
+   */
+  command(op: string, args: Record<string, unknown>, guards: Guard[] = []): Promise<CmdResult> {
+    return this.#session.command(op, args, guards).promise
   }
 
   get paired(): boolean {

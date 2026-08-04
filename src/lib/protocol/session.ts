@@ -26,6 +26,12 @@ import {
   type HistQuery,
   type HistChunk,
   type HistEnd,
+  type Plan,
+  type Guard,
+  type CmdAck,
+  type CmdResult,
+  CMD_ACK_TIMEOUT_MS,
+  CMD_CONFIRM_TIMEOUT_MS,
 } from './messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import type { CarrierState, Fid, Source, SourceState } from './types'
@@ -59,6 +65,8 @@ export interface SessionState {
   terminated: SessionTerminate | null
   /** Set when the box says this app is too old. */
   needsUpdate: boolean
+  /** What the box intends to do. Null until asked for, or when unsupported. */
+  plan: Plan | null
 }
 
 const EMPTY: SessionState = {
@@ -78,6 +86,7 @@ const EMPTY: SessionState = {
   lastError: null,
   terminated: null,
   needsUpdate: false,
+  plan: null,
 }
 
 export interface SessionOptions {
@@ -102,6 +111,75 @@ interface PendingHistory {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** A plan is one bulk message, so this can be much tighter than history. */
+export const PLAN_TIMEOUT_MS = 8_000
+
+interface PendingPlan {
+  resolve: (plan: Plan) => void
+  reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+/**
+ * How long an intent stays valid, in ms of box uptime.
+ *
+ * Two minutes. Long enough to survive a slow relay and a reconnection, short
+ * enough that a command queued while the phone was in a tunnel is refused
+ * rather than acted on as though the user had just pressed the button.
+ */
+export const CMD_VALID_FOR_MS = 120_000
+
+interface PendingCmd {
+  resolve: (result: CmdResult) => void
+  reject: (err: Error) => void
+  ackTimer: ReturnType<typeof setTimeout>
+  confirmTimer: ReturnType<typeof setTimeout>
+  acked: boolean
+}
+
+export interface CommandHandle {
+  cmdId: string
+  state: 'sending'
+  promise: Promise<CmdResult>
+}
+
+/** Carries a sentence the user can act on, not a code they cannot. */
+export class CommandError extends Error {
+  constructor(
+    readonly code: string,
+    readonly help: string
+  ) {
+    super(code)
+    this.name = 'CommandError'
+  }
+}
+
+/**
+ * UUIDv7: time-ordered, so the box can expire old idempotency keys by prefix
+ * rather than keeping every id it has ever seen.
+ */
+function uuidv7(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const ms = BigInt(Date.now())
+
+  for (let i = 0; i < 6; i++) {
+    bytes[i] = Number((ms >> BigInt(8 * (5 - i))) & 0xffn)
+  }
+  bytes[6] = (bytes[6]! & 0x0f) | 0x70 // version 7
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80 // variant
+
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/** Thrown when the box answers a plan request with a stable error code. */
+export class PlanError extends Error {
+  constructor(readonly detail: ErrorMsg) {
+    super(detail.code)
+    this.name = 'PlanError'
+  }
+}
+
 /** Thrown when the box answers a history request with a stable error code. */
 export class HistoryError extends Error {
   constructor(readonly detail: ErrorMsg) {
@@ -120,6 +198,8 @@ export class Session {
   #bucket: 256 | 512 = 512
   #nextRequestId = 1
   #pendingHistory = new Map<number, PendingHistory>()
+  #pendingPlan = new Map<number, PendingPlan>()
+  #pendingCmd = new Map<string, PendingCmd>()
 
   constructor(opts: SessionOptions) {
     this.#opts = opts
@@ -225,6 +305,91 @@ export class Session {
     })
   }
 
+  /**
+   * Ask the box what it means to do.
+   *
+   * Bulk lane: a plan is a day of slots, far past lane 0's fixed bucket, and
+   * it is not part of the constant-cadence stream anyway.
+   */
+  plan(): Promise<Plan> {
+    if (!this.#carrier) return Promise.reject(new Error('no carrier'))
+
+    const id = this.#nextRequestId
+    this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
+
+    return new Promise<Plan>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingPlan.delete(id)
+        reject(new Error('plan request timed out'))
+      }, PLAN_TIMEOUT_MS)
+
+      this.#pendingPlan.set(id, { resolve, reject, timer })
+      this.#sendBulk({ t: 'plan.get', id })
+    })
+  }
+
+  /**
+   * Express an intent and follow it to its outcome.
+   *
+   * Three separate deadlines, because they are three different events and
+   * collapsing them would make the UI say the wrong thing:
+   *   - no ack in ACK_TIMEOUT  -> it never reached the box
+   *   - ack but no result      -> the box took it, the hardware has not confirmed
+   *   - result                 -> what actually happened
+   *
+   * `notValidAfterMs` is mandatory on the wire, so an intent that sits in a
+   * queue cannot execute as though it were fresh.
+   */
+  command(op: string, args: Record<string, unknown>, guards: Guard[] = []): CommandHandle {
+    const cmdId = uuidv7()
+
+    const handle: CommandHandle = {
+      cmdId,
+      state: 'sending',
+      promise: new Promise<CmdResult>((resolve, reject) => {
+        if (!this.#carrier) {
+          reject(new Error('no carrier'))
+          return
+        }
+
+        const ackTimer = setTimeout(() => {
+          const p = this.#pendingCmd.get(cmdId)
+          if (p && !p.acked) {
+            this.#pendingCmd.delete(cmdId)
+            reject(new CommandError('E_NO_ACK', "That didn't reach your box. Try again."))
+          }
+        }, CMD_ACK_TIMEOUT_MS)
+
+        const confirmTimer = setTimeout(() => {
+          const p = this.#pendingCmd.get(cmdId)
+          if (p && p.acked) {
+            this.#pendingCmd.delete(cmdId)
+            // Accepted, but the hardware never reported back. Not a failure
+            // and not a success — and the UI has to be able to say so.
+            resolve({ cmdId, state: 'unconfirmed' })
+          }
+        }, CMD_CONFIRM_TIMEOUT_MS)
+
+        this.#pendingCmd.set(cmdId, { resolve, reject, ackTimer, confirmTimer, acked: false })
+
+        this.#send({
+          t: 'cmd',
+          b: {
+            cmdId,
+            op,
+            args,
+            // Relative to box uptime, which is the only clock both ends agree
+            // on. A phone's wall clock is not a shared reference.
+            notValidAfterMs: this.#state.uptimeMs + CMD_VALID_FOR_MS,
+            expect: { rev: this.#state.controlRev, guards },
+          },
+        })
+      }),
+    }
+
+    return handle
+  }
+
   #sendHello(): void {
     this.#send({
       t: 'hello',
@@ -265,6 +430,15 @@ export class Session {
         break
       case 'hist.end':
         this.#settleHistory(envelope.id, envelope.b as HistEnd)
+        break
+      case 'plan':
+        this.#onPlan(envelope.b as Plan, envelope.id)
+        break
+      case 'cmd.ack':
+        this.#onCmdAck(envelope.b as CmdAck)
+        break
+      case 'cmd.result':
+        this.#onCmdResult(envelope.b as CmdResult)
         break
       case 'error':
         this.#onError(envelope.b as ErrorMsg, envelope.id)
@@ -355,14 +529,67 @@ export class Session {
    * session-wide error banner and make the whole app look broken over one
    * chart the user can simply narrow.
    */
-  #onError(b: ErrorMsg, id?: number): void {
-    const pending = this.#pendingHistory.get(id ?? -1)
+  #onPlan(b: Plan, id?: number): void {
+    // Kept on session state as well as resolving the request, so a plan that
+    // arrives unasked — the box replans after a mode change — reaches the UI
+    // without anyone having to poll for it.
+    this.#patch({ plan: b })
+
+    if (typeof id !== 'number') return
+    const pending = this.#pendingPlan.get(id)
     if (pending) {
-      this.#pendingHistory.delete(id!)
       clearTimeout(pending.timer)
-      pending.reject(new HistoryError(b))
-      return
+      this.#pendingPlan.delete(id)
+      pending.resolve(b)
     }
+  }
+
+  #onCmdAck(b: CmdAck): void {
+    const pending = this.#pendingCmd.get(b.cmdId)
+    if (!pending) return
+
+    // The box has the intent. From here the question is whether the hardware
+    // confirms, which is a different deadline.
+    clearTimeout(pending.ackTimer)
+    pending.acked = true
+  }
+
+  #onCmdResult(b: CmdResult): void {
+    const pending = this.#pendingCmd.get(b.cmdId)
+    if (!pending) return
+
+    clearTimeout(pending.ackTimer)
+    clearTimeout(pending.confirmTimer)
+    this.#pendingCmd.delete(b.cmdId)
+    pending.resolve(b)
+  }
+
+  /**
+   * An error carrying a request id belongs to that request alone.
+   *
+   * Raising the session-wide error state instead would make the whole app
+   * look broken over one window the box could not serve. Only an error with
+   * no request behind it is about the session.
+   */
+  #onError(b: ErrorMsg, id?: number): void {
+    if (typeof id === 'number') {
+      const history = this.#pendingHistory.get(id)
+      if (history) {
+        this.#pendingHistory.delete(id)
+        clearTimeout(history.timer)
+        history.reject(new HistoryError(b))
+        return
+      }
+
+      const plan = this.#pendingPlan.get(id)
+      if (plan) {
+        this.#pendingPlan.delete(id)
+        clearTimeout(plan.timer)
+        plan.reject(new PlanError(b))
+        return
+      }
+    }
+
     this.#patch({ lastError: b })
   }
 

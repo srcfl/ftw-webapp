@@ -11,6 +11,7 @@
   import InstallHint from '$lib/ui/InstallHint.svelte'
   import UpdateLine from '$lib/ui/UpdateLine.svelte'
   import Now from '$views/Now.svelte'
+  import Plan from '$views/Plan.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router } from '$lib/state/route.svelte'
 
@@ -66,7 +67,9 @@
   <UpdateLine />
 
   <main>
-    {#if router.current === 'history'}
+    {#if router.current === 'plan'}
+      <Plan {site} />
+    {:else if router.current === 'history'}
       <!-- Loaded on demand: the chart, its canvas and the tile cache must not
            sit on the path to the first frame of the app. -->
       {#await import('$views/History.svelte') then module}
@@ -78,15 +81,20 @@
     {/if}
   </main>
 
-  <!-- Two screens, so two buttons. A router library would bring a matcher and
-       a history stack to decide between them; the hash already works and the
-       back button comes free. -->
+  <!-- Three screens, so three buttons. The hash already works and the back
+       button comes free; a router library would add a matcher and a history
+       stack to decide between three names. -->
   {#if site.paired}
     <nav aria-label="Views">
       <button
         type="button"
         aria-current={router.current === 'now' ? 'page' : undefined}
         onclick={() => router.go('now')}>Now</button
+      >
+      <button
+        type="button"
+        aria-current={router.current === 'plan' ? 'page' : undefined}
+        onclick={() => router.go('plan')}>Plan</button
       >
       <button
         type="button"

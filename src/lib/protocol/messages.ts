@@ -141,8 +141,80 @@ export interface HistEnd {
 export const MISSING_SAMPLE = -2147483648
 
 // --------------------------------------------------------------------------
+// The plan
+// --------------------------------------------------------------------------
+
+/**
+ * How the site is being run.
+ *
+ * Three, because a fourth would need explaining. The names are what a
+ * householder would say, not what the optimiser calls itself.
+ */
+export type SiteMode = 'automatic' | 'self_use' | 'paused'
+
+export const SITE_MODES: readonly SiteMode[] = ['automatic', 'self_use', 'paused']
+
+/**
+ * What the box intends to do, slot by slot.
+ *
+ * Intent, not prophecy. The box revalidates against fresh state every tick,
+ * so a plan is what it currently means to do — which is exactly the thing a
+ * person opens the app to check, and the thing that makes the app feel like
+ * it knows something rather than just drawing lines.
+ */
+export interface PlanSlot {
+  startMs: number
+  /** Slot length. Fifteen minutes on the box today, but do not assume it. */
+  durationMs: number
+  /** Signed watts at the battery, FTW's convention: positive charges. */
+  batteryW: number
+  /** Expected import at the meter. Negative means expected export. */
+  gridW: number
+  /** Import price for the slot, in minor units per kWh. Null when unknown. */
+  priceMinor: number | null
+  /**
+   * Why this slot looks like this.
+   *
+   * A stable code, never prose — the box has no idea what language anyone
+   * reads. The app owns every word the user sees.
+   */
+  reason: PlanReason
+}
+
+export type PlanReason =
+  | 'cheap_import'
+  | 'expensive_import'
+  | 'solar_surplus'
+  | 'peak_shaving'
+  | 'reserve_held'
+  | 'export_paid'
+  | 'idle'
+
+export interface Plan {
+  /** Bumped whenever the box replans. */
+  rev: number
+  /** Box uptime when this plan was made. */
+  uptimeMs: number
+  /** Wall clock for the slots, since these are future times a user reads. */
+  slots: PlanSlot[]
+  /**
+   * Set when the planner could not run and the box fell back.
+   *
+   * Saying so is the difference between "nothing is scheduled" and "we do not
+   * know what is scheduled", and only one of those is honest.
+   */
+  stale: boolean
+  /** Import ceiling being defended, in watts. Null when there is none. */
+  ceilingW: number | null
+}
+
+// --------------------------------------------------------------------------
 // Commands
 // --------------------------------------------------------------------------
+
+/** Operations the app can ask for. Each maps to a scope in the registry. */
+export const OP_SET_MODE = 'site.mode.set'
+export const OP_BATTERY_HOLD = 'battery.hold'
 
 export interface Guard {
   fid: Fid
@@ -213,6 +285,7 @@ export interface SessionTerminate {
 export type ServerMessage =
   | { t: 'hello_ok'; b: HelloOk }
   | { t: 'snap'; b: Snap }
+  | { t: 'plan'; b: Plan }
   | { t: 'delta'; b: DeltaMsg }
   | { t: 'tick'; b: Tick }
   | { t: 'hist.chunk'; id: number; b: HistChunk }
@@ -226,5 +299,6 @@ export type ServerMessage =
 export type ClientMessage =
   | { t: 'hello'; b: Hello }
   | { t: 'sub'; b: Sub }
+  | { t: 'plan.get'; id: number }
   | { t: 'hist.query'; id: number; b: HistQuery }
   | { t: 'cmd'; b: Cmd }
