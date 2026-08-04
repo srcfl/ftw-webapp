@@ -13,6 +13,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "relay": "node relay/src/main.ts",
+    "icons": "node scripts/make-icons.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,0 +1,168 @@
+/* The service worker, held to the one promise that matters.
+ *
+ * A page must never be served a shell from one build and an asset from
+ * another. That failure is invisible in a browser until something explodes at
+ * runtime, and it cannot be reproduced by hand, so it is tested here — by
+ * deploying twice and checking what the still-running worker answers with
+ * while the new one waits.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { FakeCacheStorage, FakeWorker, type Precache, type SwEvent } from './support/cache-storage.ts'
+
+const ORIGIN = 'https://app.sourceful.energy'
+
+/** Whatever the CDN is currently serving. Replaced wholesale by `deploy`. */
+let server = new Map<string, string>()
+
+const caches = new FakeCacheStorage((path) => server.get(path))
+
+function buildOf(version: string): { precache: Precache; files: Map<string, string> } {
+  const asset = `/assets/index-${version}.js`
+  return {
+    precache: { v: version, files: ['/', asset, '/manifest.webmanifest'] },
+    files: new Map([
+      ['/', `<html>${version}</html>`],
+      [asset, `app ${version}`],
+      ['/manifest.webmanifest', '{}'],
+    ]),
+  }
+}
+
+/** Puts a build on the server and loads its worker, without installing it. */
+async function load(version: string): Promise<FakeWorker> {
+  const { precache, files } = buildOf(version)
+  server = files
+
+  const worker = new FakeWorker(precache, caches, ORIGIN)
+  worker.location = { origin: ORIGIN }
+
+  vi.stubGlobal('self', worker)
+  vi.stubGlobal('caches', caches)
+  vi.stubGlobal('__PRECACHE__', precache)
+  vi.stubGlobal('fetch', async (request: { url: string }) => {
+    const path = new URL(request.url).pathname
+    const body = server.get(path)
+    if (body === undefined) throw new Error(`network: no ${path}`)
+    return { body, fromNetwork: true }
+  })
+
+  vi.resetModules()
+  await import('../src/sw.ts')
+  return worker
+}
+
+/** A worker that has installed and taken over. */
+async function activate(version: string): Promise<FakeWorker> {
+  const worker = await load(version)
+  await worker.fire('install')
+  await worker.fire('activate')
+  return worker
+}
+
+function request(path: string, mode = 'no-cors', method = 'GET'): SwEvent['request'] {
+  return { method, url: `${ORIGIN}${path}`, mode }
+}
+
+async function answer(worker: FakeWorker, req: SwEvent['request']): Promise<unknown> {
+  const responded = await worker.fire('fetch', req)
+  return responded === null ? null : await responded
+}
+
+beforeEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('opening without a network', () => {
+  it('serves the shell from cache', async () => {
+    const worker = await activate('a1')
+    server = new Map() // the whole internet, gone
+
+    expect(await answer(worker, request('/', 'navigate'))).toEqual({ body: '<html>a1</html>' })
+  })
+
+  it('serves precached assets from cache', async () => {
+    const worker = await activate('a1')
+    server = new Map()
+
+    expect(await answer(worker, request('/assets/index-a1.js'))).toEqual({ body: 'app a1' })
+  })
+
+  it('answers any navigation with the shell, whatever the path', async () => {
+    const worker = await activate('a1')
+    server = new Map()
+
+    expect(await answer(worker, request('/history/day', 'navigate'))).toEqual({
+      body: '<html>a1</html>',
+    })
+  })
+})
+
+describe('an update never mixes two builds', () => {
+  it('keeps serving the old build while the new one waits', async () => {
+    const running = await activate('a1')
+
+    // A deploy lands and its worker installs. Nothing activates it: no
+    // skipWaiting, and the page in front of the user is still alive.
+    const waiting = await load('b2')
+    await waiting.fire('install')
+
+    // The old worker is still the one answering, and it answers with itself —
+    // not with what the server now holds.
+    expect(await answer(running, request('/', 'navigate'))).toEqual({ body: '<html>a1</html>' })
+    expect(await answer(running, request('/assets/index-a1.js'))).toEqual({ body: 'app a1' })
+  })
+
+  it('switches wholesale once the new worker activates', async () => {
+    await activate('a1')
+
+    const next = await load('b2')
+    await next.fire('install')
+    await next.fire('activate')
+
+    expect(await answer(next, request('/', 'navigate'))).toEqual({ body: '<html>b2</html>' })
+    expect(await caches.keys()).toEqual(['ftw:b2'])
+  })
+
+  it('leaves the old cache alone until the new worker activates', async () => {
+    await activate('a1')
+    const next = await load('b2')
+    await next.fire('install')
+
+    expect((await caches.keys()).sort()).toEqual(['ftw:a1', 'ftw:b2'])
+  })
+})
+
+describe('what it refuses to touch', () => {
+  it('ignores other origins, which is where the box traffic goes', async () => {
+    const worker = await activate('a1')
+    const relay = { method: 'GET', url: 'https://relay.sourceful.energy/r/7/abcdef/app', mode: 'cors' }
+
+    expect(await worker.fire('fetch', relay)).toBeNull()
+  })
+
+  it('ignores anything that is not a GET', async () => {
+    const worker = await activate('a1')
+
+    expect(await worker.fire('fetch', request('/', 'cors', 'POST'))).toBeNull()
+  })
+
+  it('ignores same-origin paths this build did not emit', async () => {
+    const worker = await activate('a1')
+
+    expect(await worker.fire('fetch', request('/api/whatever'))).toBeNull()
+  })
+})
+
+describe('when the cache has been evicted', () => {
+  it('falls back to the network rather than failing', async () => {
+    const worker = await activate('a1')
+    const cache = await caches.open('ftw:a1')
+    cache.evict('/assets/index-a1.js')
+
+    expect(await answer(worker, request('/assets/index-a1.js'))).toEqual({
+      body: 'app a1',
+      fromNetwork: true,
+    })
+  })
+})

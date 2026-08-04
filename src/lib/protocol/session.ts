@@ -10,7 +10,7 @@
  * seconds ago", which is the case users most need to see.
  */
 
-import { encodeFrame, decodeFrame, LANE_CONTROL, FrameError } from './frame'
+import { encodeFrame, decodeFrame, LANE_CONTROL, LANE_BULK, FrameError } from './frame'
 import {
   PROTO_MIN,
   PROTO_MAX,
@@ -23,6 +23,9 @@ import {
   type SessionTerminate,
   type Sub,
   type BoxMode,
+  type HistQuery,
+  type HistChunk,
+  type HistEnd,
 } from './messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import type { CarrierState, Fid, Source, SourceState } from './types'
@@ -83,6 +86,30 @@ export interface SessionOptions {
   sub?: Sub
 }
 
+/**
+ * How long a history request waits before giving up.
+ *
+ * Generous, because a two-year window is dozens of bulk frames over a relay.
+ * The point is not to be quick about failing — it is that the promise always
+ * settles, so a view can never be left waiting on a reply that was lost.
+ */
+export const HIST_TIMEOUT_MS = 20_000
+
+interface PendingHistory {
+  onChunk: (chunk: HistChunk) => void
+  resolve: (end: HistEnd) => void
+  reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+/** Thrown when the box answers a history request with a stable error code. */
+export class HistoryError extends Error {
+  constructor(readonly detail: ErrorMsg) {
+    super(detail.code)
+    this.name = 'HistoryError'
+  }
+}
+
 export class Session {
   #state: SessionState = EMPTY
   #carrier: Carrier | null = null
@@ -91,6 +118,8 @@ export class Session {
   #listeners = new Set<(s: SessionState) => void>()
   #lastSeq = 0
   #bucket: 256 | 512 = 512
+  #nextRequestId = 1
+  #pendingHistory = new Map<number, PendingHistory>()
 
   constructor(opts: SessionOptions) {
     this.#opts = opts
@@ -168,6 +197,34 @@ export class Session {
     return worst
   }
 
+  /**
+   * Ask for a history window. Chunks arrive as they land; the promise settles
+   * on `hist.end`.
+   *
+   * Sent on the bulk lane, not lane 0. A query carrying a `have` list varies
+   * in length with how much the client already holds, and lane 0's whole
+   * purpose is that its frames do not vary in length with anything.
+   */
+  history(query: HistQuery, onChunk: (chunk: HistChunk) => void): Promise<HistEnd> {
+    if (!this.#carrier) {
+      return Promise.reject(new Error('no carrier'))
+    }
+
+    const id = this.#nextRequestId
+    // u32, and wrapping is harmless: a request that old has long since settled.
+    this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
+
+    return new Promise<HistEnd>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingHistory.delete(id)
+        reject(new Error('history request timed out'))
+      }, HIST_TIMEOUT_MS)
+
+      this.#pendingHistory.set(id, { onChunk, resolve, reject, timer })
+      this.#sendBulk({ t: 'hist.query', id, b: query })
+    })
+  }
+
   #sendHello(): void {
     this.#send({
       t: 'hello',
@@ -203,8 +260,14 @@ export class Session {
       case 'tick':
         this.#onTick(envelope.b as Tick)
         break
+      case 'hist.chunk':
+        this.#pendingHistory.get(envelope.id ?? -1)?.onChunk(envelope.b as HistChunk)
+        break
+      case 'hist.end':
+        this.#settleHistory(envelope.id, envelope.b as HistEnd)
+        break
       case 'error':
-        this.#onError(envelope.b as ErrorMsg)
+        this.#onError(envelope.b as ErrorMsg, envelope.id)
         break
       case 'session.terminate':
         this.#onTerminate(envelope.b as SessionTerminate)
@@ -277,7 +340,29 @@ export class Session {
     this.#patch({ uptimeMs: b.uptimeMs })
   }
 
-  #onError(b: ErrorMsg): void {
+  #settleHistory(id: number | undefined, end: HistEnd): void {
+    const pending = this.#pendingHistory.get(id ?? -1)
+    if (!pending) return
+    this.#pendingHistory.delete(id!)
+    clearTimeout(pending.timer)
+    pending.resolve(end)
+  }
+
+  /**
+   * An error carrying a request id belongs to that request alone.
+   *
+   * Without this, a history window the box could not serve would raise the
+   * session-wide error banner and make the whole app look broken over one
+   * chart the user can simply narrow.
+   */
+  #onError(b: ErrorMsg, id?: number): void {
+    const pending = this.#pendingHistory.get(id ?? -1)
+    if (pending) {
+      this.#pendingHistory.delete(id!)
+      clearTimeout(pending.timer)
+      pending.reject(new HistoryError(b))
+      return
+    }
     this.#patch({ lastError: b })
   }
 
@@ -291,11 +376,35 @@ export class Session {
     this.#carrier.send(encodeFrame({ lane: LANE_CONTROL, flags: 0, envelope }, this.#bucket))
   }
 
+  #sendBulk(envelope: { t: string; id?: number; b?: unknown }): void {
+    if (!this.#carrier) return
+    // Sized by trial: the encoder refuses to grow a bucket, so the frame is
+    // built once and stepped up rather than guessed at from the object.
+    for (const bucket of [1024, 4096, 16384]) {
+      try {
+        this.#carrier.send(encodeFrame({ lane: LANE_BULK, flags: 0, envelope }, bucket))
+        return
+      } catch (err) {
+        if (!(err instanceof FrameError)) throw err
+      }
+    }
+    throw new FrameError('bulk payload exceeds the largest bucket', 'E_FRAME_EXCEEDS_BUCKET')
+  }
+
   #detach(): void {
     for (const u of this.#unsub) u()
     this.#unsub = []
     this.#carrier?.close()
     this.#carrier = null
+
+    // A carrier that went away will never answer. Settling every pending
+    // request now is what keeps a view from waiting on a reply that cannot
+    // arrive — there is no "reload" button to rescue it.
+    for (const [id, pending] of this.#pendingHistory) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error('carrier closed'))
+      this.#pendingHistory.delete(id)
+    }
   }
 
   #patch(partial: Partial<SessionState>): void {

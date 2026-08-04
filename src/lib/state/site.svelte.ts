@@ -12,6 +12,7 @@
  */
 
 import { Session, type SessionState } from '$lib/protocol/session'
+import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
 import type { CarrierState, SourceState } from '$lib/protocol/types'
@@ -90,6 +91,20 @@ export class SiteStore {
     // Asked for after the first paint, never before — the prompt is not on
     // the critical path and some browsers show UI for it.
     void requestPersistence()
+  }
+
+  get siteId(): string | null {
+    return this.#siteId
+  }
+
+  /**
+   * Ask the box for a history window.
+   *
+   * Delegated rather than exposing the session, so the rule above still holds:
+   * nothing above this layer touches a frame.
+   */
+  history(query: HistQuery, onChunk: (chunk: HistChunk) => void): Promise<HistEnd> {
+    return this.#session.history(query, onChunk)
   }
 
   get paired(): boolean {
