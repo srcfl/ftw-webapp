@@ -5,6 +5,12 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 export default defineConfig({
   plugins: [svelte()],
 
+  define: {
+    // The build identifier the app announces at handshake, so a box can tell
+    // which client it is talking to. Replaced by the release hash in CI.
+    __APP_BUILD__: JSON.stringify(process.env['GITHUB_SHA']?.slice(0, 12) ?? 'dev'),
+  },
+
   resolve: {
     alias: {
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url)),

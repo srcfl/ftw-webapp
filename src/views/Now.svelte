@@ -2,28 +2,24 @@
   Now — the first screen.
 
   The common case is a glance: phone out of pocket, one look, phone away. So
-  the top of this view is a sentence, not a chart. "Battery: -4.2 kW" is a
-  number; "The battery is covering the house so nothing is drawn from the
-  grid" is an answer. The numbers sit underneath for anyone who wants them.
-
-  Scaffold: reads a stub until the protocol layer lands. The empty state is
-  real and shipping — an unpaired app is a state users will see.
+  the top is a sentence, not a chart. "Battery: -4.2 kW" is a number; "The
+  battery is supplying 4.2 kW to keep grid import below 11 kW" is an answer.
+  The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
   import { formatPower } from '$lib/format/power'
+  import type { SiteStore } from '$lib/state/site.svelte'
 
-  // Stub. Replaced by the field register once the carrier is wired.
-  const paired = false
+  interface Props {
+    site: SiteStore
+  }
 
-  const readings = [
-    { label: 'Grid', watts: NaN, tone: 'import' },
-    { label: 'Solar', watts: NaN, tone: 'generation' },
-    { label: 'Battery', watts: NaN, tone: 'storage' },
-    { label: 'House', watts: NaN, tone: 'load' },
-  ]
+  let { site }: Props = $props()
+
+  const soc = $derived(site.socPercent)
 </script>
 
-{#if !paired}
+{#if !site.paired}
   <section class="empty">
     <h1>Nothing paired yet</h1>
     <p>
@@ -33,25 +29,77 @@
     <button class="primary" disabled>Scan code</button>
     <p class="note">Pairing lands with the enrollment flow.</p>
   </section>
+{:else if site.session.phase === 'booting'}
+  <section class="empty">
+    <h1>Your box is starting</h1>
+    <p>
+      This can take a few minutes after an update while it tidies its database.
+      Nothing is wrong — it will appear here as soon as it is ready.
+    </p>
+    {#if site.session.boot}
+      <p class="note">{site.session.boot.phase} · {site.session.boot.pct}%</p>
+    {/if}
+  </section>
+{:else if site.session.phase === 'terminated'}
+  <section class="empty">
+    <h1>Access ended</h1>
+    <p>
+      {site.session.terminated?.reason === 'revoked'
+        ? 'Your access to this home was withdrawn by its owner.'
+        : 'This session ended.'}
+    </p>
+  </section>
 {:else}
+  {#if site.session.needsUpdate}
+    <div class="banner">
+      This app is older than your box. Some things are hidden until it updates.
+    </div>
+  {/if}
+
   <section class="explanation">
-    <p class="headline">—</p>
+    <p class="headline">{site.explanation.headline}</p>
   </section>
 
   <section class="readings">
-    {#each readings as r (r.label)}
-      {@const p = formatPower(r.watts)}
+    {#each site.readings as r (r.fid)}
+      {@const p = formatPower(r.watts ?? NaN)}
       <div class="reading" data-tone={r.tone}>
         <span class="label">{r.label}</span>
         <span class="value num">
-          {Number.isFinite(r.watts) ? p.text : '—'}<span class="unit">{p.unit}</span>
+          {r.watts === undefined ? '—' : p.text}<span class="unit">{p.unit}</span>
         </span>
+        <!-- Each asset gets its own verb. "Drawing" is right for the grid and
+             wrong for a panel: the sun generates, it does not draw. -->
         <span class="dir">
-          {#if p.direction === 'in'}drawing{:else if p.direction === 'out'}exporting{:else}idle{/if}
+          {#if r.watts === undefined}
+            no reading
+          {:else if r.tone === 'load'}
+            using
+          {:else if p.direction === 'idle'}
+            idle
+          {:else if r.tone === 'generation'}
+            generating
+          {:else if r.tone === 'storage'}
+            {p.direction === 'in' ? 'charging' : 'supplying'}
+          {:else}
+            {p.direction === 'in' ? 'drawing' : 'exporting'}
+          {/if}
         </span>
       </div>
     {/each}
   </section>
+
+  {#if soc !== null}
+    <section class="soc">
+      <div class="soc-head">
+        <span class="label">Battery charge</span>
+        <span class="num soc-value">{soc}<span class="unit">%</span></span>
+      </div>
+      <div class="soc-track" role="img" aria-label="Battery at {soc} percent">
+        <div class="soc-fill" style:width="{soc}%"></div>
+      </div>
+    </section>
+  {/if}
 {/if}
 
 <style>
@@ -82,6 +130,17 @@
     color: var(--fg-muted);
   }
 
+  .banner {
+    margin: var(--space-3) var(--space-4) 0;
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius-xs);
+    font-size: 13px;
+    color: var(--fg-dim);
+    background: var(--surface-raised);
+  }
+
   .primary {
     background: var(--accent);
     color: var(--on-accent);
@@ -101,7 +160,7 @@
 
   .headline {
     font-size: 20px;
-    line-height: 1.3;
+    line-height: 1.35;
     letter-spacing: -0.01em;
     text-wrap: balance;
   }
@@ -110,7 +169,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: var(--space-2);
-    padding: 0 var(--space-4) var(--space-5);
+    padding: 0 var(--space-4) var(--space-4);
   }
 
   .reading {
@@ -154,5 +213,35 @@
   }
   .reading[data-tone='storage'] .value {
     color: var(--energy-storage);
+  }
+
+  .soc {
+    padding: 0 var(--space-4) var(--space-6);
+  }
+
+  .soc-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+  }
+
+  .soc-value {
+    font-size: 18px;
+    font-weight: 500;
+  }
+
+  .soc-track {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .soc-fill {
+    height: 100%;
+    background: var(--energy-storage);
+    transition: width var(--motion-slow) var(--ease);
   }
 </style>

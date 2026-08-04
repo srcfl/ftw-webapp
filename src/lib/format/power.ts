@@ -9,8 +9,15 @@
 
 export type Direction = 'in' | 'out' | 'idle'
 
-/** Below this, a reading is noise from a sensor rather than a real flow. */
-const IDLE_THRESHOLD_W = 5
+/**
+ * Below this, a reading is sensor noise rather than a real flow.
+ *
+ * Exported and shared with the explanation layer on purpose. Two different
+ * thresholds put contradictions on screen: the headline said solar was
+ * covering everything while the grid card underneath read "23 W drawing".
+ * One threshold, one truth.
+ */
+export const NOISE_W = 50
 
 export interface PowerParts {
   /** Magnitude, already scaled to `unit`. Never negative. */
@@ -22,7 +29,7 @@ export interface PowerParts {
 }
 
 export function directionOf(watts: number): Direction {
-  if (!Number.isFinite(watts) || Math.abs(watts) < IDLE_THRESHOLD_W) return 'idle'
+  if (!Number.isFinite(watts) || Math.abs(watts) < NOISE_W) return 'idle'
   return watts > 0 ? 'in' : 'out'
 }
 

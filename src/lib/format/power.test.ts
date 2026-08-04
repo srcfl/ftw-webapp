@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { formatPower, formatSoc, formatAge, directionOf } from './power'
+import { formatPower, formatSoc, formatAge, directionOf, NOISE_W } from './power'
+import { explain, FID } from './explanation'
 
 describe('formatPower', () => {
   it('never returns a negative magnitude', () => {
@@ -16,9 +17,10 @@ describe('formatPower', () => {
   })
 
   it('treats sensor noise as idle rather than a real flow', () => {
-    expect(directionOf(3)).toBe('idle')
-    expect(directionOf(-3)).toBe('idle')
-    expect(directionOf(6)).toBe('in')
+    expect(directionOf(NOISE_W - 1)).toBe('idle')
+    expect(directionOf(-(NOISE_W - 1))).toBe('idle')
+    expect(directionOf(NOISE_W)).toBe('in')
+    expect(directionOf(-NOISE_W)).toBe('out')
   })
 
   it('scales units at the thousand boundary', () => {
@@ -45,6 +47,39 @@ describe('formatPower', () => {
       expect(p.text).not.toContain('NaN')
       expect(p.direction).toBe('idle')
     }
+  })
+})
+
+describe('the headline and the cards agree', () => {
+  // Caught in the browser: the headline read "solar is covering everything
+  // the house is using" while the grid card underneath read "23 W drawing".
+  // Two noise thresholds, two truths, one contradiction on screen.
+  it('never calls the grid active while the headline says solar covers it all', () => {
+    for (let gridW = 0; gridW < NOISE_W; gridW += 7) {
+      const fields = new Map([
+        [FID.GRID_W, gridW],
+        [FID.PV_W, 4000],
+        [FID.BATTERY_W, 0],
+        [FID.LOAD_W, 4000 + gridW],
+      ])
+
+      const headline = explain({ fields, dispatchBlockedBy: [], ceilingW: 11_000 })
+      if (headline.situation === 'solar_covering') {
+        expect(directionOf(gridW)).toBe('idle')
+      }
+    }
+  })
+
+  it('shares one threshold between the two layers', () => {
+    // If these ever diverge again the test above stops being able to see it.
+    expect(directionOf(NOISE_W - 1)).toBe('idle')
+    const fields = new Map([
+      [FID.GRID_W, NOISE_W - 1],
+      [FID.PV_W, 4000],
+      [FID.BATTERY_W, 0],
+      [FID.LOAD_W, 4000],
+    ])
+    expect(explain({ fields, dispatchBlockedBy: [], ceilingW: null }).situation).toBe('solar_covering')
   })
 })
 

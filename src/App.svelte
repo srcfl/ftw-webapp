@@ -1,33 +1,44 @@
 <!--
   App shell.
 
-  Scaffold: the carrier, store and protocol layers are not wired yet, so this
-  renders the Now view against a stub. What is real here is the shape — the
-  freshness band above content, the shell painting before any data arrives,
-  and no loading state on the path to first paint.
+  Paints before any data arrives and never blocks on a network round trip.
+  In development it attaches a simulated box so the whole client can be built
+  without hardware; in production the carrier comes from enrollment.
 -->
 <script lang="ts">
+  import { onMount } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import Now from '$views/Now.svelte'
-  import type { CarrierState, SourceState } from '$lib/protocol/types'
+  import { SiteStore } from '$lib/state/site.svelte'
 
-  // Stub until the carrier lands. Deliberately not 'live': the app must
-  // never claim a connection it does not have, including while being built.
-  const paired = false
-  const carrier: CarrierState = 'none'
-  const srcState: SourceState = 'never'
-  const ageMs = NaN
+  const site = new SiteStore(__APP_BUILD__)
+
+  onMount(() => {
+    if (!import.meta.env.DEV) return
+
+    // Dynamic so the simulator never reaches a production bundle.
+    let stop: (() => void) | undefined
+    void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
+      stop = attachSimulatedSite(site).stop
+    })
+
+    return () => {
+      stop?.()
+      site.destroy()
+    }
+  })
 </script>
 
 <div class="app">
   <!-- Freshness describes data from a box. With nothing paired there is no
        box and no data, so the band would be answering a question nobody
        asked — and "showing last known" would be a plain lie. -->
-  {#if paired}
-    <FreshnessBand {carrier} {srcState} {ageMs} />
+  {#if site.paired}
+    <FreshnessBand carrier={site.carrier} srcState={site.srcState} ageMs={site.ageMs} />
   {/if}
+
   <main>
-    <Now />
+    <Now {site} />
   </main>
 </div>
 
