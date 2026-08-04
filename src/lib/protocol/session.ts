@@ -27,6 +27,7 @@ import {
   type HistChunk,
   type HistEnd,
   type Plan,
+  type ModeInfo,
   type Guard,
   type CmdAck,
   type CmdResult,
@@ -67,6 +68,13 @@ export interface SessionState {
   needsUpdate: boolean
   /** What the box intends to do. Null until asked for, or when unsupported. */
   plan: Plan | null
+  /**
+   * Every mode this box accepts, in its own order.
+   *
+   * The box decides what exists; the app renders what it is given. Field 1
+   * carries an index into this list.
+   */
+  modes: ModeInfo[]
 }
 
 const EMPTY: SessionState = {
@@ -87,6 +95,7 @@ const EMPTY: SessionState = {
   terminated: null,
   needsUpdate: false,
   plan: null,
+  modes: [],
 }
 
 export interface SessionOptions {
@@ -458,6 +467,7 @@ export class Session {
       proto: b.proto,
       mode: b.mode,
       caps: new Set(b.caps),
+      modes: b.modes ?? [],
       box: b.box,
       uptimeMs: b.clock.uptimeMs,
       boot: b.boot ?? null,

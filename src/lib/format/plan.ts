@@ -8,20 +8,39 @@
  * never promises: "charging at 3 kW" is what it means to do, not a guarantee.
  */
 
-import type { Plan, PlanSlot, PlanReason, SiteMode } from '$lib/protocol/messages'
+import type { Plan, PlanSlot, PlanReason, SiteMode, ModeInfo } from '$lib/protocol/messages'
 import { formatPower } from './power'
 
-export const MODE_LABEL: Record<SiteMode, string> = {
-  automatic: 'Automatic',
-  self_use: 'Use my own solar',
-  paused: 'Paused',
+/**
+ * Mode wording comes from the box, not from here.
+ *
+ * control.ModeCatalog() is FTW's single source of truth for how a mode is
+ * presented, and its own dashboard builds buttons from that same list. An app
+ * that renamed them would give the same setting two names — one in FTW's web
+ * UI, one here — and support would have to know both.
+ *
+ * So this returns what the box sent. When the wording should change, it
+ * changes in ModeCatalog() and both surfaces follow at once. That is the
+ * point of the contract.
+ *
+ * TRANSLATION, when i18n lands, goes here: keyed by mode key, translating
+ * FTW's English rather than replacing it. Rewriting in English is not
+ * translation, it is divergence.
+ */
+const TRANSLATIONS: Record<string, Record<string, { label: string; help: string }>> = {}
+
+/** The current locale's wording if we have it, the box's otherwise. */
+export function modeLabel(info: ModeInfo, locale = 'en'): string {
+  return TRANSLATIONS[locale]?.[info.key]?.label ?? info.label
 }
 
-/** One line under each choice. What it does, in the user's terms. */
-export const MODE_HELP: Record<SiteMode, string> = {
-  automatic: 'Charges when power is cheap or the sun is spare, and covers the expensive hours.',
-  self_use: 'Stores your own solar and uses it later. Ignores prices.',
-  paused: 'Nothing is controlled. Your home runs straight off the grid and the sun.',
+export function modeHelp(info: ModeInfo, locale = 'en'): string {
+  return TRANSLATIONS[locale]?.[info.key]?.help ?? info.tooltip
+}
+
+/** True when a translation exists. Used by tests and diagnostics only. */
+export function hasTranslation(key: SiteMode, locale = 'en'): boolean {
+  return TRANSLATIONS[locale]?.[key] !== undefined
 }
 
 const REASON_TEXT: Record<PlanReason, string> = {

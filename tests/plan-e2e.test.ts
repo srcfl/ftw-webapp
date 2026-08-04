@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { Session } from '$lib/protocol/session'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import { SITE_MODES, OP_SET_MODE } from '$lib/protocol/messages'
+import { OP_SET_MODE } from '$lib/protocol/messages'
 
 const FID_MODE = 1
 
@@ -87,14 +87,14 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    expect(box.mode).toBe('automatic')
+    expect(box.mode).toBe('planner_passive_arbitrage')
 
-    const result = await session.command(OP_SET_MODE, { mode: 'self_use' }).promise
+    const result = await session.command(OP_SET_MODE, { mode: 'self_consumption' }).promise
 
     expect(result.state).toBe('applied')
-    expect(box.mode).toBe('self_use')
+    expect(box.mode).toBe('self_consumption')
     // The echo of a request is never proof. This is the driver reading back.
-    expect(result.observed?.value).toBe(SITE_MODES.indexOf('self_use'))
+    expect(result.observed?.value).toBe(session.state.modes.findIndex((m) => m.key === 'self_consumption'))
   })
 
   it('pushes a fresh plan without being asked, because the plan changed', async () => {
@@ -102,7 +102,7 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    await session.command(OP_SET_MODE, { mode: 'paused' }).promise
+    await session.command(OP_SET_MODE, { mode: 'idle' }).promise
     await settle()
 
     // Showing yesterday's intent beside today's mode would leave the user
@@ -116,11 +116,11 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    await session.command(OP_SET_MODE, { mode: 'paused' }).promise
+    await session.command(OP_SET_MODE, { mode: 'idle' }).promise
     box.tick()
     await settle()
 
-    expect(session.state.fields.get(FID_MODE)).toBe(SITE_MODES.indexOf('paused'))
+    expect(session.state.fields.get(FID_MODE)).toBe(session.state.modes.findIndex((m) => m.key === 'idle'))
   })
 
   it('acts once for a repeated command id', async () => {
@@ -128,13 +128,13 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    const first = session.command(OP_SET_MODE, { mode: 'self_use' })
+    const first = session.command(OP_SET_MODE, { mode: 'self_consumption' })
     await first.promise
     const revAfter = session.state.controlRev
 
     // The box keeps cmd ids so a retry returns the original outcome rather
     // than acting a second time.
-    expect(box.mode).toBe('self_use')
+    expect(box.mode).toBe('self_consumption')
     expect(revAfter).toBeGreaterThanOrEqual(0)
   })
 
@@ -143,12 +143,12 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    const result = await session.command(OP_SET_MODE, { mode: 'paused' }).promise
+    const result = await session.command(OP_SET_MODE, { mode: 'idle' }).promise
 
     expect(result.state).toBe('rejected')
     expect(result.error?.code).toBe('E_PRECONDITION')
     // Refused means refused: nothing changed on the box.
-    expect(box.mode).toBe('automatic')
+    expect(box.mode).toBe('planner_passive_arbitrage')
   })
 
   it('reports unconfirmed when the box accepts but never confirms', async () => {
@@ -158,7 +158,7 @@ describe('changing how the site is run', () => {
     const session = connect(box)
     await settle()
 
-    const handle = session.command(OP_SET_MODE, { mode: 'paused' })
+    const handle = session.command(OP_SET_MODE, { mode: 'idle' })
 
     // The confirm deadline is 15 s; drive it rather than waiting it out.
     const result = await Promise.race([
@@ -186,12 +186,12 @@ describe('the planner makes decisions worth explaining', () => {
     expect(reasons.has('solar_surplus')).toBe(true)
   })
 
-  it('schedules nothing at all when paused', async () => {
+  it('schedules nothing at all when idle', async () => {
     const box = new SimBox({ now: () => Date.now() })
     const session = connect(box)
     await settle()
 
-    await session.command(OP_SET_MODE, { mode: 'paused' }).promise
+    await session.command(OP_SET_MODE, { mode: 'idle' }).promise
     const plan = await session.plan()
 
     expect(plan.slots.every((s) => s.batteryW === 0)).toBe(true)

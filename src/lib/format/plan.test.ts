@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest'
-import { planHeadline, slotAction, reasonText, formatPrice, MODE_LABEL, MODE_HELP } from './plan'
-import type { Plan, PlanSlot, PlanReason, SiteMode } from '$lib/protocol/messages'
-import { SITE_MODES } from '$lib/protocol/messages'
+import { planHeadline, slotAction, reasonText, formatPrice, modeLabel, modeHelp } from './plan'
+import type { Plan, PlanSlot, PlanReason, ModeInfo } from '$lib/protocol/messages'
+
+/**
+ * FTW's modes, from control.AllModes() in go/internal/control/dispatch.go.
+ *
+ * Listed here so a divergence fails a test rather than shipping an app that
+ * offers strategies the box has never heard of. See contract/registry.yaml.
+ */
+const FTW_MODES = [
+  'planner_passive_arbitrage',
+  'planner_arbitrage',
+  'idle',
+  'self_consumption',
+  'peak_shaving',
+  'charge',
+  'planner_self',
+  'planner_cheap',
+  'priority',
+  'weighted',
+] as const
 
 const T0 = Date.UTC(2026, 6, 15, 12, 0, 0)
 const SLOT = 900_000
@@ -97,14 +115,41 @@ describe('planHeadline', () => {
   })
 })
 
-describe('the vocabulary is complete', () => {
-  it('has a label and a help line for every mode', () => {
-    // A mode without copy would render as a blank button.
-    for (const mode of SITE_MODES as readonly SiteMode[]) {
-      expect(MODE_LABEL[mode]).toBeTruthy()
-      expect(MODE_HELP[mode]).toBeTruthy()
-      expect(MODE_HELP[mode].endsWith('.')).toBe(true)
+describe('mode wording comes from the box', () => {
+  // The failure this replaces: the app renamed FTW's modes — "Passive
+  // arbitrage" became "Cheapest power" — so the same setting had two names,
+  // one in FTW's own web UI and one here, and support would need both.
+  it('shows exactly what the box sent', () => {
+    const info: ModeInfo = {
+      key: 'planner_passive_arbitrage',
+      label: 'Passive arbitrage',
+      tooltip:
+        'Charge from the cheapest available source (PV when sunny, grid during cheap hours). Never exports from battery.',
+      tier: 'primary',
     }
+    expect(modeLabel(info)).toBe('Passive arbitrage')
+    expect(modeHelp(info)).toBe(info.tooltip)
+  })
+
+  it('renders a mode this build has never heard of', () => {
+    // A newer box shipping a new strategy is usable immediately, because the
+    // app was never the one deciding what exists.
+    const unknown: ModeInfo = {
+      key: 'some_future_strategy',
+      label: 'Future strategy',
+      tooltip: 'Something this build predates.',
+      tier: 'primary',
+    }
+    expect(modeLabel(unknown)).toBe('Future strategy')
+    expect(modeHelp(unknown)).toBe('Something this build predates.')
+  })
+
+  it('knows the keys FTW actually has', () => {
+    // Not a list the app renders from — the box sends that. This exists so a
+    // divergence in the contract file fails a test.
+    expect(FTW_MODES).toContain('planner_passive_arbitrage')
+    expect(FTW_MODES).toContain('planner_arbitrage')
+    expect(FTW_MODES).toHaveLength(10)
   })
 
   it('has words for every reason the box can send', () => {

@@ -9,8 +9,8 @@
   import { onMount, onDestroy, untrack } from 'svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
   import { PlanStore } from '$lib/state/plan.svelte'
-  import { SITE_MODES, type SiteMode } from '$lib/protocol/messages'
-  import { MODE_LABEL, MODE_HELP, planHeadline, slotAction, reasonText, formatPrice } from '$lib/format/plan'
+  import type { SiteMode, ModeInfo } from '$lib/protocol/messages'
+  import { modeLabel, modeHelp, planHeadline, slotAction, reasonText, formatPrice } from '$lib/format/plan'
   import { formatPower } from '$lib/format/power'
 
   interface Props {
@@ -57,6 +57,14 @@
   function choose(mode: SiteMode) {
     void plan.setMode(mode)
   }
+
+  // FTW's own split: forecast-driven strategies are the choice most people
+  // want, the manual fallbacks are a drawer. Open it if the box is already in
+  // one of them, so the current setting is never hidden from its owner.
+  let showAdvanced = $state(false)
+  $effect(() => {
+    if (plan.advancedModes.some((m) => m.key === plan.actualMode)) showAdvanced = true
+  })
 </script>
 
 <section class="head">
@@ -69,20 +77,35 @@
 <section class="modes">
   <h2 class="label">How your home is run</h2>
 
+  {#snippet choice(info: ModeInfo)}
+    <button
+      class="choice"
+      role="radio"
+      aria-checked={plan.shownMode === info.key}
+      disabled={!plan.canControl || plan.command.kind === 'sending'}
+      onclick={() => choose(info.key)}
+    >
+      <span class="choice-label">{modeLabel(info)}</span>
+      <span class="choice-help">{modeHelp(info)}</span>
+    </button>
+  {/snippet}
+
   <div class="choices" role="radiogroup" aria-label="How your home is run">
-    {#each SITE_MODES as mode (mode)}
-      {@const selected = plan.shownMode === mode}
-      <button
-        class="choice"
-        role="radio"
-        aria-checked={selected}
-        disabled={!plan.canControl || plan.command.kind === 'sending'}
-        onclick={() => choose(mode)}
-      >
-        <span class="choice-label">{MODE_LABEL[mode]}</span>
-        <span class="choice-help">{MODE_HELP[mode]}</span>
-      </button>
+    {#each plan.primaryModes as info (info.key)}
+      {@render choice(info)}
     {/each}
+
+    {#if plan.advancedModes.length > 0}
+      {#if showAdvanced}
+        {#each plan.advancedModes as info (info.key)}
+          {@render choice(info)}
+        {/each}
+      {:else}
+        <button class="more" onclick={() => (showAdvanced = true)}>
+          More ways to run it
+        </button>
+      {/if}
+    {/if}
   </div>
 
   <!-- One line, in the freshness band's voice. Never a modal: changing a
@@ -199,6 +222,15 @@
   .choice:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .more {
+    align-self: flex-start;
+    color: var(--fg-dim);
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    min-height: 36px;
   }
 
   .choice-label {

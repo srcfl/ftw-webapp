@@ -6,8 +6,8 @@
  * confirmed, which is its own answer and not a failure.
  */
 
-import type { Plan, SiteMode, CmdResult } from '$lib/protocol/messages'
-import { OP_SET_MODE, SITE_MODES } from '$lib/protocol/messages'
+import type { Plan, SiteMode, CmdResult, ModeInfo } from '$lib/protocol/messages'
+import { OP_SET_MODE } from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
 import type { SiteStore } from './site.svelte'
 import { FID } from '$lib/format/explanation'
@@ -38,7 +38,29 @@ export class PlanStore {
   }
 
   /**
+   * Every mode this box accepts, as the box ordered them.
+   *
+   * The app renders what it is given rather than a list it was compiled with,
+   * so a box running a newer FTW can offer a strategy this build has never
+   * heard of. Hidden-tier modes are valid over the API but never buttons.
+   */
+  get modes(): ModeInfo[] {
+    return this.#site.session.modes.filter((m) => m.tier !== 'hidden')
+  }
+
+  get primaryModes(): ModeInfo[] {
+    return this.modes.filter((m) => m.tier === 'primary')
+  }
+
+  get advancedModes(): ModeInfo[] {
+    return this.modes.filter((m) => m.tier === 'advanced')
+  }
+
+  /**
    * The mode the box reports, which is the only one that counts.
+   *
+   * Field 1 is an index into the catalogue the box sent at handshake, which
+   * keeps lane 0 numeric and its frames a fixed size.
    *
    * While a change is in flight the UI shows the requested mode so the tap
    * feels immediate — but this getter never lies about what the box said, so
@@ -47,7 +69,7 @@ export class PlanStore {
   get actualMode(): SiteMode | null {
     const index = this.#site.session.fields.get(FID.MODE)
     if (index === undefined) return null
-    return SITE_MODES[index] ?? null
+    return this.#site.session.modes[index]?.key ?? null
   }
 
   /** What the toggle should show: the pending choice, else the real one. */

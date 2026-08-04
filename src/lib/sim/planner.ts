@@ -59,27 +59,50 @@ export function buildPlan(input: PlanInput): Plan {
     const reading = sample(house, at, soc, ceilingW)
     const surplus = reading.pvW - reading.loadW
 
+    // What each mode is allowed to do, straight from FTW's own descriptions
+    // in control.ModeCatalog(). Getting these wrong would produce a plan that
+    // is plausible and false, which is worse than no plan.
+    const plans = mode.startsWith('planner_')
+    const mayGridCharge = mode === 'planner_cheap' || mode === 'planner_passive_arbitrage' || mode === 'planner_arbitrage'
+    const mayExportFromBattery = mode === 'planner_arbitrage'
+
     let batteryW = 0
     let reason: PlanReason = 'idle'
 
-    if (mode === 'paused') {
-      // Nothing is planned because nothing is being controlled. Saying that
-      // plainly beats an empty timeline that looks like a failure.
+    if (mode === 'idle') {
+      // No dispatch at all. Saying that plainly beats an empty timeline that
+      // looks like a failure.
       reason = 'idle'
+    } else if (mode === 'charge') {
+      batteryW = soc < 995 ? house.batteryMaxChargeW : 0
+      reason = soc < 995 ? 'cheap_import' : 'idle'
+    } else if (mode === 'peak_shaving') {
+      const over = reading.loadW - reading.pvW - ceilingW
+      batteryW = over > 0 && soc > 100 ? -Math.min(over, house.batteryMaxChargeW) : 0
+      reason = batteryW < 0 ? 'peak_shaving' : 'idle'
+    } else if (mode === 'self_consumption') {
+      // Manual: chases a grid target with no plan, so the honest thing to
+      // show ahead is spare solar and nothing else.
+      batteryW = surplus > 200 && soc < 980 ? Math.min(surplus, house.batteryMaxChargeW) : 0
+      reason = batteryW > 0 ? 'solar_surplus' : 'idle'
     } else if (surplus > 200 && soc < 980) {
       batteryW = Math.min(surplus, house.batteryMaxChargeW)
       reason = 'solar_surplus'
-    } else if (mode === 'automatic' && price < 55 && soc < 900) {
+    } else if (plans && mayGridCharge && price < 55 && soc < 900) {
       // Cheap enough to be worth buying now for later.
       batteryW = Math.min(house.batteryMaxChargeW, 3000)
       reason = 'cheap_import'
     } else if (reading.loadW - reading.pvW > ceilingW && soc > 100) {
       batteryW = -Math.min(reading.loadW - reading.pvW - ceilingW, house.batteryMaxChargeW)
       reason = 'peak_shaving'
-    } else if (mode === 'automatic' && price > 120 && soc > 250) {
-      batteryW = -Math.min(house.batteryMaxChargeW, 3500)
-      reason = 'expensive_import'
-    } else if (soc <= 250 && mode === 'automatic') {
+    } else if (plans && price > 120 && soc > 250) {
+      // Every planner mode covers the house through an expensive hour. Only
+      // full arbitrage may push past the house's own load into the grid.
+      const cover = reading.loadW - reading.pvW
+      const limit = mayExportFromBattery ? house.batteryMaxChargeW : Math.max(0, cover)
+      batteryW = -Math.min(limit, house.batteryMaxChargeW, 3500)
+      reason = batteryW < 0 ? 'expensive_import' : 'idle'
+    } else if (plans && soc <= 250) {
       // Below the reserve the box holds back rather than emptying the battery
       // before the evening peak.
       reason = 'reserve_held'

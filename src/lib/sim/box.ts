@@ -28,7 +28,7 @@ import {
   type HistChunk,
   type HistEnd,
   type SiteMode,
-  SITE_MODES,
+  type ModeInfo,
   OP_SET_MODE,
 } from '$lib/protocol/messages'
 import { buildPlan } from './planner'
@@ -131,6 +131,80 @@ const DAY_MS = 86_400_000
  */
 const HIST_DAY_ANCHOR_PERMILLE = 620
 
+
+/**
+ * FTW's mode catalogue, copied from control.ModeCatalog() in
+ * go/internal/control/modes_catalog.go.
+ *
+ * Verbatim, including the wording — the point of this simulator is to behave
+ * like the box, and a paraphrase here would let the app be built against
+ * modes that do not exist.
+ */
+const MODE_CATALOG: ModeInfo[] = [
+  {
+    key: 'planner_passive_arbitrage',
+    label: 'Passive arbitrage',
+    tooltip:
+      'Charge from the cheapest available source (PV when sunny, grid during cheap hours). Never exports from battery.',
+    tier: 'primary',
+  },
+  {
+    key: 'planner_arbitrage',
+    label: 'Active arbitrage',
+    tooltip:
+      'Full price arbitrage \u2014 charge cheap, discharge into expensive hours (battery may export to grid).',
+    tier: 'primary',
+  },
+  { key: 'idle', label: 'Idle', tooltip: 'Do nothing \u2014 no dispatch.', tier: 'advanced' },
+  {
+    key: 'self_consumption',
+    label: 'Self (manual)',
+    tooltip: 'Manual self-consumption \u2014 PI chases grid target, no plan.',
+    tier: 'advanced',
+  },
+  {
+    key: 'peak_shaving',
+    label: 'Peak',
+    tooltip: 'Limit grid import to the configured peak limit.',
+    tier: 'advanced',
+  },
+  {
+    key: 'charge',
+    label: 'Charge',
+    tooltip: 'Force full charge regardless of price.',
+    tier: 'advanced',
+  },
+  {
+    key: 'planner_self',
+    label: 'Planner (self)',
+    tooltip: 'Forecast-driven self-consumption \u2014 never grid-charges, never exports.',
+    tier: 'hidden',
+  },
+  {
+    key: 'planner_cheap',
+    label: 'Planner (cheap)',
+    tooltip: 'Forecast-driven \u2014 grid-charges during cheap hours, never exports.',
+    tier: 'hidden',
+  },
+  {
+    key: 'priority',
+    label: 'Priority',
+    tooltip: 'Fill the highest-priority battery first.',
+    tier: 'hidden',
+  },
+  {
+    key: 'weighted',
+    label: 'Weighted',
+    tooltip: 'Distribute dispatch across batteries by configured weights.',
+    tier: 'hidden',
+  },
+]
+
+const MODE_KEYS = MODE_CATALOG.map((m) => m.key)
+
+/** FTW's default. */
+const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
+
 const CAPS = [
   'status.core',
   'status.phases',
@@ -170,7 +244,7 @@ export class SimBox {
   #lastReading: Reading | null = null
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
-  #mode: SiteMode = 'automatic'
+  #mode: SiteMode = DEFAULT_MODE
   #planRev = 1
 
   /** cmdId -> result, kept so a retry cannot act twice. */
@@ -246,7 +320,7 @@ export class SimBox {
 
     const fields: Record<string, number> = {}
     const candidate: Record<number, number> = {
-      [FID.MODE]: SITE_MODES.indexOf(this.#mode),
+      [FID.MODE]: MODE_KEYS.indexOf(this.#mode),
       [FID.GRID_W]: reading.gridW,
       [FID.PV_W]: reading.pvW,
       [FID.BATTERY_W]: reading.batteryW,
@@ -312,13 +386,22 @@ export class SimBox {
       clock: { source: 'ntp', syncedAtMs: this.#startedAtMs, uptimeMs: this.uptimeMs },
       caps: proto === PROTO_FLOOR ? ['status.core'] : CAPS,
       capsHash: 'sim',
+      modes: MODE_CATALOG,
       ...(this.faults.booting
         ? { boot: { phase: 'vacuum' as const, pct: 40, etaMs: 90_000 } }
         : {}),
       ...(proto === PROTO_FLOOR ? { hint: 'app_update' as const } : {}),
     }
 
-    this.#send({ lane: LANE_CONTROL, flags: 0, envelope: { t: 'hello_ok', b } }, this.#bucket)
+    // Bulk, not lane 0. The reply carries the capability list and the mode
+    // catalogue, both of which vary in size with what the box supports — and
+    // lane 0's whole purpose is that its frames do not vary in size with
+    // anything. A handshake already announces itself by existing, so there is
+    // nothing left for a variable length to leak.
+    this.#send(
+      { lane: LANE_BULK, flags: 0, envelope: { t: 'hello_ok', b } },
+      bulkBucketFor(4000) ?? 4096
+    )
   }
 
   #onSub(sub: Sub): void {
@@ -336,7 +419,7 @@ export class SimBox {
     this.#lastReading = reading
 
     const fields: Record<string, number> = {
-      [FID.MODE]: SITE_MODES.indexOf(this.#mode),
+      [FID.MODE]: MODE_KEYS.indexOf(this.#mode),
       [FID.GRID_W]: reading.gridW,
       [FID.PV_W]: reading.pvW,
       [FID.BATTERY_W]: reading.batteryW,
@@ -407,8 +490,8 @@ export class SimBox {
     // today's mode and neither would look wrong.
     if (cmd.op === OP_SET_MODE) {
       const wanted = cmd.args['mode']
-      if (typeof wanted === 'string' && (SITE_MODES as readonly string[]).includes(wanted)) {
-        this.#mode = wanted as SiteMode
+      if (typeof wanted === 'string' && MODE_KEYS.includes(wanted)) {
+        this.#mode = wanted
         this.#planRev += 1
       }
     }
@@ -419,7 +502,7 @@ export class SimBox {
 
     if (cmd.op === OP_SET_MODE) {
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
-        value: SITE_MODES.indexOf(this.#mode),
+        value: MODE_KEYS.indexOf(this.#mode),
         src: 'core',
         uptimeMs: this.uptimeMs,
       })

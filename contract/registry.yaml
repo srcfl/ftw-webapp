@@ -70,6 +70,36 @@ roles:
     scopes: [ftw.live.read]
 
 # ---------------------------------------------------------------------------
+# Dispatch modes.
+#
+# These keys are FTW's, from control.AllModes() in go/internal/control/
+# dispatch.go. They are copied here so the app can validate and translate
+# them — not so the app can decide what exists.
+#
+# The box is the authority: it sends its own catalogue (key, label, tooltip,
+# tier) and the app renders that. A mode listed here gets our own wording; a
+# mode we have never heard of still appears, using the box's label. That is
+# what lets a newer box ship a new strategy without waiting for an app
+# release, and it is the same degrade-don't-die rule as capabilities.
+#
+# tier decides placement, not permission:
+#   primary  — the forecast-driven strategies, shown as the main choices
+#   advanced — manual fallbacks, behind a "More ways to run it" disclosure
+#   hidden   — valid over the API but never rendered as a button
+# ---------------------------------------------------------------------------
+modes:
+  - { key: planner_passive_arbitrage, tier: primary }
+  - { key: planner_arbitrage, tier: primary }
+  - { key: idle, tier: advanced }
+  - { key: self_consumption, tier: advanced }
+  - { key: peak_shaving, tier: advanced }
+  - { key: charge, tier: advanced }
+  - { key: planner_self, tier: hidden }
+  - { key: planner_cheap, tier: hidden }
+  - { key: priority, tier: hidden }
+  - { key: weighted, tier: hidden }
+
+# ---------------------------------------------------------------------------
 # Error codes. The box sends the code and args; this app owns all prose.
 # retryable tells the client whether to offer a retry at all.
 # ---------------------------------------------------------------------------

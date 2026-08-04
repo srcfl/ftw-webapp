@@ -39,6 +39,15 @@ export interface HelloOk {
   /** Presence, not levels. Absent means hide the feature; never crash. */
   caps: string[]
   capsHash: string
+  /**
+   * Every mode this box will accept, in its own presentation order.
+   *
+   * Sent once per session rather than named in every delta: field 1 carries
+   * an index into this list, which keeps lane 0 numeric and its frames a
+   * fixed size. The list is the box's to decide — the app renders what it is
+   * given rather than what it was compiled with.
+   */
+  modes: ModeInfo[]
   /** Present while starting. A VACUUM can take a long time; say so. */
   boot?: { phase: 'vacuum' | 'migrate' | 'drivers'; pct: number; etaMs: number | null }
   hint?: 'app_update'
@@ -145,14 +154,31 @@ export const MISSING_SAMPLE = -2147483648
 // --------------------------------------------------------------------------
 
 /**
- * How the site is being run.
+ * A dispatch mode key.
  *
- * Three, because a fourth would need explaining. The names are what a
- * householder would say, not what the optimiser calls itself.
+ * FTW's, from control.AllModes(). A plain string rather than a union: the box
+ * decides what modes exist, and an app that only accepts the ten it was built
+ * with would hide a strategy a newer box shipped. See contract/registry.yaml.
  */
-export type SiteMode = 'automatic' | 'self_use' | 'paused'
+export type SiteMode = string
 
-export const SITE_MODES: readonly SiteMode[] = ['automatic', 'self_use', 'paused']
+/** Where a mode belongs in the UI. Placement, not permission. */
+export type ModeTier = 'primary' | 'advanced' | 'hidden'
+
+/**
+ * One mode as the box presents it.
+ *
+ * `label` and `tooltip` are the box's own English. The app translates the
+ * keys it knows and falls back to these for the ones it does not, so a new
+ * mode is usable immediately and merely untranslated — which is a much better
+ * failure than absent.
+ */
+export interface ModeInfo {
+  key: SiteMode
+  label: string
+  tooltip: string
+  tier: ModeTier
+}
 
 /**
  * What the box intends to do, slot by slot.
