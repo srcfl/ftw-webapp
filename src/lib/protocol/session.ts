@@ -10,7 +10,7 @@
  * seconds ago", which is the case users most need to see.
  */
 
-import { encodeFrame, decodeFrame, LANE_CONTROL, LANE_BULK, FrameError } from './frame'
+import { encodeFrame, decodeFrame, isTruncated, LANE_CONTROL, LANE_BULK, FrameError } from './frame'
 import {
   PROTO_MIN,
   PROTO_MAX,
@@ -69,6 +69,13 @@ export interface SessionState {
   /** What the box intends to do. Null until asked for, or when unsupported. */
   plan: Plan | null
   /**
+   * The last delta could not carry every changed field.
+   *
+   * Not a fault: dropped fields stay dirty and arrive next tick. Surfaced so
+   * nothing has to guess whether a reading it is looking at is current.
+   */
+  truncated: boolean
+  /**
    * Every mode this box accepts, in its own order.
    *
    * The box decides what exists; the app renders what it is given. Field 1
@@ -96,6 +103,7 @@ const EMPTY: SessionState = {
   needsUpdate: false,
   plan: null,
   modes: [],
+  truncated: false,
 }
 
 export interface SessionOptions {
@@ -411,15 +419,17 @@ export class Session {
   }
 
   #onFrame(bytes: Uint8Array): void {
-    let envelope
+    let frame
     try {
-      envelope = decodeFrame(bytes).envelope
+      frame = decodeFrame(bytes)
     } catch (err) {
       // A frame we cannot parse is not a reason to tear down a working
       // session — the next one may be fine.
       if (err instanceof FrameError) return
       throw err
     }
+
+    const envelope = frame.envelope
 
     switch (envelope.t) {
       case 'hello_ok':
@@ -429,7 +439,7 @@ export class Session {
         this.#onSnap(envelope.b as Snap)
         break
       case 'delta':
-        this.#onDelta(envelope.b as DeltaMsg)
+        this.#onDelta(envelope.b as DeltaMsg, isTruncated(frame))
         break
       case 'tick':
         this.#onTick(envelope.b as Tick)
@@ -501,7 +511,7 @@ export class Session {
     this.#lastSeq = 0
   }
 
-  #onDelta(b: DeltaMsg): void {
+  #onDelta(b: DeltaMsg, truncated = false): void {
     // A gap means frames were lost. The values we hold are still true, so we
     // apply what arrived rather than blanking the screen; a resync is the
     // caller's decision, not something to do silently mid-stream.
@@ -514,6 +524,11 @@ export class Session {
       phase: 'streaming',
       uptimeMs: b.uptimeMs,
       fields,
+      // Nothing is lost when a delta is truncated — the box could not fit
+      // every changed field in the bucket and the rest are still dirty next
+      // tick. Recorded so a view can tell a partial update from a complete
+      // one rather than the flag being declared and discarded.
+      truncated,
       ...(b.sources ? { sources: toSourceMap(b.sources) } : {}),
       ...(b.dispatchBlockedBy ? { dispatchBlockedBy: b.dispatchBlockedBy } : {}),
     })

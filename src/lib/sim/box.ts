@@ -30,6 +30,7 @@ import {
   type SiteMode,
   type ModeInfo,
   OP_SET_MODE,
+  isRetryable,
 } from '$lib/protocol/messages'
 import { buildPlan } from './planner'
 import {
@@ -281,7 +282,7 @@ export class SimBox {
     try {
       frame = decodeFrame(bytes)
     } catch (err) {
-      this.#error('E_UNKNOWN_OP', false, { detail: String(err) })
+      this.#error('E_UNKNOWN_OP', isRetryable('E_UNKNOWN_OP'), { detail: String(err) })
       return
     }
 
@@ -306,7 +307,7 @@ export class SimBox {
       default:
         // Unknown types are answered, never fatal — that is what lets a newer
         // app talk to an older box.
-        if (typeof id === 'number') this.#error('E_UNKNOWN_OP', false, { t }, id)
+        if (typeof id === 'number') this.#error('E_UNKNOWN_OP', isRetryable('E_UNKNOWN_OP'), { t }, id)
     }
   }
 
@@ -406,7 +407,7 @@ export class SimBox {
 
   #onSub(sub: Sub): void {
     if (this.faults.booting) {
-      this.#error('E_BOOTING', true, { etaMs: 90_000 })
+      this.#error('E_BOOTING', isRetryable('E_BOOTING'), { etaMs: 90_000 })
       return
     }
 
@@ -520,7 +521,7 @@ export class SimBox {
 
   #onPlanGet(id: number): void {
     if (this.faults.booting) {
-      this.#error('E_BOOTING', true, {}, id)
+      this.#error('E_BOOTING', isRetryable('E_BOOTING'), {}, id)
       return
     }
     this.#sendPlan(id)
@@ -568,13 +569,13 @@ export class SimBox {
     if (typeof id !== 'number') return
 
     if (this.faults.booting) {
-      this.#error('E_BOOTING', true, { etaMs: 90_000 }, id)
+      this.#error('E_BOOTING', isRetryable('E_BOOTING'), { etaMs: 90_000 }, id)
       return
     }
 
     const names = (q.series ?? []).filter((n) => n in HIST_SERIES)
     if (names.length === 0) {
-      this.#error('E_UNAVAILABLE', false, { detail: 'no series this box records' }, id)
+      this.#error('E_UNAVAILABLE', isRetryable('E_UNAVAILABLE'), { detail: 'no series this box records' }, id)
       return
     }
 

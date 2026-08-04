@@ -57,7 +57,9 @@ export function buildPlan(input: PlanInput): Plan {
     const price = priceAt(hour)
 
     const reading = sample(house, at, soc, ceilingW)
-    const surplus = reading.pvW - reading.loadW
+    // pv_w is never positive, so the house's net demand is load + pv and a
+    // surplus is that figure going negative.
+    const surplus = -(reading.loadW + reading.pvW)
 
     // What each mode is allowed to do, straight from FTW's own descriptions
     // in control.ModeCatalog(). Getting these wrong would produce a plan that
@@ -77,7 +79,7 @@ export function buildPlan(input: PlanInput): Plan {
       batteryW = soc < 995 ? house.batteryMaxChargeW : 0
       reason = soc < 995 ? 'cheap_import' : 'idle'
     } else if (mode === 'peak_shaving') {
-      const over = reading.loadW - reading.pvW - ceilingW
+      const over = reading.loadW + reading.pvW - ceilingW
       batteryW = over > 0 && soc > 100 ? -Math.min(over, house.batteryMaxChargeW) : 0
       reason = batteryW < 0 ? 'peak_shaving' : 'idle'
     } else if (mode === 'self_consumption') {
@@ -92,13 +94,13 @@ export function buildPlan(input: PlanInput): Plan {
       // Cheap enough to be worth buying now for later.
       batteryW = Math.min(house.batteryMaxChargeW, 3000)
       reason = 'cheap_import'
-    } else if (reading.loadW - reading.pvW > ceilingW && soc > 100) {
-      batteryW = -Math.min(reading.loadW - reading.pvW - ceilingW, house.batteryMaxChargeW)
+    } else if (reading.loadW + reading.pvW > ceilingW && soc > 100) {
+      batteryW = -Math.min(reading.loadW + reading.pvW - ceilingW, house.batteryMaxChargeW)
       reason = 'peak_shaving'
     } else if (plans && price > 120 && soc > 250) {
       // Every planner mode covers the house through an expensive hour. Only
       // full arbitrage may push past the house's own load into the grid.
-      const cover = reading.loadW - reading.pvW
+      const cover = reading.loadW + reading.pvW
       const limit = mayExportFromBattery ? house.batteryMaxChargeW : Math.max(0, cover)
       batteryW = -Math.min(limit, house.batteryMaxChargeW, 3500)
       reason = batteryW < 0 ? 'expensive_import' : 'idle'
@@ -110,7 +112,7 @@ export function buildPlan(input: PlanInput): Plan {
       reason = 'export_paid'
     }
 
-    const gridW = reading.loadW - reading.pvW + batteryW
+    const gridW = reading.loadW + reading.pvW + batteryW
 
     // Carry state of charge forward so the plan is self-consistent — a plan
     // that charges a full battery for six hours is worse than no plan.

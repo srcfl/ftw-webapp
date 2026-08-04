@@ -34,6 +34,14 @@ export interface Source {
  */
 export interface BoxClock {
   source: 'ntp' | 'rtc' | 'none'
+  /**
+   * Null when the box has never synced.
+   *
+   * Not zero: 0 is a real 1970 timestamp, and a box that has just lost power
+   * is exactly the case this field exists to describe. Go sends 0 for
+   * "never", so anything reading this must treat 0 as null — noted rather
+   * than silently normalised, because the wire is the box's to change.
+   */
   syncedAtMs: number | null
   uptimeMs: number
 }

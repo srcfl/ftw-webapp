@@ -177,7 +177,7 @@ Three separate clocks, three different events — not three versions of one:
 
 `cmd.ack` means the dispatcher accepted the intent and returns a lease with an
 absolute expiry. `cmd.result` arrives separately, when the driver has **read
-the value back**, carrying `observed: {value, src, tsMs}`. The echo of the
+the value back**, carrying `observed: {value, src, uptimeMs}`. The echo of the
 requested value is never sent as confirmation — that is the difference between
 knowing a command was heard and knowing it happened.
 

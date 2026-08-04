@@ -275,8 +275,12 @@ describe('the simulated house behaves like a house', () => {
     await settle()
     const nightPv = nightSession.state.fields.get(3)!
 
-    expect(noonPv).toBeGreaterThan(1000)
-    expect(nightPv).toBe(0)
+    // Negative because PV is never positive in FTW's convention: a big
+    // negative number is a lot of generation.
+    expect(noonPv).toBeLessThan(-1000)
+    // -0 at night, because the sign is applied to a zero magnitude. Same
+    // number, and Object.is is the only thing that can tell them apart.
+    expect(Math.abs(nightPv)).toBe(0)
   })
 
   it('is deterministic for a given seed and instant', async () => {

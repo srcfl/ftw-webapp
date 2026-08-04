@@ -120,7 +120,12 @@ describe('cold start paints from cache', () => {
     const second = new Session({ build: 'test' })
     second.restore(sessionPatchFromSnapshot(cached!))
 
-    expect(second.state.fields).toEqual(live)
+    // Compared entry by entry: JSON has no negative zero, so a cached -0 comes
+    // back as 0 and toEqual on the Map would call that a difference. The
+    // reading is identical in every sense that matters.
+    expect([...second.state.fields.entries()].map(([k, v]) => [k, v === 0 ? 0 : v])).toEqual(
+      [...live.entries()].map(([k, v]) => [k, v === 0 ? 0 : v])
+    )
     expect(second.state.carrier).toBe('cache')
     // Cache is a carrier, not a failure. The app has something honest to show.
     expect(second.state.phase).toBe('idle')

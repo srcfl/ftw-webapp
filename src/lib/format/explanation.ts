@@ -75,7 +75,10 @@ export function explain(input: ExplainInput): Explanation {
     }
   }
 
-  const solar = pv ?? 0
+  // PV is never positive: pv_w = -3000 means generating 3 kW. Working with a
+  // magnitude here keeps every comparison below readable, and the conversion
+  // happens once rather than at each site.
+  const generating = pv === undefined ? 0 : Math.max(0, -pv)
   const bat = battery ?? 0
 
   // Exporting: more is being produced than the house and battery can absorb.
@@ -87,7 +90,7 @@ export function explain(input: ExplainInput): Explanation {
   }
 
   // Battery absorbing surplus. Positive battery watts flow into storage.
-  if (bat > NOISE_W && solar > NOISE_W && grid < NOISE_W) {
+  if (bat > NOISE_W && generating > NOISE_W && grid < NOISE_W) {
     return {
       situation: 'charging_from_surplus',
       headline: `Spare solar is charging the battery at ${kw(bat)}.`,
@@ -115,7 +118,7 @@ export function explain(input: ExplainInput): Explanation {
     }
   }
 
-  if (solar > NOISE_W) {
+  if (generating > NOISE_W) {
     if (grid < NOISE_W) {
       return {
         situation: 'solar_covering',
@@ -124,7 +127,7 @@ export function explain(input: ExplainInput): Explanation {
     }
     return {
       situation: 'solar_partial',
-      headline: `Solar is covering ${kw(solar)} of the ${kw(load)} the house is using.`,
+      headline: `Solar is covering ${kw(generating)} of the ${kw(load)} the house is using.`,
     }
   }
 

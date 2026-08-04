@@ -294,6 +294,33 @@ export interface EventMsg {
   args?: Record<string, unknown>
 }
 
+/**
+ * Whether a code is worth retrying, from contract/registry.yaml.
+ *
+ * Here rather than at each throw site: the app reads this flag to decide
+ * whether to offer a retry at all, and a hand-written value drifts from the
+ * registry without anything noticing. The cross-check against the Go box
+ * caught exactly that — the simulator was sending false for E_UNAVAILABLE
+ * while the registry and the box both said true.
+ */
+const RETRYABLE: Record<string, boolean> = {
+  E_BOOTING: true,
+  E_UNKNOWN_OP: false,
+  E_CMD_EXPIRED: false,
+  E_PRECONDITION: false,
+  E_CONFLICT: true,
+  E_SCOPE_DENIED: false,
+  E_GRANT_REVOKED: false,
+  E_LAST_OWNER_PROTECTED: false,
+  E_RANGE_TOO_LARGE: false,
+  E_UNAVAILABLE: true,
+}
+
+/** Unknown codes are not retryable: guessing yes offers a button that cannot help. */
+export function isRetryable(code: string): boolean {
+  return RETRYABLE[code] ?? false
+}
+
 export interface ErrorMsg {
   code: string
   retryable: boolean

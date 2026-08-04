@@ -120,7 +120,9 @@ describe('a history window arrives as tiles', () => {
     const present = [...pv].filter((v) => v !== MISSING_SAMPLE)
 
     expect(present.length).toBeGreaterThan(0)
-    expect(present.some((v) => v > 0)).toBe(true)
+    // PV is never positive, so a daytime window is proved by real magnitude
+    // rather than by a positive value.
+    expect(present.some((v) => Math.abs(v) > 0)).toBe(true)
     h.stop()
   })
 })

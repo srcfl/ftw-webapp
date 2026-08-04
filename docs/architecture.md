@@ -171,6 +171,27 @@ no longer choose the client's handle; clearing a device now clears the sealed
 projection along with the identity, so a phone handed on cannot paint the
 previous household's home.
 
+### What the Go cross-check found
+
+Building the box's half of the protocol and running both implementations
+against each other found things neither suite could see alone. Two are worth
+recording because of *how* they hid.
+
+**The PV sign was wrong in this app, and the simulator agreed with it.**
+FTW's convention is that PV is never positive — `pv_w = -3000` means
+generating 3 kW, and `grid_w = load_w + bat_w + pv_w`. The simulator emitted
+it positive and the explanation layer tested `solar > 0`, so against real
+hardware every sentence about solar would have been wrong. Every test passed,
+because the simulator carried the same mistake. That is the one failure mode a
+simulator cannot catch: not a case it fails to cover, but an assumption it
+shares.
+
+**`controlRev` is inert on both sides.** The app sends `expect.rev` and the
+box compares it, but nothing increments it, so the conflict check described
+above currently passes everything. Worse, when something does start bumping
+it, the app has no way to resync mid-session. Fixing it needs both sides and
+is not done.
+
 ## Deliberately not in v1
 
 Each of these is deferred with a reason, not forgotten.

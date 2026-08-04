@@ -7,9 +7,13 @@
  * Deterministic by construction: same seed, same house, same day. Tests that
  * depend on Math.random are tests that fail on a Tuesday.
  *
- * Sign convention is FTW's throughout: positive watts flow INTO the site.
- * PV generation is therefore negative at the panel boundary and arrives here
- * already converted, exactly as a driver would deliver it.
+ * Sign convention is FTW's throughout: positive watts flow INTO the site, so
+ * grid_w = load_w + bat_w + pv_w.
+ *
+ * PV is therefore NEVER POSITIVE — docs/site-convention.md says so outright,
+ * and pv_w = -3000 means generating 3 kW. Inverters report an unsigned
+ * magnitude and the driver flips it; by the time a reading reaches anything
+ * above the driver boundary it is already negative.
  */
 
 /** Small, fast, well-distributed. Enough for shaping noise. */
@@ -46,6 +50,7 @@ export const DEFAULT_HOUSE: HouseConfig = {
 
 export interface Reading {
   gridW: number
+  /** Never positive. Negative means generating. */
   pvW: number
   batteryW: number
   batterySocPermille: number
@@ -120,16 +125,20 @@ export function sample(
   // Seeded on the minute so consecutive samples within a minute stay coherent.
   const rand = mulberry32(cfg.seed + Math.floor(atMs / 60_000))
 
-  const pv = solarW(cfg, hourOfDay, dayOfYear, rand)
+  // solarW returns a magnitude; the sign is applied here, which is the same
+  // place a driver would apply it.
+  const generation = solarW(cfg, hourOfDay, dayOfYear, rand)
+  const pv = -generation
   const load = loadW(cfg, hourOfDay, rand)
 
-  // Positive means into the site; PV arrives as generation, so it offsets load.
-  const netBeforeBattery = load - pv
+  // grid_w = load_w + bat_w + pv_w, so the net before the battery acts is
+  // simply load plus a negative PV.
+  const netBeforeBattery = load + pv
 
   let battery = 0
   if (cfg.batteryCapacityWh > 0) {
     if (netBeforeBattery < 0 && socPermille < 1000) {
-      // Surplus solar: absorb what fits.
+      // Generating more than the house uses: absorb what fits.
       battery = Math.min(-netBeforeBattery, cfg.batteryMaxChargeW)
     } else if (netBeforeBattery > ceilingW && socPermille > 50) {
       // Defend the ceiling. This is the case the app gets to explain.

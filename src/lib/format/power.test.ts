@@ -58,7 +58,7 @@ describe('the headline and the cards agree', () => {
     for (let gridW = 0; gridW < NOISE_W; gridW += 7) {
       const fields = new Map([
         [FID.GRID_W, gridW],
-        [FID.PV_W, 4000],
+        [FID.PV_W, -4000],
         [FID.BATTERY_W, 0],
         [FID.LOAD_W, 4000 + gridW],
       ])
@@ -75,7 +75,7 @@ describe('the headline and the cards agree', () => {
     expect(directionOf(NOISE_W - 1)).toBe('idle')
     const fields = new Map([
       [FID.GRID_W, NOISE_W - 1],
-      [FID.PV_W, 4000],
+      [FID.PV_W, -4000],
       [FID.BATTERY_W, 0],
       [FID.LOAD_W, 4000],
     ])

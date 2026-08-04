@@ -4,6 +4,12 @@ import { explain, FID, type ExplainInput } from './explanation'
 const f = (v: Partial<Record<number, number>>): ReadonlyMap<number, number> =>
   new Map(Object.entries(v).map(([k, val]) => [Number(k), val!]))
 
+/**
+ * PV values here are negative, which is FTW's convention and not a typo:
+ * docs/site-convention.md states PV is never positive, so pv_w = -4000 means
+ * generating 4 kW. The simulator used to emit it positive and these tests
+ * agreed with it, which is how a wrong sign survives a green suite.
+ */
 const input = (fields: ReadonlyMap<number, number>, over: Partial<ExplainInput> = {}): ExplainInput => ({
   fields,
   dispatchBlockedBy: [],
@@ -37,24 +43,24 @@ describe('explain', () => {
   })
 
   it('describes export as sending back, not as a negative number', () => {
-    const r = explain(input(f({ [FID.GRID_W]: -3400, [FID.PV_W]: 7000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 3600 })))
+    const r = explain(input(f({ [FID.GRID_W]: -3400, [FID.PV_W]: -7000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 3600 })))
     expect(r.situation).toBe('exporting_surplus')
     expect(r.headline).toMatch(/back to the grid/)
     expect(r.headline).not.toContain('-')
   })
 
   it('describes surplus solar charging the battery', () => {
-    const r = explain(input(f({ [FID.GRID_W]: 0, [FID.PV_W]: 6000, [FID.BATTERY_W]: 3000, [FID.LOAD_W]: 3000 })))
+    const r = explain(input(f({ [FID.GRID_W]: 0, [FID.PV_W]: -6000, [FID.BATTERY_W]: 3000, [FID.LOAD_W]: 3000 })))
     expect(r.situation).toBe('charging_from_surplus')
     expect(r.headline).toMatch(/charging the battery at 3.0 kW/)
   })
 
   it('distinguishes solar covering everything from covering part', () => {
-    const all = explain(input(f({ [FID.GRID_W]: 0, [FID.PV_W]: 4000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 4000 })))
+    const all = explain(input(f({ [FID.GRID_W]: 0, [FID.PV_W]: -4000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 4000 })))
     expect(all.situation).toBe('solar_covering')
 
     const part = explain(
-      input(f({ [FID.GRID_W]: 2000, [FID.PV_W]: 2000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 4000 }))
+      input(f({ [FID.GRID_W]: 2000, [FID.PV_W]: -2000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 4000 }))
     )
     expect(part.situation).toBe('solar_partial')
   })
@@ -73,7 +79,7 @@ describe('explain', () => {
 
   it('never shows a minus sign in any situation', () => {
     const cases: ReadonlyMap<number, number>[] = [
-      f({ [FID.GRID_W]: -3400, [FID.PV_W]: 7000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 3600 }),
+      f({ [FID.GRID_W]: -3400, [FID.PV_W]: -7000, [FID.BATTERY_W]: 0, [FID.LOAD_W]: 3600 }),
       f({ [FID.GRID_W]: 0, [FID.PV_W]: 0, [FID.BATTERY_W]: -2100, [FID.LOAD_W]: 2100 }),
       f({ [FID.GRID_W]: 11_000, [FID.PV_W]: 0, [FID.BATTERY_W]: -4200, [FID.LOAD_W]: 15_200 }),
       f({ [FID.GRID_W]: 900, [FID.PV_W]: 0, [FID.BATTERY_W]: -1500, [FID.LOAD_W]: 2400 }),
@@ -89,7 +95,7 @@ describe('explain', () => {
       f({}),
       f({ [FID.GRID_W]: 0, [FID.LOAD_W]: 0 }),
       f({ [FID.GRID_W]: 2400, [FID.LOAD_W]: 2400 }),
-      f({ [FID.GRID_W]: -100, [FID.PV_W]: 500, [FID.LOAD_W]: 400 }),
+      f({ [FID.GRID_W]: -100, [FID.PV_W]: -500, [FID.LOAD_W]: 400 }),
     ]
 
     for (const c of cases) {
