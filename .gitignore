@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+*.local
+
+# Generated from contract/registry.yaml — never edit, never commit.
+src/lib/contract/generated.ts
+
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example

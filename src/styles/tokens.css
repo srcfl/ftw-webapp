@@ -1,0 +1,127 @@
+/* FTW — Terminal Native design tokens.
+ *
+ * The canonical palette lives here and nowhere else. Components read roles
+ * (--surface-raised, --fg-dim), never raw values, so a palette change is one
+ * edit rather than a sweep.
+ *
+ * Theme switching: <html> carries data-theme="dark" or "light". Absence is
+ * treated as dark. The runtime reads the stored preference first and falls
+ * back to prefers-color-scheme.
+ *
+ * These values are shared with FTW's on-box UI (forty-two-watts/web/
+ * components/theme.css). Keep them in step: a user running both surfaces
+ * should not see two different products. tests/tokens.test.ts locks the
+ * contract that every role resolves in both themes.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ----- Surfaces, dark (default) ----- */
+  --surface: #0d0d0d;
+  --surface-sunken: #101010;
+  --surface-raised: #161616;
+  --surface-elevated: #1e1e1e;
+
+  --line: #2a2a2a;
+  --line-soft: #222222;
+
+  --fg: #e8e8e8;
+  --fg-label: #d8d8d8;
+  --fg-dim: #a0a0a0;
+  --fg-muted: #858585;
+  --on-accent: #0a0a0a;
+
+  /* ----- Semantic energy colours -----
+   * Import is what the site draws from the grid, export what it pushes back.
+   * The sign convention is FTW's: positive watts flow INTO the site.
+   * Colour carries meaning here, so it is never decorative. */
+  --energy-import: oklch(0.72 0.18 20); /* red — drawing from grid */
+  --energy-export: oklch(0.78 0.16 150); /* green — pushing to grid */
+  --energy-generation: oklch(0.82 0.18 75); /* amber — PV producing */
+  --energy-storage: oklch(0.82 0.14 210); /* cyan — battery */
+  --energy-storage-dim: oklch(0.65 0.1 210);
+  --energy-mobility: oklch(0.8 0.14 300); /* violet — EV */
+
+  /* ----- Accent -----
+   * One accent, hue-parameterised so light mode shifts lightness only. */
+  --accent-hue: 65;
+  --accent: oklch(0.82 0.16 var(--accent-hue));
+  --accent-strong: oklch(0.65 0.14 var(--accent-hue));
+
+  /* ----- Freshness -----
+   * The app must never fake live. These three roles are the visual grammar
+   * for how old a reading is, and they are used by exactly one component
+   * (FreshnessMark) so the meaning cannot drift. */
+  --fresh-live: var(--energy-export);
+  --fresh-stale: var(--energy-generation);
+  --fresh-lost: var(--fg-muted);
+
+  /* ----- Type -----
+   * No CDN. Inter and JetBrains Mono lead the stack and are picked up when
+   * self-hosted or installed; every fallback ships with the OS. */
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Numbers in a live stream must not reflow as digits change width. */
+  --num: var(--mono);
+
+  --radius-lg: 18px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+
+  --pad-card: 14px 16px;
+  --pad-card-tight: 12px 14px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Motion is functional: it shows a value changed, never decorates.
+   * Every duration here is short enough to read as causality. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+
+  --surface: #f4f4f2;
+  --surface-sunken: #ecece8;
+  --surface-raised: #fafaf8;
+  --surface-elevated: #ffffff;
+
+  --line: #cecec7;
+  --line-soft: #ddddd7;
+
+  --fg: #191919;
+  --fg-label: #4f4f4b;
+  --fg-dim: #4f4f4b;
+  --fg-muted: #686862;
+
+  /* Pulled darker so they hold contrast on paper without turning neon. */
+  --energy-import: oklch(0.55 0.2 20);
+  --energy-export: oklch(0.58 0.18 150);
+  --energy-generation: oklch(0.68 0.17 75);
+  --energy-storage: oklch(0.58 0.14 210);
+  --energy-storage-dim: oklch(0.48 0.1 210);
+  --energy-mobility: oklch(0.55 0.14 300);
+
+  --accent: oklch(0.68 0.16 var(--accent-hue));
+  --accent-strong: oklch(0.55 0.14 var(--accent-hue));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 1ms;
+    --motion-base: 1ms;
+    --motion-slow: 1ms;
+  }
+}

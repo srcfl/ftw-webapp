@@ -1,0 +1,10 @@
+<!-- Placeholder mark. Terminal Native palette, no gradient, no glow.
+     Replace with the real FTW app icon before any public release —
+     this exists so the manifest resolves and install prompts work. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="114" fill="#0d0d0d" />
+  <path
+    d="M286 96 176 272h74l-24 144 110-176h-74z"
+    fill="oklch(0.82 0.16 65)"
+  />
+</svg>
