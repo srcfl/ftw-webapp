@@ -4,15 +4,15 @@ import { HandshakeState, CipherState, NoiseError, MAX_NONCE, generateKeyPair } f
 import { encodeFrame, LANE_CONTROL } from '$lib/protocol/frame'
 
 /** Two ends of a finished handshake, wired up as transports. */
-function connect(): { app: NoiseTransport; box: NoiseTransport } {
+async function connect(): Promise<{ app: NoiseTransport; box: NoiseTransport }> {
   const appKey = generateKeyPair()
   const boxKey = generateKeyPair()
 
   const initiator = HandshakeState.initiator({ staticKey: appKey, remoteStatic: boxKey.publicKey })
   const responder = HandshakeState.responder({ staticKey: boxKey })
 
-  responder.readMessage(initiator.writeMessage())
-  initiator.readMessage(responder.writeMessage())
+  await responder.readMessage(await initiator.writeMessage())
+  await initiator.readMessage(await responder.writeMessage())
 
   return { app: new NoiseTransport(initiator.split()), box: new NoiseTransport(responder.split()) }
 }
@@ -23,16 +23,16 @@ const delta = (fields: Record<number, number>) =>
   encodeFrame({ lane: LANE_CONTROL, flags: 0, envelope: { t: 'delta', b: { seq: 2, fields } } }, 512)
 
 describe('round trip', () => {
-  it('carries a frame in both directions', () => {
-    const { app, box } = connect()
+  it('carries a frame in both directions', async () => {
+    const { app, box } = await connect()
     const frame = delta({ 2: 11400, 3: 6200, 4: -4200, 5: 875 })
 
     expect(box.decrypt(app.encrypt(frame))).toEqual(frame)
     expect(app.decrypt(box.encrypt(frame))).toEqual(frame)
   })
 
-  it('keeps a long stream in step', () => {
-    const { app, box } = connect()
+  it('keeps a long stream in step', async () => {
+    const { app, box } = await connect()
     for (let i = 0; i < 200; i++) {
       const frame = delta({ 2: i * 13 })
       expect(box.decrypt(app.encrypt(frame))).toEqual(frame)
@@ -40,8 +40,8 @@ describe('round trip', () => {
     expect(app.nextSeq).toBe(200n)
   })
 
-  it('adds a fixed overhead, so lane 0 stays one constant size on the wire', () => {
-    const { app } = connect()
+  it('adds a fixed overhead, so lane 0 stays one constant size on the wire', async () => {
+    const { app } = await connect()
     const frames = [tick(), delta({}), delta({ 2: 1, 3: 2, 4: 3, 5: 4, 6: 5 })]
     const lengths = new Set(frames.map((f) => app.encrypt(f).length))
 
@@ -50,34 +50,34 @@ describe('round trip', () => {
 })
 
 describe('tampering', () => {
-  it('rejects a flipped bit in the body', () => {
-    const { app, box } = connect()
+  it('rejects a flipped bit in the body', async () => {
+    const { app, box } = await connect()
     const wire = app.encrypt(tick())
     wire[100] = wire[100]! ^ 0x01
 
     expect(() => box.decrypt(wire)).toThrow(NoiseError)
   })
 
-  it('rejects a truncated tag', () => {
-    const { app, box } = connect()
+  it('rejects a truncated tag', async () => {
+    const { app, box } = await connect()
     expect(() => box.decrypt(app.encrypt(tick()).subarray(0, 400))).toThrow(NoiseError)
   })
 
-  it('rejects a message too short to hold a sequence number and a tag', () => {
-    const { box } = connect()
+  it('rejects a message too short to hold a sequence number and a tag', async () => {
+    const { box } = await connect()
     expect(() => box.decrypt(new Uint8Array(TRANSPORT_OVERHEAD - 1))).toThrow(/transport message is/)
   })
 
-  it('rejects a renumbered message, because the sequence number is authenticated', () => {
-    const { app, box } = connect()
+  it('rejects a renumbered message, because the sequence number is authenticated', async () => {
+    const { app, box } = await connect()
     const wire = app.encrypt(tick())
     wire[SEQ_BYTES - 1] = 9
 
     expect(() => box.decrypt(wire)).toThrow(NoiseError)
   })
 
-  it('says only that authentication failed', () => {
-    const { app, box } = connect()
+  it('says only that authentication failed', async () => {
+    const { app, box } = await connect()
     const wire = app.encrypt(tick())
     wire[wire.length - 1] = wire[wire.length - 1]! ^ 0x80
 
@@ -91,8 +91,8 @@ describe('tampering', () => {
 })
 
 describe('replay', () => {
-  it('rejects a frame it has already accepted', () => {
-    const { app, box } = connect()
+  it('rejects a frame it has already accepted', async () => {
+    const { app, box } = await connect()
     const wire = app.encrypt(tick())
 
     expect(box.decrypt(wire)).toBeInstanceOf(Uint8Array)
@@ -104,8 +104,8 @@ describe('replay', () => {
     }
   })
 
-  it('rejects an old frame replayed after the stream has moved on', () => {
-    const { app, box } = connect()
+  it('rejects an old frame replayed after the stream has moved on', async () => {
+    const { app, box } = await connect()
     const first = app.encrypt(tick())
     box.decrypt(first)
 
@@ -114,18 +114,18 @@ describe('replay', () => {
     expect(() => box.decrypt(first)).toThrow(/already accepted/)
   })
 
-  it('accepts frames that arrive out of order inside the window', () => {
+  it('accepts frames that arrive out of order inside the window', async () => {
     // A DataChannel may reorder. Dropping a late frame would cost a reading
     // for no reason, so the window forgives it.
-    const { app, box } = connect()
+    const { app, box } = await connect()
     const wire = Array.from({ length: 5 }, (_, i) => app.encrypt(delta({ 2: i })))
 
     box.decrypt(wire[4]!)
     for (const i of [0, 1, 2, 3]) expect(box.decrypt(wire[i]!)).toBeInstanceOf(Uint8Array)
   })
 
-  it('rejects a frame older than the window', () => {
-    const { app, box } = connect()
+  it('rejects a frame older than the window', async () => {
+    const { app, box } = await connect()
     const first = app.encrypt(tick())
 
     for (let i = 0; i <= REPLAY_WINDOW; i++) app.encrypt(delta({ 2: i }))
@@ -134,10 +134,10 @@ describe('replay', () => {
     expect(() => box.decrypt(first)).toThrow(/outside the replay window/)
   })
 
-  it('does not let an injected frame burn sequence numbers', () => {
+  it('does not let an injected frame burn sequence numbers', async () => {
     // If a failed decryption moved the window, anyone able to write to the
     // carrier could push it far ahead and lock the real box out.
-    const { app, box } = connect()
+    const { app, box } = await connect()
     const forged = new Uint8Array(TRANSPORT_OVERHEAD + 512)
     forged[SEQ_BYTES - 1] = 200
 
@@ -149,7 +149,7 @@ describe('replay', () => {
 })
 
 describe('exhaustion and close', () => {
-  it('throws instead of reusing a nonce', () => {
+  it('throws instead of reusing a nonce', async () => {
     const send = new CipherState(new Uint8Array(32).fill(3))
     const recv = new CipherState(new Uint8Array(32).fill(4))
     send.setNonce(MAX_NONCE - 1n)
@@ -170,20 +170,20 @@ describe('exhaustion and close', () => {
     }
   })
 
-  it('is unusable after close', () => {
-    const { app } = connect()
+  it('is unusable after close', async () => {
+    const { app } = await connect()
     app.close()
 
     expect(() => app.encrypt(tick())).toThrow(/closed/)
     expect(() => app.decrypt(new Uint8Array(600))).toThrow(/closed/)
   })
 
-  it('exposes the box static key the handshake authenticated', () => {
+  it('exposes the box static key the handshake authenticated', async () => {
     const boxKey = generateKeyPair()
     const initiator = HandshakeState.initiator({ staticKey: generateKeyPair(), remoteStatic: boxKey.publicKey })
     const responder = HandshakeState.responder({ staticKey: boxKey })
-    responder.readMessage(initiator.writeMessage())
-    initiator.readMessage(responder.writeMessage())
+    await responder.readMessage(await initiator.writeMessage())
+    await initiator.readMessage(await responder.writeMessage())
 
     expect(new NoiseTransport(initiator.split()).remoteStatic).toEqual(boxKey.publicKey)
   })
@@ -197,15 +197,15 @@ describe('a passive observer learns only that a frame went by', () => {
   const busy = delta({ 2: 11400, 3: 6200, 4: -4200, 5: 875, 6: 13400 })
   const quiet = tick()
 
-  it('emits the same length for two different frames of the same length', () => {
+  it('emits the same length for two different frames of the same length', async () => {
     expect(busy.length).toBe(quiet.length)
 
-    const { app } = connect()
+    const { app } = await connect()
     expect(app.encrypt(busy).length).toBe(app.encrypt(quiet).length)
   })
 
-  it('emits a different ciphertext each time the same frame is sent', () => {
-    const { app } = connect()
+  it('emits a different ciphertext each time the same frame is sent', async () => {
+    const { app } = await connect()
     const a = app.encrypt(busy)
     const b = app.encrypt(busy)
 
@@ -213,8 +213,8 @@ describe('a passive observer learns only that a frame went by', () => {
     expect(a.subarray(SEQ_BYTES)).not.toEqual(b.subarray(SEQ_BYTES))
   })
 
-  it('leaves no trace of a highly structured frame', () => {
-    const { app } = connect()
+  it('leaves no trace of a highly structured frame', async () => {
+    const { app } = await connect()
     const zeros = new Uint8Array(512)
     const body = app.encrypt(zeros).subarray(SEQ_BYTES)
 
@@ -230,19 +230,19 @@ describe('a passive observer learns only that a frame went by', () => {
     expect(longest).toBeLessThan(8)
   })
 
-  it('produces transcripts an observer cannot tell apart', () => {
+  it('produces transcripts an observer cannot tell apart', async () => {
     // The observer's whole view: the bytes on the wire. Take every summary it
     // could compute cheaply over many sessions and show the two plaintexts
     // land in the same place. Tolerances are set around fourteen and five
     // standard deviations, so this fails on a real leak, not on luck.
     const trials = 128
-    const measure = (frame: Uint8Array) => {
+    const measure = async (frame: Uint8Array) => {
       let sum = 0
       let zeros = 0
       const lengths = new Set<number>()
 
       for (let i = 0; i < trials; i++) {
-        const { app } = connect()
+        const { app } = await connect()
         const body = app.encrypt(frame).subarray(SEQ_BYTES)
         lengths.add(body.length)
         for (const byte of body) {
@@ -254,8 +254,8 @@ describe('a passive observer learns only that a frame went by', () => {
       return { mean: sum / (trials * 512), zeros, lengths }
     }
 
-    const a = measure(busy)
-    const b = measure(quiet)
+    const a = await measure(busy)
+    const b = await measure(quiet)
 
     expect(a.lengths).toEqual(b.lengths)
     expect(Math.abs(a.mean - b.mean)).toBeLessThan(4)

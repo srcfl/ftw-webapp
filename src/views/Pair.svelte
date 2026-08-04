@@ -14,9 +14,17 @@
 
   interface Props {
     onPaired: (site: PairedSite) => void
+    /**
+     * A pairing link the app was opened with.
+     *
+     * The camera on a phone opens the QR's URL in the browser rather than
+     * handing it back to a page, so arriving with a fragment already in hand
+     * is the ordinary path on iOS — not an edge case.
+     */
+    fragment?: string | null
   }
 
-  let { onPaired }: Props = $props()
+  let { onPaired, fragment = null }: Props = $props()
 
   type Stage = 'intro' | 'scanning' | 'pairing' | 'error'
 
@@ -26,6 +34,13 @@
   let handle: ScanHandle | null = null
 
   onDestroy(() => handle?.stop())
+
+  // Arrived with a link: pair straight away. Nothing to scan, and asking the
+  // user to press a button before doing what they already asked for is one
+  // tap too many.
+  $effect(() => {
+    if (fragment && stage === 'intro') void pair(fragment)
+  })
 
   async function startScan() {
     stage = 'scanning'

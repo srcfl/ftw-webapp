@@ -14,12 +14,15 @@
  *     -> e, es, s, ss
  *     <- e, ee, se
  *
- * Everything in this file is synchronous and finishes in well under a
- * millisecond on a phone: four X25519 operations and a handful of hashes. It
- * is deliberately not async, so nothing above it is tempted to await it on the
- * first-paint path. The only waiting in a handshake is the carrier round trip
- * between writeMessage and readMessage — that is where the asynchronous
- * boundary sits, and it is the caller's to schedule. See transport.ts.
+ * The handshake is asynchronous; the transport that follows is not.
+ *
+ * That split is deliberate. The device's static key is a non-extractable
+ * WebCrypto handle wherever the browser has X25519, so its scalar is never
+ * readable by script — and its DH is therefore a promise. Paying that cost
+ * here is free: a handshake is already two carrier round trips and is nowhere
+ * near the first-frame path. encrypt and decrypt, which run once a second,
+ * stay synchronous and touch no key material outside this process. See
+ * transport.ts.
  *
  * Spec: https://noiseprotocol.org/noise.html §5, §7. Verified against the
  * Cacophony test vectors in noise.test.ts.
@@ -58,6 +61,42 @@ export class NoiseError extends Error {
 export interface KeyPair {
   secretKey: Uint8Array
   publicKey: Uint8Array
+}
+
+/**
+ * A static key that can do Noise's one operation, however it holds itself.
+ *
+ * The device key is a non-extractable WebCrypto handle wherever the browser
+ * has X25519, so its scalar is not readable by script at all — and its DH is
+ * therefore asynchronous. Accepting this shape rather than raw bytes is what
+ * lets the strongest available storage be used instead of the weakest common
+ * one. Ephemerals stay raw: they are generated here, used twice and dropped.
+ */
+export interface StaticKey {
+  readonly publicKey: Uint8Array
+  diffieHellman(peerPublic: Uint8Array): Promise<Uint8Array>
+}
+
+/** Wraps raw bytes in the StaticKey shape. */
+export function staticFromKeyPair(pair: KeyPair): StaticKey {
+  return {
+    publicKey: pair.publicKey,
+    async diffieHellman(peerPublic) {
+      return dh(pair.secretKey, peerPublic)
+    },
+  }
+}
+
+/**
+ * Accept either form.
+ *
+ * A caller holding raw bytes — the box, a test, a browser without X25519 in
+ * WebCrypto — should not have to wrap them, and a caller holding a
+ * non-extractable handle cannot unwrap them. Normalising here keeps that
+ * choice where it belongs: with whoever owns the key.
+ */
+function asStaticKey(key: StaticKey | KeyPair): StaticKey {
+  return 'secretKey' in key ? staticFromKeyPair(key) : key
 }
 
 export function generateKeyPair(): KeyPair {
@@ -261,7 +300,7 @@ export interface HandshakeResult {
 }
 
 export interface HandshakeOptions {
-  staticKey: KeyPair
+  staticKey: StaticKey | KeyPair
   /** Mixed in before anything else. Both ends must agree byte for byte. */
   prologue?: Uint8Array
   /**
@@ -286,7 +325,7 @@ type Step = 'write1' | 'read1' | 'write2' | 'read2' | 'done' | 'split'
  */
 export class HandshakeState {
   #sym = new SymmetricState()
-  #s: KeyPair
+  #s: StaticKey
   #e: KeyPair | null = null
   #rs: Uint8Array | null = null
   #re: Uint8Array | null = null
@@ -296,7 +335,7 @@ export class HandshakeState {
 
   private constructor(initiator: boolean, opts: HandshakeOptions, remoteStatic?: Uint8Array) {
     this.#initiator = initiator
-    this.#s = opts.staticKey
+    this.#s = asStaticKey(opts.staticKey)
     this.#fixedEphemeral = opts.ephemeral ?? null
     this.#step = initiator ? 'write1' : 'read1'
 
@@ -328,13 +367,20 @@ export class HandshakeState {
     return this.#step === 'done'
   }
 
-  writeMessage(payload: Uint8Array = new Uint8Array(0)): Uint8Array {
+  /**
+   * Asynchronous because the static key's DH may live behind WebCrypto.
+   *
+   * The transport that follows is synchronous and stays that way: a handshake
+   * is two carrier round trips and is nowhere near the first-frame path,
+   * whereas encrypt and decrypt run once a second.
+   */
+  async writeMessage(payload: Uint8Array = new Uint8Array(0)): Promise<Uint8Array> {
     if (this.#initiator && this.#step === 'write1') return this.#writeMessage1(payload)
     if (!this.#initiator && this.#step === 'write2') return this.#writeMessage2(payload)
     throw new NoiseError(`cannot write at step ${this.#step}`, 'E_NOISE_STATE')
   }
 
-  readMessage(message: Uint8Array): Uint8Array {
+  async readMessage(message: Uint8Array): Promise<Uint8Array> {
     if (!this.#initiator && this.#step === 'read1') return this.#readMessage1(message)
     if (this.#initiator && this.#step === 'read2') return this.#readMessage2(message)
     throw new NoiseError(`cannot read at step ${this.#step}`, 'E_NOISE_STATE')
@@ -372,19 +418,19 @@ export class HandshakeState {
   }
 
   // -> e, es, s, ss
-  #writeMessage1(payload: Uint8Array): Uint8Array {
+  async #writeMessage1(payload: Uint8Array): Promise<Uint8Array> {
     this.#e = this.#fixedEphemeral ?? generateKeyPair()
     this.#sym.mixHash(this.#e.publicKey)
     this.#sym.mixKey(dh(this.#e.secretKey, this.#rs!))
     const encStatic = this.#sym.encryptAndHash(this.#s.publicKey)
-    this.#sym.mixKey(dh(this.#s.secretKey, this.#rs!))
+    this.#sym.mixKey(await this.#s.diffieHellman(this.#rs!))
     const encPayload = this.#sym.encryptAndHash(payload)
 
     this.#step = 'read2'
     return concat(this.#e.publicKey, encStatic, encPayload)
   }
 
-  #readMessage1(message: Uint8Array): Uint8Array {
+  async #readMessage1(message: Uint8Array): Promise<Uint8Array> {
     const encStaticEnd = DH_BYTES + DH_BYTES + TAG_BYTES
     if (message.length < encStaticEnd + TAG_BYTES) {
       throw new NoiseError(`handshake message 1 is ${message.length} bytes`, 'E_NOISE_MESSAGE')
@@ -392,11 +438,11 @@ export class HandshakeState {
 
     this.#re = message.subarray(0, DH_BYTES)
     this.#sym.mixHash(this.#re)
-    this.#sym.mixKey(dh(this.#s.secretKey, this.#re))
+    this.#sym.mixKey(await this.#s.diffieHellman(this.#re))
     // Fails here when the initiator pinned somebody else's static key, which
     // is exactly the relay-impersonation case.
     this.#rs = this.#sym.decryptAndHash(message.subarray(DH_BYTES, encStaticEnd))
-    this.#sym.mixKey(dh(this.#s.secretKey, this.#rs))
+    this.#sym.mixKey(await this.#s.diffieHellman(this.#rs))
     const payload = this.#sym.decryptAndHash(message.subarray(encStaticEnd))
 
     this.#step = 'write2'
@@ -404,7 +450,7 @@ export class HandshakeState {
   }
 
   // <- e, ee, se
-  #writeMessage2(payload: Uint8Array): Uint8Array {
+  async #writeMessage2(payload: Uint8Array): Promise<Uint8Array> {
     this.#e = this.#fixedEphemeral ?? generateKeyPair()
     this.#sym.mixHash(this.#e.publicKey)
     this.#sym.mixKey(dh(this.#e.secretKey, this.#re!))
@@ -415,7 +461,7 @@ export class HandshakeState {
     return concat(this.#e.publicKey, encPayload)
   }
 
-  #readMessage2(message: Uint8Array): Uint8Array {
+  async #readMessage2(message: Uint8Array): Promise<Uint8Array> {
     if (message.length < DH_BYTES + TAG_BYTES) {
       throw new NoiseError(`handshake message 2 is ${message.length} bytes`, 'E_NOISE_MESSAGE')
     }
@@ -423,7 +469,7 @@ export class HandshakeState {
     this.#re = message.subarray(0, DH_BYTES)
     this.#sym.mixHash(this.#re)
     this.#sym.mixKey(dh(this.#e!.secretKey, this.#re))
-    this.#sym.mixKey(dh(this.#s.secretKey, this.#re))
+    this.#sym.mixKey(await this.#s.diffieHellman(this.#re))
     const payload = this.#sym.decryptAndHash(message.subarray(DH_BYTES))
 
     this.#step = 'done'

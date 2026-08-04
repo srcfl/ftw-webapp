@@ -24,7 +24,7 @@ describe('a handshake cannot be split twice', () => {
   // (key, nonce) pair, which hands an observer the XOR of two plaintexts and
   // makes Poly1305 authenticators forgeable. The obvious way to write
   // reconnection is to keep the handshake and split again.
-  function completedPair() {
+  async function completedPair() {
     const boxSecret = x25519.utils.randomSecretKey()
     const boxPublic = x25519.getPublicKey(boxSecret)
     const appSecret = x25519.utils.randomSecretKey()
@@ -37,19 +37,19 @@ describe('a handshake cannot be split twice', () => {
       staticKey: { secretKey: boxSecret, publicKey: boxPublic },
     })
 
-    box.readMessage(app.writeMessage())
-    app.readMessage(box.writeMessage())
+    await box.readMessage(await app.writeMessage())
+    await app.readMessage(await box.writeMessage())
     return { app, box }
   }
 
-  it('refuses a second split', () => {
-    const { app } = completedPair()
+  it('refuses a second split', async () => {
+    const { app } = await completedPair()
     expect(() => app.split()).not.toThrow()
     expect(() => app.split()).toThrow(NoiseError)
   })
 
-  it('names the state rather than failing obscurely', () => {
-    const { box } = completedPair()
+  it('names the state rather than failing obscurely', async () => {
+    const { box } = await completedPair()
     box.split()
     try {
       box.split()

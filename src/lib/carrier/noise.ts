@@ -16,14 +16,19 @@
 
 import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import type { CarrierState } from '$lib/protocol/types'
-import { HandshakeState, NoiseError, type KeyPair } from '$lib/crypto/noise'
+import { HandshakeState, NoiseError, type StaticKey, type KeyPair } from '$lib/crypto/noise'
 import { NoiseTransport } from '$lib/crypto/transport'
 
 export interface NoiseCarrierOptions {
   /** The transport to wrap. Its lifetime becomes ours. */
   inner: Carrier
-  /** This device's long-lived key pair. */
-  staticKey: KeyPair
+  /**
+   * This device's long-lived static.
+   *
+   * A StaticKey rather than raw bytes, so a non-extractable WebCrypto handle
+   * works — see $lib/identity/vault.
+   */
+  staticKey: StaticKey | KeyPair
   /** The box's static public key, pinned from the QR at enrollment. */
   remoteStatic: Uint8Array
   /**
@@ -54,7 +59,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   #awaitingReply = false
 
   /** Kept so each reconnection can start a fresh handshake from the same input. */
-  #seed: { staticKey: KeyPair; remoteStatic: Uint8Array; prologue?: Uint8Array }
+  #seed: { staticKey: StaticKey | KeyPair; remoteStatic: Uint8Array; prologue?: Uint8Array }
   #payload: Uint8Array
 
   constructor(opts: NoiseCarrierOptions) {
@@ -145,13 +150,13 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     // zero twice, which breaks ChaCha20-Poly1305 outright.
     this.#handshake = HandshakeState.initiator(this.#seed)
 
-    try {
-      this.#inner.send(this.#handshake.writeMessage(this.#payload))
-      this.#awaitingReply = true
-      this.#setStatus({ phase: 'connecting' })
-    } catch (err) {
-      this.#fail(err instanceof NoiseError ? err.message : 'handshake failed')
-    }
+    this.#awaitingReply = true
+    this.#setStatus({ phase: 'connecting' })
+
+    this.#handshake
+      .writeMessage(this.#payload)
+      .then((msg) => this.#inner.send(msg))
+      .catch((err) => this.#fail(err instanceof NoiseError ? err.message : 'handshake failed'))
   }
 
   #onInnerFrame(bytes: Uint8Array): void {
@@ -175,18 +180,22 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     const handshake = this.#handshake
     if (!handshake) return
 
-    try {
-      handshake.readMessage(bytes)
-      this.#transport = new NoiseTransport(handshake.split())
-      this.#awaitingReply = false
-      this.#handshake = null
-      this.#setStatus({ phase: 'open', sinceMs: Date.now() })
-    } catch (err) {
-      // The commonest cause is the pinned key not matching what answered —
-      // which is exactly the check working. Not retryable: dialling again
-      // would meet the same wrong peer.
-      this.#fail(err instanceof NoiseError ? err.message : 'handshake rejected', false)
-    }
+    handshake
+      .readMessage(bytes)
+      .then(() => {
+        // Guard against a close landing while the DH was in flight.
+        if (this.#closed || this.#handshake !== handshake) return
+        this.#transport = new NoiseTransport(handshake.split())
+        this.#awaitingReply = false
+        this.#handshake = null
+        this.#setStatus({ phase: 'open', sinceMs: Date.now() })
+      })
+      .catch((err) => {
+        // The commonest cause is the pinned key not matching what answered —
+        // which is exactly the check working. Not retryable: dialling again
+        // would meet the same wrong peer.
+        this.#fail(err instanceof NoiseError ? err.message : 'handshake rejected', false)
+      })
   }
 
   #setStatus(s: CarrierStatus): void {

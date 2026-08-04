@@ -65,22 +65,22 @@ function pair(): { app: KeyPair; box: KeyPair } {
 }
 
 /** Runs a full IK exchange and hands back both ends' split keys. */
-function connect(app: KeyPair, box: KeyPair) {
+async function connect(app: KeyPair, box: KeyPair) {
   const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
   const responder = HandshakeState.responder({ staticKey: box })
 
-  responder.readMessage(initiator.writeMessage())
-  initiator.readMessage(responder.writeMessage())
+  await responder.readMessage(await initiator.writeMessage())
+  await initiator.readMessage(await responder.writeMessage())
 
   return { initiator: initiator.split(), responder: responder.split() }
 }
 
 describe('Cacophony vector', () => {
-  it('names the protocol the vector names', () => {
+  it('names the protocol the vector names', async () => {
     expect(PROTOCOL_NAME).toBe(VECTOR.protocol_name)
   })
 
-  it('reproduces both handshake messages byte for byte', () => {
+  it('reproduces both handshake messages byte for byte', async () => {
     const initiator = HandshakeState.initiator({
       staticKey: keyPairFromSecret(hexToBytes(VECTOR.init_static)),
       remoteStatic: hexToBytes(VECTOR.init_remote_static),
@@ -93,13 +93,13 @@ describe('Cacophony vector', () => {
       ephemeral: keyPairFromSecret(hexToBytes(VECTOR.resp_ephemeral)),
     })
 
-    const m1 = initiator.writeMessage(hexToBytes(VECTOR.messages[0].payload))
+    const m1 = await initiator.writeMessage(hexToBytes(VECTOR.messages[0].payload))
     expect(bytesToHex(m1)).toBe(VECTOR.messages[0].ciphertext)
-    expect(bytesToHex(responder.readMessage(m1))).toBe(VECTOR.messages[0].payload)
+    expect(bytesToHex(await responder.readMessage(m1))).toBe(VECTOR.messages[0].payload)
 
-    const m2 = responder.writeMessage(hexToBytes(VECTOR.messages[1].payload))
+    const m2 = await responder.writeMessage(hexToBytes(VECTOR.messages[1].payload))
     expect(bytesToHex(m2)).toBe(VECTOR.messages[1].ciphertext)
-    expect(bytesToHex(initiator.readMessage(m2))).toBe(VECTOR.messages[1].payload)
+    expect(bytesToHex(await initiator.readMessage(m2))).toBe(VECTOR.messages[1].payload)
 
     const a = initiator.split()
     const b = responder.split()
@@ -127,9 +127,9 @@ describe('Cacophony vector', () => {
 })
 
 describe('handshake', () => {
-  it('agrees on keys, hash and each other identity', () => {
+  it('agrees on keys, hash and each other identity', async () => {
     const { app, box } = pair()
-    const { initiator, responder } = connect(app, box)
+    const { initiator, responder } = await connect(app, box)
 
     expect(bytesToHex(initiator.handshakeHash)).toBe(bytesToHex(responder.handshakeHash))
     expect(bytesToHex(initiator.remoteStatic)).toBe(bytesToHex(box.publicKey))
@@ -145,26 +145,26 @@ describe('handshake', () => {
     )
   })
 
-  it('carries payloads in both handshake messages', () => {
+  it('carries payloads in both handshake messages', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
     const pairingCode = utf8('QR-8842')
-    const m1 = initiator.writeMessage(pairingCode)
+    const m1 = await initiator.writeMessage(pairingCode)
     expect(m1.length).toBe(MESSAGE_1_OVERHEAD + pairingCode.length)
-    expect(bytesToHex(responder.readMessage(m1))).toBe(bytesToHex(pairingCode))
+    expect(bytesToHex(await responder.readMessage(m1))).toBe(bytesToHex(pairingCode))
 
     const greeting = utf8('boot=ok')
-    const m2 = responder.writeMessage(greeting)
+    const m2 = await responder.writeMessage(greeting)
     expect(m2.length).toBe(MESSAGE_2_OVERHEAD + greeting.length)
-    expect(bytesToHex(initiator.readMessage(m2))).toBe(bytesToHex(greeting))
+    expect(bytesToHex(await initiator.readMessage(m2))).toBe(bytesToHex(greeting))
   })
 
-  it('is a fresh session every time, so a recording is worth nothing later', () => {
+  it('is a fresh session every time, so a recording is worth nothing later', async () => {
     const { app, box } = pair()
-    const first = connect(app, box)
-    const second = connect(app, box)
+    const first = await connect(app, box)
+    const second = await connect(app, box)
 
     expect(bytesToHex(first.initiator.handshakeHash)).not.toBe(bytesToHex(second.initiator.handshakeHash))
   })
@@ -174,30 +174,30 @@ describe('a relay cannot present itself as a box', () => {
   // The whole reason the pattern is IK. The app pinned the box static key off
   // the QR code, so a relay standing in the middle has no key that satisfies
   // the first decryption.
-  it('fails when the app pinned somebody else static key', () => {
+  it('fails when the app pinned somebody else static key', async () => {
     const { app, box } = pair()
     const impostor = generateKeyPair()
 
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: impostor.publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
-    expect(() => responder.readMessage(initiator.writeMessage())).toThrow(NoiseError)
+    await expect(responder.readMessage(await initiator.writeMessage())).rejects.toThrow(NoiseError)
   })
 
-  it('reports authentication failure and nothing more specific', () => {
+  it('reports authentication failure and nothing more specific', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: generateKeyPair().publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
     try {
-      responder.readMessage(initiator.writeMessage())
+      await responder.readMessage(await initiator.writeMessage())
       expect.unreachable('handshake should have failed')
     } catch (err) {
       expect((err as NoiseError).code).toBe('E_NOISE_AUTH')
     }
   })
 
-  it('fails when the two ends disagree about the prologue', () => {
+  it('fails when the two ends disagree about the prologue', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({
       staticKey: app,
@@ -209,62 +209,63 @@ describe('a relay cannot present itself as a box', () => {
       prologue: utf8('site-B'),
     })
 
-    expect(() => responder.readMessage(initiator.writeMessage())).toThrow(NoiseError)
+    await expect(responder.readMessage(await initiator.writeMessage())).rejects.toThrow(NoiseError)
   })
 
-  it('fails when the first message was altered in flight', () => {
+  it('fails when the first message was altered in flight', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
-    const m1 = initiator.writeMessage()
+    const m1 = await initiator.writeMessage()
     m1[40] = m1[40]! ^ 0x01
 
-    expect(() => responder.readMessage(m1)).toThrow(NoiseError)
+    await expect(responder.readMessage(m1)).rejects.toThrow(NoiseError)
   })
 
-  it('fails when the reply was altered in flight', () => {
+  it('fails when the reply was altered in flight', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
-    responder.readMessage(initiator.writeMessage())
-    const m2 = responder.writeMessage()
+    await responder.readMessage(await initiator.writeMessage())
+    const m2 = await responder.writeMessage()
     m2[m2.length - 1] = m2[m2.length - 1]! ^ 0x01
 
-    expect(() => initiator.readMessage(m2)).toThrow(NoiseError)
+    await expect(initiator.readMessage(m2)).rejects.toThrow(NoiseError)
   })
 })
 
 describe('state machine', () => {
-  it('refuses to write out of turn', () => {
+  it('refuses to write out of turn', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
-    initiator.writeMessage()
-    expect(() => initiator.writeMessage()).toThrow(/cannot write/)
+    await initiator.writeMessage()
+    await expect(initiator.writeMessage()).rejects.toThrow(/cannot write/)
   })
 
-  it('refuses to read out of turn', () => {
+  it('refuses to read out of turn', async () => {
     const { app, box } = pair()
     const responder = HandshakeState.responder({ staticKey: box })
-    expect(() => responder.readMessage(new Uint8Array(MESSAGE_1_OVERHEAD))).toThrow(NoiseError)
+    await expect(responder.readMessage(new Uint8Array(MESSAGE_1_OVERHEAD))).rejects.toThrow(NoiseError)
     expect(HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey }).isComplete).toBe(false)
   })
 
-  it('refuses to split before the pattern is done', () => {
+  it('refuses to split before the pattern is done', async () => {
     const { box } = pair()
     expect(() => HandshakeState.responder({ staticKey: box }).split()).toThrow(/handshake is at step/)
   })
 
-  it('rejects a truncated handshake message instead of reading past its end', () => {
+  it('rejects a truncated handshake message instead of reading past its end', async () => {
     const { app, box } = pair()
     const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
     const responder = HandshakeState.responder({ staticKey: box })
 
-    expect(() => responder.readMessage(initiator.writeMessage().subarray(0, 40))).toThrow(/message 1 is 40 bytes/)
+    const truncated = (await initiator.writeMessage()).subarray(0, 40)
+    await expect(responder.readMessage(truncated)).rejects.toThrow(/message 1 is 40 bytes/)
   })
 
-  it('rejects a static key of the wrong size rather than deriving from it', () => {
+  it('rejects a static key of the wrong size rather than deriving from it', async () => {
     expect(() => keyPairFromSecret(new Uint8Array(16))).toThrow(/need 32/)
   })
 })
@@ -273,7 +274,7 @@ describe('nonce exhaustion', () => {
   // ChaCha20-Poly1305 fails catastrophically on nonce reuse: the observer gets
   // the XOR of two plaintexts and the authenticator becomes forgeable. So the
   // counter throws at the end rather than wrapping.
-  it('throws instead of rolling over', () => {
+  it('throws instead of rolling over', async () => {
     const cipher = new CipherState(new Uint8Array(32).fill(7))
     cipher.setNonce(MAX_NONCE - 1n)
 
@@ -288,15 +289,15 @@ describe('nonce exhaustion', () => {
     }
   })
 
-  it('refuses to be set to the reserved value', () => {
+  it('refuses to be set to the reserved value', async () => {
     const cipher = new CipherState(new Uint8Array(32).fill(7))
     expect(() => cipher.setNonce(MAX_NONCE)).toThrow(/out of range/)
     expect(() => cipher.setNonce(-1n)).toThrow(/out of range/)
   })
 
-  it('throws rather than emitting plaintext once destroyed', () => {
+  it('throws rather than emitting plaintext once destroyed', async () => {
     const { app, box } = pair()
-    const { initiator } = connect(app, box)
+    const { initiator } = await connect(app, box)
 
     initiator.send.destroy()
     expect(initiator.send.hasKey).toBe(false)

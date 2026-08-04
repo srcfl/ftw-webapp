@@ -6,23 +6,42 @@
   without hardware; in production the carrier comes from enrollment.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import InstallHint from '$lib/ui/InstallHint.svelte'
   import UpdateLine from '$lib/ui/UpdateLine.svelte'
   import Now from '$views/Now.svelte'
   import Plan from '$views/Plan.svelte'
+  import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router } from '$lib/state/route.svelte'
 
   const site = new SiteStore(__APP_BUILD__)
   const router = new Router()
 
+  /** Reserved for the development simulator so a real pairing never collides. */
+  const SIM_SITE_ID = 'sim-0001'
+
   // Not awaited: the shell paints now, and cached readings land a frame or
   // two later. The read itself was started by the inline script in
   // index.html, before this bundle was even parsed.
-  const SITE_ID = localStorage.getItem('ftw.site') ?? 'sim-0001'
-  void site.start(SITE_ID)
+  let siteId = $state<string | null>(localStorage.getItem('ftw.site'))
+
+  // Read once at startup, on purpose: this is the launch path, not a reaction
+  // to a value that changes. Pairing calls start() itself.
+  const initialSiteId = untrack(() => siteId)
+  if (initialSiteId) void site.start(initialSiteId)
+
+  /**
+   * Landing on a pairing link, from a camera or a shared URL.
+   *
+   * Checked synchronously so the pairing screen is what paints, rather than an
+   * empty state that is replaced a frame later.
+   */
+  const pairingFragment = location.pathname === '/p' ? location.hash : null
+
+  /** Nothing paired and nothing cached: the only screen is pairing. */
+  const needsPairing = $derived(!siteId && !site.paired)
 
   onMount(() => {
     // The last chance to persist. 'visibilitychange' rather than 'unload',
@@ -34,12 +53,24 @@
     const unlisten = router.listen()
 
     let stop: (() => void) | undefined
-    if (import.meta.env.DEV) {
-      // Dynamic so the simulator never reaches a production bundle.
+
+    // The simulated box has a reserved id, so a real pairing on the same
+    // browser takes the relay path instead. Dynamic import keeps the simulator
+    // out of production bundles entirely.
+    const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
+
+    if (useSimulator) {
       void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
-        localStorage.setItem('ftw.site', 'sim-0001')
+        siteId = SIM_SITE_ID
+        localStorage.setItem('ftw.site', SIM_SITE_ID)
+        // Only when the launch path did not already start it: a second start
+        // re-reads IndexedDB on the very path that exists to touch it once.
+        if (!initialSiteId) void site.start(SIM_SITE_ID)
         stop = attachSimulatedSite(site).stop
       })
+    } else if (initialSiteId) {
+      // The passkey prompt lands here, after the first paint — never before.
+      void connect(initialSiteId)
     }
 
     return () => {
@@ -49,6 +80,22 @@
       site.destroy()
     }
   })
+  async function connect(id: string) {
+    try {
+      const { connectToSite } = await import('$lib/state/connect')
+      site.connect(await connectToSite(id))
+    } catch {
+      // The cached readings stay on screen with an honest age. There is no
+      // "try again" button because the carrier reconnects on its own; this
+      // only covers the passkey being dismissed or the vault being empty.
+    }
+  }
+
+  function onPaired(pairedSiteId: string) {
+    siteId = pairedSiteId
+    void site.start(pairedSiteId)
+    void connect(pairedSiteId)
+  }
 </script>
 
 <div class="app">
@@ -67,7 +114,9 @@
   <UpdateLine />
 
   <main>
-    {#if router.current === 'plan'}
+    {#if needsPairing || pairingFragment}
+      <Pair fragment={pairingFragment} onPaired={(s) => onPaired(s.siteId)} />
+    {:else if router.current === 'plan'}
       <Plan {site} />
     {:else if router.current === 'history'}
       <!-- Loaded on demand: the chart, its canvas and the tile cache must not

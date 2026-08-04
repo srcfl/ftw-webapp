@@ -103,9 +103,16 @@ export class NoiseBox {
       ...(this.#prologue ? { prologue: this.#prologue } : {}),
     })
 
+    void this.#finishHandshake(bytes)
+  }
+
+  async #finishHandshake(bytes: Uint8Array): Promise<void> {
+    const handshake = this.#handshake
+    if (!handshake) return
+
     let payload: Uint8Array
     try {
-      payload = this.#handshake.readMessage(bytes)
+      payload = await handshake.readMessage(bytes)
     } catch {
       // Wrong pinned key, tampered message, or noise. Silence is the right
       // answer: replying would tell an attacker which of those it was.
@@ -119,8 +126,8 @@ export class NoiseBox {
     }
 
     try {
-      this.#emit(this.#handshake.writeMessage())
-      this.#transport = new NoiseTransport(this.#handshake.split())
+      this.#emit(await handshake.writeMessage())
+      this.#transport = new NoiseTransport(handshake.split())
     } catch {
       this.#transport = null
     } finally {

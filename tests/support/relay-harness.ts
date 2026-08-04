@@ -169,19 +169,19 @@ export async function sealedPair(
   const handshake: Uint8Array[] = []
   const collect = carrier.onFrame((bytes) => handshake.push(bytes))
 
-  const msg1 = initiator.writeMessage()
+  const msg1 = await initiator.writeMessage()
   wire.push(msg1)
   carrier.send(msg1)
 
   await waitFor(() => boxPeer.received.length > 0, 'handshake message 1 at the box')
-  responder.readMessage(boxPeer.received[0]!)
+  await responder.readMessage(boxPeer.received[0]!)
 
-  const msg2 = responder.writeMessage()
+  const msg2 = await responder.writeMessage()
   wire.push(msg2)
   boxPeer.send(msg2)
 
   await waitFor(() => handshake.length > 0, 'handshake message 2 at the app')
-  initiator.readMessage(handshake[0]!)
+  await initiator.readMessage(handshake[0]!)
   collect()
 
   const boxTransport = new NoiseTransport(responder.split())
