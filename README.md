@@ -82,6 +82,7 @@ Runs type checks, tests and a production build. Green before every handoff.
 | `src/lib/ui` | Components |
 | `src/views` | Screens |
 | `contract/` | The shared registry: scopes, capabilities, error codes, field ids |
+| `relay/` | The blind relay itself — the server this app's frames pass through |
 
 `contract/registry.yaml` is the single source for every name shared with the
 box. It generates TypeScript here and Go constants in the FTW repo, and CI

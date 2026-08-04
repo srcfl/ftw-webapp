@@ -19,9 +19,19 @@
     <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#f4f4f2" media="(prefers-color-scheme: light)" />
 
-    <!-- Resolve the theme before first paint. A flash of the wrong theme on
-         every cold start is the most visible way to look like a web page
-         rather than an app. Inline and synchronous on purpose. -->
+    <!-- Two things happen before the bundle is fetched, and both are here
+         rather than in module code because module code is already too late.
+
+         1. Resolve the theme. A flash of the wrong theme on every cold start
+            is the most visible way to look like a web page, not an app.
+         2. Start reading the cached snapshot. IndexedDB is asynchronous, so
+            the round trip overlaps bundle download, parse and evaluation
+            instead of following them. By the time Svelte mounts, the data is
+            usually already in hand — which is what lets the first frame show
+            real readings rather than a spinner.
+
+         Kept small and dependency-free on purpose: everything here is on the
+         critical path of every single launch. -->
     <script>
       ;(() => {
         try {
@@ -36,6 +46,50 @@
         } catch {
           /* Private mode or blocked storage: the dark default already applies. */
         }
+
+        // Which site to show. Plaintext because it is only an identifier, and
+        // because a decrypt here would defeat the point of starting early.
+        const siteId = (() => {
+          try {
+            return localStorage.getItem('ftw.site')
+          } catch {
+            return null
+          }
+        })()
+        if (!siteId) return
+
+        window.__ftwBoot = new Promise((resolve) => {
+          let settled = false
+          const done = (v) => {
+            if (!settled) {
+              settled = true
+              resolve(v)
+            }
+          }
+
+          // Never let a blocked or upgrading database hold up the launch.
+          setTimeout(() => done(null), 400)
+
+          try {
+            const req = indexedDB.open('ftw', 1)
+            req.onerror = () => done(null)
+            // An upgrade means there is nothing cached yet for this version.
+            req.onupgradeneeded = () => done(null)
+            req.onsuccess = () => {
+              try {
+                const database = req.result
+                if (!database.objectStoreNames.contains('snapshot')) return done(null)
+                const get = database.transaction('snapshot', 'readonly').objectStore('snapshot').get(siteId)
+                get.onsuccess = () => done(get.result ?? null)
+                get.onerror = () => done(null)
+              } catch {
+                done(null)
+              }
+            }
+          } catch {
+            done(null)
+          }
+        })
       })()
     </script>
   </head>

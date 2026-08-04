@@ -7,6 +7,27 @@ is the authority and this app is a cached projection of it.
 Read [docs/architecture.md](docs/architecture.md) before changing anything
 structural, and [docs/protocol.md](docs/protocol.md) before touching the wire.
 
+## The product principle
+
+**Lean, snappy, just works.** This outranks every other preference here, and
+it is a constraint on engineering, not a note for the designer.
+
+- **Nothing blocks the first frame.** Not a network round trip, not a key
+  unwrap, not a passkey prompt. The app paints from cache and catches up.
+- **No configuration.** No settings to find, no server to choose, no
+  transport to pick. A question the user cannot answer is the wrong question.
+- **Every failure path heals itself if it can.** A dropped connection
+  reconnects on its own and shows up only as a freshness stamp falling
+  behind. There is no "reconnect" button, and reloading is never the fix.
+- **Errors say what happens now, not what broke inside.** "Your box is
+  starting, this takes a few minutes after an update" — not a validation
+  name or a status code.
+- **Least code that does the whole job.** No layer nobody asked for. If a
+  piece is clever, it is probably wrong.
+
+The test is whether someone who has never heard of a relay, a passkey or a
+kilowatt can open this app and understand their house in one glance.
+
 ## Non-negotiable invariants
 
 These exist because breaking one of them breaks a promise made to users.

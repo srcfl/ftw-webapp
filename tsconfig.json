@@ -4,7 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
-    "types": ["vite/client"],
+    // "node" because the repo now has a server in relay/ and tests that start
+    // it. Browser code stays honest by writing ReturnType<typeof setTimeout>
+    // rather than assuming either platform's timer type.
+    "types": ["vite/client", "node"],
 
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -28,5 +31,5 @@
       "$views/*": ["src/views/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "*.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "relay/**/*.ts", "*.config.ts"]
 }

@@ -107,6 +107,19 @@ export class Session {
     return () => this.#listeners.delete(listener)
   }
 
+  /**
+   * Seed state from the local cache, before any carrier exists.
+   *
+   * The readings are real — they were true when captured, and the freshness
+   * band says how long ago that was. Carrier stays 'cache', which is a
+   * carrier and not a failure state: it is how the app has something honest
+   * to show in its first frame.
+   */
+  restore(patch: Partial<SessionState>): void {
+    if (this.#state.phase === 'streaming') return
+    this.#patch({ ...patch, phase: 'idle', carrier: 'cache' })
+  }
+
   /** Attach a carrier and start the handshake. Replaces any current one. */
   connect(carrier: Carrier): void {
     this.#detach()

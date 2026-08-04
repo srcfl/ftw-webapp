@@ -1,8 +1,9 @@
 /* The reactive bridge between the session and the views.
  *
- * The session owns protocol state; this exposes it to Svelte and derives the
- * few things the UI actually asks for. Nothing above this touches a frame,
- * and nothing below it knows a component exists.
+ * The session owns protocol state; this exposes it to Svelte, restores the
+ * cached snapshot on start, and derives the few things the UI asks for.
+ * Nothing above this touches a frame; nothing below it knows a component
+ * exists.
  *
  * Field cells are held in one map rather than one signal per reading. At 1 Hz
  * with a handful of fields the difference is not performance — it is that a
@@ -14,6 +15,14 @@ import { Session, type SessionState } from '$lib/protocol/session'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
 import type { CarrierState, SourceState } from '$lib/protocol/types'
+import {
+  takeBootSnapshot,
+  loadSnapshot,
+  sessionPatchFromSnapshot,
+  snapshotFromSession,
+  SnapshotWriter,
+} from '$lib/store/snapshot'
+import { requestPersistence } from '$lib/store/db'
 
 /** Sources the Now view depends on. Drives the freshness band. */
 const NOW_SOURCES = ['meter.p1', 'inverter.sungrow', 'battery.sungrow'] as const
@@ -29,9 +38,14 @@ export interface Reading {
 export class SiteStore {
   #session: Session
   #unsub: (() => void) | null = null
+  #writer = new SnapshotWriter()
+  #siteId: string | null = null
+  #markedLive = false
 
-  /** Raw session state. Replaced wholesale, so views re-read consistently. */
   session = $state<SessionState>(new Session({ build: 'boot' }).state)
+
+  /** Wall-clock time the cached view was captured. Null when live. */
+  cachedAtMs = $state<number | null>(null)
 
   /** Import ceiling the optimiser defends. Comes from the box once wired. */
   ceilingW = $state<number | null>(null)
@@ -40,24 +54,68 @@ export class SiteStore {
     this.#session = new Session({ build })
     this.#unsub = this.#session.subscribe((s) => {
       this.session = s
+
+      if (s.phase === 'streaming') {
+        if (this.cachedAtMs !== null || !this.#markedLive) {
+          this.#markedLive = true
+          performance.mark('ftw:live-data')
+        }
+        this.cachedAtMs = null
+        if (this.#siteId) this.#writer.offer(snapshotFromSession(this.#siteId, s))
+      }
     })
   }
 
+  /**
+   * Paint from cache, then connect.
+   *
+   * Deliberately not awaited by the caller before mounting: the shell renders
+   * immediately either way, and this fills it in a frame or two later. The
+   * read itself was already started by the inline script in index.html.
+   */
+  async start(siteId: string): Promise<void> {
+    this.#siteId = siteId
+
+    const cached = (await takeBootSnapshot()) ?? (await loadSnapshot(siteId))
+    if (cached) {
+      this.#session.restore(sessionPatchFromSnapshot(cached))
+      this.cachedAtMs = cached.savedAtMs
+
+      // The number that decides whether this feels like an app. Marked rather
+      // than logged so it survives in real sessions and can be read from the
+      // Performance timeline on a real phone, not just in development.
+      performance.mark('ftw:first-data', { detail: { source: 'cache' } })
+    }
+
+    // Asked for after the first paint, never before — the prompt is not on
+    // the critical path and some browsers show UI for it.
+    void requestPersistence()
+  }
+
   get paired(): boolean {
-    return this.session.box !== null
+    return this.session.box !== null || this.session.fields.size > 0
   }
 
   get carrier(): CarrierState {
     return this.session.carrier
   }
 
-  /** Worst state across the sources this screen depends on. */
   get srcState(): SourceState {
     return this.#session.worstSourceState(NOW_SOURCES)
   }
 
-  /** Age of the oldest reading on screen, in ms. NaN when there is none. */
+  /**
+   * Age of the oldest reading on screen, in ms.
+   *
+   * While live this is measured against the box's uptime. While showing
+   * cache there is no live uptime to compare against, so it falls back to
+   * how long ago the snapshot was written — which is the honest answer to
+   * the question the user is actually asking.
+   */
   get ageMs(): number {
+    if (this.session.carrier === 'cache' && this.cachedAtMs !== null) {
+      return Date.now() - this.cachedAtMs
+    }
     const ages = NOW_SOURCES.map((s) => this.#session.ageOf(s)).filter((a) => !Number.isNaN(a))
     return ages.length > 0 ? Math.max(...ages) : NaN
   }
@@ -80,7 +138,6 @@ export class SiteStore {
     ]
   }
 
-  /** Battery charge as whole percent, or null when there is no battery. */
   get socPercent(): number | null {
     const permille = this.session.fields.get(FID.BATTERY_SOC)
     return permille === undefined ? null : Math.round(permille / 10)
@@ -90,7 +147,13 @@ export class SiteStore {
     this.#session.connect(carrier)
   }
 
+  /** Persist before the page can be discarded. */
+  async persistNow(): Promise<void> {
+    await this.#writer.flushNow()
+  }
+
   destroy(): void {
+    this.#writer.stop()
     this.#unsub?.()
     this.#unsub = null
     this.#session.close()

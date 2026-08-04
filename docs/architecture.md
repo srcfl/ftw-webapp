@@ -140,6 +140,37 @@ So the claim is **"Sourceful's services cannot decrypt your energy data"** —
 not "it is mathematically impossible for Sourceful to ever access anything".
 The second sentence is marketing. The first is true.
 
+### What is not yet true
+
+An adversarial review of the crypto, identity and relay layers found the
+content half of that promise sound and the metadata half not. These are open,
+and listed here rather than in a tracker because a privacy claim with quiet
+exceptions is worse than no claim.
+
+- **The rendezvous secret has no home in the QR payload.** The fragment
+  carries a version, the box's static key, a single-use pairing code and a
+  LAN hint. Rotation needs a long-lived secret that is none of those. Until
+  it has an explicit field with its own rotation path, handle rotation is
+  specified but not provisioned.
+- **The box authenticates nobody.** Noise IK proves the box's identity to the
+  app, not the reverse. The pairing code that would close it is parsed and
+  then unused. So today the guarantee is one-way.
+- **The app-to-box direction has constant frame size but not constant
+  cadence.** Frames leave only on user action, so the relay can see when
+  someone opened the app and how many times — a much thinner channel than the
+  1 Hz telemetry stream, and the one that survives its padding.
+- **The passkey gate can degrade to no gate.** A failed ceremony that is not
+  a user cancellation currently falls back to a local key with no prompt,
+  and that copy persists.
+- **The relay's rate limiter keys on the socket address**, which behind the
+  documented TLS terminator is one address for everyone.
+
+Fixed since that review: a handshake can no longer be split twice (which
+would have reused a nonce); the relay can no longer name the epoch and so can
+no longer choose the client's handle; clearing a device now clears the sealed
+projection along with the identity, so a phone handed on cannot paint the
+previous household's home.
+
 ## Deliberately not in v1
 
 Each of these is deferred with a reason, not forgotten.

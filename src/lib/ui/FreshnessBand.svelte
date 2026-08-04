@@ -7,14 +7,17 @@
 
   Collapsing them cannot say "connected, but the inverter went quiet 40
   seconds ago", which is exactly the case a user needs to see. Keeping this
-  in a single component is what stops the distinction eroding as views are
-  added.
+  in a single component is what stops the distinction eroding as views grow.
 
-  The band never claims live unless frames are arriving now.
+  The band never claims live unless frames are arriving now — and never
+  claims a problem it has not confirmed. Showing cache while still connecting
+  is normal, not a fault, and saying "box unreachable" during the first second
+  of every launch would train people to ignore the one indicator that matters.
 -->
 <script lang="ts">
   import { formatAge } from '$lib/format/power'
   import type { CarrierState, SourceState } from '$lib/protocol/types'
+  import type { SessionPhase } from '$lib/protocol/session'
 
   interface Props {
     carrier: CarrierState
@@ -22,35 +25,42 @@
     srcState: SourceState
     /** Age of the oldest reading on screen, in ms. */
     ageMs: number
+    phase: SessionPhase
   }
 
-  let { carrier, srcState, ageMs }: Props = $props()
+  let { carrier, srcState, ageMs, phase }: Props = $props()
+
+  /** Still trying, and has not yet failed. */
+  const reaching = $derived(phase === 'idle' || phase === 'handshaking' || phase === 'subscribing')
 
   const tone = $derived.by(() => {
-    if (carrier === 'cache' || carrier === 'none') return 'lost'
-    if (srcState === 'down' || srcState === 'stale' || srcState === 'never') return 'stale'
-    if (srcState === 'lagging') return 'stale'
-    return 'live'
+    if (carrier === 'relay' || carrier === 'webrtc') {
+      return srcState === 'live' ? 'live' : 'stale'
+    }
+    return reaching ? 'reaching' : 'lost'
   })
 
   const message = $derived.by(() => {
-    if (carrier === 'none') return 'Offline · showing last known'
-    if (carrier === 'cache') return `Box unreachable · ${formatAge(ageMs)}`
-
-    const where = carrier === 'webrtc' ? 'Live at home' : 'Live via encrypted relay'
-
-    switch (srcState) {
-      case 'never':
-        return `${where} · no reading yet`
-      case 'down':
-        return `${where} · a device stopped responding`
-      case 'stale':
-        return `${where} · readings ${formatAge(ageMs)}`
-      case 'lagging':
-        return `${where} · readings ${formatAge(ageMs)}`
-      default:
-        return where
+    if (carrier === 'relay' || carrier === 'webrtc') {
+      const where = carrier === 'webrtc' ? 'Live at home' : 'Live via encrypted relay'
+      switch (srcState) {
+        case 'live':
+          return where
+        case 'never':
+          return `${where} · no reading yet`
+        case 'down':
+          return `${where} · a device stopped responding`
+        default:
+          return `${where} · readings ${formatAge(ageMs)}`
+      }
     }
+
+    // Not connected. Say how old the readings are, which is the question
+    // being asked, rather than diagnosing a connection we have not finished
+    // testing.
+    const age = Number.isFinite(ageMs) ? formatAge(ageMs) : null
+    if (reaching) return age ? `Reaching your box · ${age}` : 'Reaching your box'
+    return age ? `Can't reach your box · ${age}` : "Can't reach your box"
   })
 </script>
 
@@ -90,12 +100,32 @@
     background: var(--fresh-stale);
   }
 
-  .band[data-tone='live'] .text {
-    color: var(--fg-dim);
+  /* Reaching is a neutral, in-progress state — it pulses rather than sitting
+     in the colour reserved for something being wrong. */
+  .band[data-tone='reaching'] .dot {
+    background: var(--fg-muted);
+    animation: pulse 1.6s ease-in-out infinite;
   }
 
   .band[data-tone='stale'] .text,
   .band[data-tone='lost'] .text {
     color: var(--fg-label);
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .band[data-tone='reaching'] .dot {
+      animation: none;
+      opacity: 0.6;
+    }
   }
 </style>

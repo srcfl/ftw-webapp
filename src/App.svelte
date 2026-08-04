@@ -13,16 +13,31 @@
 
   const site = new SiteStore(__APP_BUILD__)
 
-  onMount(() => {
-    if (!import.meta.env.DEV) return
+  // Not awaited: the shell paints now, and cached readings land a frame or
+  // two later. The read itself was started by the inline script in
+  // index.html, before this bundle was even parsed.
+  const SITE_ID = localStorage.getItem('ftw.site') ?? 'sim-0001'
+  void site.start(SITE_ID)
 
-    // Dynamic so the simulator never reaches a production bundle.
+  onMount(() => {
+    // The last chance to persist. 'visibilitychange' rather than 'unload',
+    // which iOS does not reliably fire when an app is swiped away.
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') void site.persistNow()
+    }
+    document.addEventListener('visibilitychange', onHide)
+
     let stop: (() => void) | undefined
-    void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
-      stop = attachSimulatedSite(site).stop
-    })
+    if (import.meta.env.DEV) {
+      // Dynamic so the simulator never reaches a production bundle.
+      void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
+        localStorage.setItem('ftw.site', 'sim-0001')
+        stop = attachSimulatedSite(site).stop
+      })
+    }
 
     return () => {
+      document.removeEventListener('visibilitychange', onHide)
       stop?.()
       site.destroy()
     }
@@ -34,7 +49,12 @@
        box and no data, so the band would be answering a question nobody
        asked — and "showing last known" would be a plain lie. -->
   {#if site.paired}
-    <FreshnessBand carrier={site.carrier} srcState={site.srcState} ageMs={site.ageMs} />
+    <FreshnessBand
+      carrier={site.carrier}
+      srcState={site.srcState}
+      ageMs={site.ageMs}
+      phase={site.session.phase}
+    />
   {/if}
 
   <main>
