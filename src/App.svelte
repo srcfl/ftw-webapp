@@ -13,13 +13,19 @@
 
   // Stub until the carrier lands. Deliberately not 'live': the app must
   // never claim a connection it does not have, including while being built.
+  const paired = false
   const carrier: CarrierState = 'none'
   const srcState: SourceState = 'never'
   const ageMs = NaN
 </script>
 
 <div class="app">
-  <FreshnessBand {carrier} {srcState} {ageMs} />
+  <!-- Freshness describes data from a box. With nothing paired there is no
+       box and no data, so the band would be answering a question nobody
+       asked — and "showing last known" would be a plain lie. -->
+  {#if paired}
+    <FreshnessBand {carrier} {srcState} {ageMs} />
+  {/if}
   <main>
     <Now />
   </main>
