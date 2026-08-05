@@ -35,10 +35,28 @@
   /**
    * Landing on a pairing link, from a camera or a shared URL.
    *
-   * Checked synchronously so the pairing screen is what paints, rather than an
-   * empty state that is replaced a frame later.
+   * With nothing paired this is checked synchronously, so the pairing screen
+   * is what paints. With a site already paired the home paints first and the
+   * fragment is judged in the background: after a successful pairing the
+   * /p#… URL is what the browser reloads and restores, carrying a code that
+   * was spent the moment it worked — re-running it would show the owner a
+   * pairing error for a house they are standing in. Only a fragment that
+   * points at a *different* box is a genuine invitation.
    */
-  const pairingFragment = location.pathname === '/p' ? location.hash : null
+  const rawFragment = location.pathname === '/p' ? location.hash : null
+  let pairingFragment = $state(initialSiteId ? null : rawFragment)
+
+  if (rawFragment && initialSiteId) {
+    void import('$lib/identity/landing').then(async ({ fragmentTarget }) => {
+      const target = await fragmentTarget(rawFragment)
+      if (target !== null && target !== initialSiteId) {
+        pairingFragment = rawFragment
+      } else {
+        // Same box or nothing at all: a leftover, not an invitation.
+        history.replaceState(null, '', '/')
+      }
+    })
+  }
 
   /** Nothing paired and nothing cached: the only screen is pairing. */
   const needsPairing = $derived(!siteId && !site.paired)
@@ -93,6 +111,11 @@
 
   function onPaired(pairedSiteId: string) {
     siteId = pairedSiteId
+    // The /p#… URL just did its one job. Left in place it becomes the URL
+    // the browser reloads and restores — with a spent code — which is how
+    // an owner ends up on a pairing screen for a house they are standing in.
+    if (location.pathname === '/p') history.replaceState(null, '', '/')
+    pairingFragment = null
     void site.start(pairedSiteId)
     void connect(pairedSiteId)
   }
