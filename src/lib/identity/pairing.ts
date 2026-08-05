@@ -148,10 +148,22 @@ async function storeSite(site: PairedSite): Promise<void> {
   }
   await database.put('sites', row)
 
+}
+
+/**
+ * Point the app at a site.
+ *
+ * Separate from storing it, on purpose. Storing a site is a fact; making it
+ * the site the app shows and controls is a decision, and it used to happen as
+ * a side effect of the fact — so any link that got as far as storing a row
+ * also silently became this phone's home. The caller makes that decision
+ * after the user has agreed to it.
+ */
+export function setCurrentSite(siteId: string): void {
   // The inline boot script reads this before the bundle is parsed, which is
   // what lets a cold start paint cached readings in the first frame.
   try {
-    localStorage.setItem('ftw.site', site.siteId)
+    localStorage.setItem('ftw.site', siteId)
   } catch {
     // Blocked storage costs a slower start, not a broken pairing.
   }

@@ -179,6 +179,11 @@
   }
 
   function onPaired(pairedSiteId: string) {
+    // The decision the user just made, recorded here rather than as a side
+    // effect of storing the row — see setCurrentSite.
+    void import('$lib/identity/pairing').then(({ setCurrentSite }) =>
+      setCurrentSite(pairedSiteId)
+    )
     siteId = pairedSiteId
     // The /p#… URL just did its one job. Left in place it becomes the URL
     // the browser reloads and restores — with a spent code — which is how

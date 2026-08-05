@@ -16,8 +16,23 @@
 
 import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import type { CarrierState } from '$lib/protocol/types'
-import { HandshakeState, NoiseError, type StaticKey, type KeyPair } from '$lib/crypto/noise'
+import { DH_BYTES, TAG_BYTES, HandshakeState, NoiseError, type StaticKey, type KeyPair } from '$lib/crypto/noise'
 import { NoiseTransport } from '$lib/crypto/transport'
+
+/**
+ * How long a handshake may go unanswered before it is retried.
+ *
+ * The box answers a refused handshake with silence rather than a rejection,
+ * so this is the only thing that distinguishes "not yet" from "never".
+ */
+const HANDSHAKE_DEADLINE_MS = 12_000
+
+/**
+ * Message 2 of Noise_IK: the responder's ephemeral public key and one AEAD
+ * tag over an empty payload. Fixed by the pattern, so anything else on the
+ * wire is somebody else's frame.
+ */
+const MESSAGE_2_BYTES = DH_BYTES + TAG_BYTES
 
 export interface NoiseCarrierOptions {
   /** The transport to wrap. Its lifetime becomes ours. */
@@ -57,6 +72,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   #closed = false
   /** True once message 1 is out and we are waiting for the reply. */
   #awaitingReply = false
+  #deadline: ReturnType<typeof setTimeout> | undefined
+  #log: ((line: string) => void) | undefined
 
   /** Kept so each reconnection can start a fresh handshake from the same input. */
   #seed: { staticKey: StaticKey | KeyPair; remoteStatic: Uint8Array; prologue?: Uint8Array }
@@ -153,6 +170,16 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     this.#awaitingReply = true
     this.#setStatus({ phase: 'connecting' })
 
+    // A box that refuses a handshake answers with silence, on purpose: a
+    // reply would confirm a box is on this handle. So silence needs its own
+    // ending, or a revoked phone sits on "Reaching your box" forever with the
+    // socket wide open and no reconnect ever firing.
+    clearTimeout(this.#deadline)
+    this.#deadline = setTimeout(() => {
+      if (this.#closed || !this.#awaitingReply) return
+      this.#fail('the box did not answer', true)
+    }, HANDSHAKE_DEADLINE_MS)
+
     this.#handshake
       .writeMessage(this.#payload)
       .then((msg) => this.#inner.send(msg))
@@ -163,7 +190,15 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     if (this.#closed) return
 
     if (this.#awaitingReply) {
-      this.#completeHandshake(bytes)
+      // Only something the right shape is offered to the handshake.
+      //
+      // The relay broadcasts the box's frames to every stream in the room, so
+      // a second phone in the same house starts its handshake into a running
+      // 1 Hz telemetry stream. Those frames are not message 2, and feeding
+      // them to readMessage used to kill the carrier outright — a household
+      // where the first phone works and the second never can. It also handed
+      // anyone who can write to the socket a one-packet kill switch.
+      if (bytes.length === MESSAGE_2_BYTES) this.#completeHandshake(bytes)
       return
     }
 
@@ -191,10 +226,13 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
         this.#setStatus({ phase: 'open', sinceMs: Date.now() })
       })
       .catch((err) => {
-        // The commonest cause is the pinned key not matching what answered —
-        // which is exactly the check working. Not retryable: dialling again
-        // would meet the same wrong peer.
-        this.#fail(err instanceof NoiseError ? err.message : 'handshake rejected', false)
+        // Still not fatal, even at the right length: on a shared room another
+        // phone's transport frame can match by coincidence. A frame that does
+        // not open is a frame addressed to somebody else — drop it and keep
+        // waiting. The deadline below is what ends a handshake that is truly
+        // going nowhere, and it ends it retryably.
+        if (this.#closed || this.#handshake !== handshake) return
+        this.#log?.(err instanceof NoiseError ? err.message : 'handshake frame ignored')
       })
   }
 
