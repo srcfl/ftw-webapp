@@ -1,0 +1,14 @@
+{
+  "name": "@srcfl/ftw-relay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The blind relay: it routes opaque frames and cannot read them.",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

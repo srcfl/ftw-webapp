@@ -1,0 +1,41 @@
+# Cloudflare Pages headers.
+#
+# The rules that matter here are about staleness and about what this origin is
+# allowed to talk to. Everything else the platform already does.
+
+/*
+  # No third-party scripts, no analytics, no CDN fonts — so the policy can be
+  # strict rather than aspirational. 'unsafe-inline' covers exactly one inline
+  # script: the boot script in index.html that resolves the theme and starts
+  # the IndexedDB read before the bundle is parsed. Moving it out would cost
+  # the thing it exists for.
+  #
+  # connect-src names the relay explicitly. If a compromised build ever tried
+  # to send readings somewhere else, the browser refuses.
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://relay.ftw.energy; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; manifest-src 'self'
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  # The camera is used to scan the pairing code and nothing else asks for
+  # anything. Named rather than left to default so a future dependency cannot
+  # quietly acquire a capability.
+  Permissions-Policy: camera=(self), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+
+# The service worker decides when the app updates, so it must never be served
+# from a cache the app cannot invalidate. A stale sw.js pins a stale build
+# forever, which is the one failure the atomic-update design exists to prevent.
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+# Same reasoning: the shell is the entry point to every launch.
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+# Content-addressed by the build, so they can be cached hard. The filename
+# changes when the bytes do.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,0 +1,47 @@
+# TLS and nothing else.
+#
+# Caddy terminates, gets its certificate from Let's Encrypt on its own, and
+# hands the connection to the relay. It is in front because the relay speaks
+# plain WebSocket by choice: a service whose claim is that it cannot read what
+# it carries is easier to believe when it is small, and certificate handling
+# is not small.
+
+relay.ftw.energy {
+	# The relay reads this to rate-limit. Behind a terminator every client is
+	# one address, so without it the whole fleet shares a single limit and
+	# ordinary reconnection load is an outage. Caddy sets it; the relay only
+	# trusts it because RELAY_TRUST_PROXY says something trusted is in front.
+	reverse_proxy 127.0.0.1:8787 {
+		header_up X-Forwarded-For {remote_host}
+
+		# Sessions are long-lived by design — a box holds one open for weeks.
+		# Caddy does not time out proxied WebSockets, but say so rather than
+		# rely on a default staying put.
+		flush_interval -1
+	}
+
+	# Aggregate only. A handle here would be the household identifier this
+	# whole design exists to withhold, and access logs are the least guarded
+	# thing in any deployment.
+	log {
+		output file /var/log/caddy/relay.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format json
+		# The join path carries the rendezvous handle. Never write it down.
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+			}
+		}
+	}
+
+	header {
+		# Nothing here is a web page and nothing should embed it.
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}

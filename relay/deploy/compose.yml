@@ -1,0 +1,49 @@
+# The relay and its TLS terminator, on one small instance.
+#
+# Deliberately two containers and no more. There is no database because the
+# relay holds nothing: rooms live in memory and die with their last socket, so
+# a restart costs every peer one reconnection and loses nothing. That is also
+# why a single instance is the right shape — a box and its phones must land on
+# the same process, and sharding would need the handle to reach a load
+# balancer, which is exactly the identifier the design keeps from it.
+
+name: ftw-relay
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: relay/Dockerfile
+    restart: unless-stopped
+    # Loopback only. Caddy is the only thing that may reach it, which is what
+    # makes trusting the forwarded header safe.
+    ports:
+      - '127.0.0.1:8787:8787'
+    environment:
+      PORT: '8787'
+      HOST: '0.0.0.0'
+      # Read X-Forwarded-For. True only because Caddy is in front on loopback;
+      # exposed directly this would let a client choose its own rate-limit slot.
+      RELAY_TRUST_PROXY: '1'
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    depends_on:
+      - relay
+
+volumes:
+  caddy-data:
+  caddy-config:
+  caddy-logs:

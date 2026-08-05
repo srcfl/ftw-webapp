@@ -27,7 +27,7 @@
  */
 
 import { WebSocketServer, type WebSocket, type RawData } from 'ws'
-import type { IncomingMessage } from 'node:http'
+import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
 import { currentEpoch } from './epoch.ts'
 import { AttemptCounter, TokenBucket } from './limits.ts'
 import {
@@ -153,6 +153,7 @@ export function clientAddress(req: IncomingMessage, trustProxy: boolean): string
 
 export class RelayServer {
   #wss: WebSocketServer
+  #http: HttpServer
   #rooms = new Map<string, Room>()
   #attempts: AttemptCounter
   #timer: ReturnType<typeof setInterval>
@@ -164,8 +165,9 @@ export class RelayServer {
   #bytesRouted = 0
   #heartbeats = 0
 
-  private constructor(wss: WebSocketServer, opts: RelayOptions) {
+  private constructor(wss: WebSocketServer, opts: RelayOptions, http: HttpServer) {
     this.#wss = wss
+    this.#http = http
     this.#opts = {
       maxStreamsPerHandle: opts.maxStreamsPerHandle ?? DEFAULTS.maxStreamsPerHandle,
       maxSockets: opts.maxSockets ?? DEFAULTS.maxSockets,
@@ -195,9 +197,26 @@ export class RelayServer {
   }
 
   static start(opts: RelayOptions = {}): Promise<RelayServer> {
+    // An HTTP server of our own, so /healthz can be answered without
+    // upgrading. Without it every request gets 426 and a supervisor cannot
+    // tell "listening" from "alive" — which is the difference between a
+    // restart that fixes something and one that loops.
+    //
+    // The answer is deliberately empty. Room counts or handles here would
+    // hand an observer the household identifier the whole design exists to
+    // withhold, and a health check is exactly the endpoint nobody guards.
+    const http = createServer((req, res) => {
+      if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/healthz/')) {
+        res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
+        res.end('ok\n')
+        return
+      }
+      res.writeHead(426, { 'content-type': 'text/plain' })
+      res.end('upgrade required\n')
+    })
+
     const wss = new WebSocketServer({
-      port: opts.port ?? 0,
-      host: opts.host ?? '127.0.0.1',
+      server: http,
       // A compressed frame's length depends on its content. Turning this on
       // would leak through padding that exists precisely to stop that.
       perMessageDeflate: false,
@@ -205,28 +224,27 @@ export class RelayServer {
     })
 
     return new Promise((resolve, reject) => {
-      wss.once('error', reject)
-      wss.once('listening', () => {
-        wss.off('error', reject)
+      http.once('error', reject)
+      http.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', () => {
+        http.off('error', reject)
 
         // Something has to stay attached. An 'error' with no listener is an
         // unhandled 'error' event, which takes the process down — so a
         // transient fault after startup would kill a relay that could have
         // carried on. Logged and survived instead; the supervisor restarts it
         // if it turns out to be fatal.
-        wss.on('error', (err) => {
-          const log = opts.log ?? ((line: string) => console.log(line))
-          log(`relay: server error after start: ${String(err)}`)
-        })
+        const log = opts.log ?? ((line: string) => console.log(line))
+        wss.on('error', (err) => log(`relay: websocket error after start: ${String(err)}`))
+        http.on('error', (err) => log(`relay: http error after start: ${String(err)}`))
 
-        resolve(new RelayServer(wss, opts))
+        resolve(new RelayServer(wss, opts, http))
       })
     })
   }
 
   /** Base URL peers connect to. Paths are appended by the carrier. */
   get url(): string {
-    const address = this.#wss.address()
+    const address = this.#http.address()
     if (typeof address === 'string' || address === null) {
       throw new Error('relay is not listening on a port')
     }
@@ -264,7 +282,11 @@ export class RelayServer {
     clearInterval(this.#timer)
     for (const socket of this.#wss.clients) socket.terminate()
     this.#rooms.clear()
-    return new Promise((resolve) => this.#wss.close(() => resolve()))
+    // Both, and the HTTP server last: it owns the listening socket now, so
+    // closing only the WebSocket server would leave the port held.
+    return new Promise((resolve) => {
+      this.#wss.close(() => this.#http.close(() => resolve()))
+    })
   }
 
   #onConnection(socket: WebSocket, req: IncomingMessage): void {

@@ -1,0 +1,13 @@
+# Cloudflare Pages redirects.
+#
+# /p is where a scanned pairing code lands. It is a real path rather than a
+# hash because a phone's camera opens the QR's URL directly, and the fragment
+# after it — which carries the box's key — never reaches this server.
+#
+# 200 rather than 301: the fragment must survive, and the app reads it on the
+# client. A redirect would work too, but rewriting keeps the URL the user
+# scanned in the address bar, which is what they can check against the box.
+/p /index.html 200
+
+# Everything else is hash-routed inside the shell, so there is no SPA fallback
+# to add. A request for an unknown path is genuinely not found.
