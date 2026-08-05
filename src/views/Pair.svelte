@@ -60,12 +60,51 @@
 
   onDestroy(() => handle?.stop())
 
-  // Arrived with a link: pair straight away. Nothing to scan, and asking the
-  // user to press a button before doing what they already asked for is one
-  // tap too many.
+  /**
+   * A link is an offer, never an instruction.
+   *
+   * This used to pair the moment a fragment arrived. A link is something
+   * anyone can send — by SMS, by email, on a sticker over the real QR — so
+   * "your box needs re-pairing, tap here" silently repointed the app at the
+   * sender's box: their readings shown as this home, every mode change sent
+   * to their hardware, and no way back without finding the physical code
+   * again. On a device without PRF it cost the owner not one tap.
+   *
+   * So the fragment is parsed and shown, and nothing is trusted until
+   * someone says so. Scanning a code with the camera is a deliberate act
+   * already, so that path still pairs on the spot.
+   */
+  let offered = $state<{ fragment: string; fingerprint: string } | null>(null)
+
   $effect(() => {
-    if (fragment && stage === 'intro') void pair(fragment)
+    if (!fragment || stage !== 'intro') return
+    void (async () => {
+      const { parseEnrollmentFragment } = await import('$lib/identity/enrollment')
+      try {
+        const enrollment = parseEnrollmentFragment(fragment)
+        offered = { fragment, fingerprint: await fingerprintOf(enrollment.boxStaticPublic) }
+      } catch {
+        stage = 'error'
+        message = 'That link is not an FTW pairing code.'
+      }
+    })()
   })
+
+  /**
+   * A short, stable name for a box key.
+   *
+   * Six hex characters of its digest. Not a security control on its own —
+   * nobody memorises it — but it makes two different boxes visibly
+   * different, which is what a person needs to notice that the box being
+   * offered is not the one on their wall.
+   */
+  async function fingerprintOf(key: Uint8Array): Promise<string> {
+    const digest = await crypto.subtle.digest('SHA-256', key as BufferSource)
+    return Array.from(new Uint8Array(digest).subarray(0, 3))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase()
+  }
 
   async function startScan() {
     stage = 'scanning'
@@ -125,6 +164,35 @@
   {:else if stage === 'pairing'}
     <h1>Connecting</h1>
     <p>Confirming it's really your box.</p>
+  {:else if offered}
+    <!-- A link arrived. What it points at is shown before anything is
+         trusted, and switching an already-paired app is named as what it is
+         rather than happening quietly underneath. -->
+    <h1>{known ? 'Connect to a different box?' : 'Connect this box?'}</h1>
+    <p>
+      This link points at box <span class="num">{offered.fingerprint}</span>.
+      {#if known}
+        Connecting it replaces {known.label} as the home this app shows and
+        controls. Your key for {known.label} stays on this phone.
+      {:else}
+        Check it matches the code on your box before continuing.
+      {/if}
+    </p>
+
+    {#if message}
+      <p class="problem">{message}</p>
+    {/if}
+
+    <button class="primary" onclick={() => void pair(offered!.fragment)}>
+      {known ? `Connect ${offered.fingerprint}` : 'Connect this box'}
+    </button>
+    <button
+      class="quiet"
+      onclick={() => {
+        offered = null
+        history.replaceState(null, '', '/')
+      }}>Not now</button
+    >
   {:else}
     <h1>{known ? 'Welcome back' : 'Connect your box'}</h1>
     <p>
