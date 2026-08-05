@@ -5,12 +5,33 @@
 # plain WebSocket by choice: a service whose claim is that it cannot read what
 # it carries is easier to believe when it is small, and certificate handling
 # is not small.
+{
+	# Caddy's own diagnostics, which the site block below does not govern.
+	#
+	# Left at the default they go to stderr, which Docker keeps in an
+	# unrotated json-file — and a proxy error names the request URI, which
+	# carries the rendezvous handle, beside the client address. That is the
+	# household identifier this design exists to withhold, written to the
+	# least guarded file on the host and kept forever. ERROR only, to a
+	# rotating file, and never stdout.
+	log {
+		output file /var/log/caddy/caddy.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+		level ERROR
+		format json
+	}
+}
 
 relay.ftw.energy {
 	# The relay reads this to rate-limit. Behind a terminator every client is
 	# one address, so without it the whole fleet shares a single limit and
 	# ordinary reconnection load is an outage. Caddy sets it; the relay only
 	# trusts it because RELAY_TRUST_PROXY says something trusted is in front.
+	#
+	# Set, not appended: whatever the client sent is discarded, so the header
+	# the relay reads is Caddy's observation and not the client's claim.
 	reverse_proxy 127.0.0.1:8787 {
 		header_up X-Forwarded-For {remote_host}
 
@@ -28,13 +49,21 @@ relay.ftw.energy {
 			roll_size 20mb
 			roll_keep 5
 		}
-		format json
 		# The join path carries the rendezvous handle. Never write it down.
+		#
+		# The addresses go too. The relay rate-limits on its own, so nothing
+		# here needs them — and an address beside a session's duration says
+		# "somebody at this address was home from 18:02 until 23:40", which is
+		# the correlation the whole rotation scheme exists to prevent. Keeping
+		# them would mean the operator can answer a question the design
+		# promises is unanswerable.
 		format filter {
 			wrap json
 			fields {
 				request>uri delete
 				request>headers delete
+				request>remote_ip delete
+				request>client_ip delete
 			}
 		}
 	}
