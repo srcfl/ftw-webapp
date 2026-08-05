@@ -1,0 +1,34 @@
+{
+  // Static assets and nothing else.
+  //
+  // There is deliberately no `main`, so there is no Worker script in front of
+  // the files. A hand-made Worker was answering "Hello world" for anything its
+  // asset lookup missed — including /sw.js, which meant the service worker
+  // never installed and the app could not open offline. With no code there is
+  // nothing that can answer wrongly.
+  //
+  // Deploying from the repo rather than the dashboard is the point: the
+  // configuration is reviewable, and the next person can see why it looks like
+  // this instead of rediscovering it.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ftw-webapp",
+  "compatibility_date": "2026-08-05",
+
+  "assets": {
+    "directory": "./dist",
+
+    // 404, not the shell. The app is hash-routed, so every real path is either
+    // a file or genuinely absent — and /p, the one exception, is rewritten by
+    // public/_redirects. Serving index.html for unknown paths would turn a
+    // missing asset into a silent 200 of HTML, which is exactly how a stale
+    // bundle reference hides.
+    "not_found_handling": "none"
+  },
+
+  "observability": {
+    // Aggregate request logs only. There is no Worker code to log anything
+    // else, and the app's own traffic never touches this origin — it goes to
+    // the relay over a WebSocket.
+    "enabled": true
+  }
+}
