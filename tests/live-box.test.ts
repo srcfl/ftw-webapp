@@ -19,7 +19,10 @@ import { NoiseCarrier } from '$lib/carrier/noise'
 import { RelayCarrier } from '$lib/carrier/relay'
 import { parseEnrollmentUrl } from '$lib/identity/enrollment'
 import { FID } from '$lib/format/explanation'
-import type { HistChunk } from '$lib/protocol/messages'
+// The op constant, never the string: hand-writing a name the box also spells
+// is exactly the mistake the registry exists to prevent — and hand-writing it
+// here once already cost a debugging round against a live box.
+import { OP_SET_MODE, type HistChunk } from '$lib/protocol/messages'
 
 const BOX = process.env['FTW_LIVE_BOX']
 const RELAY = process.env['FTW_LIVE_RELAY'] ?? 'wss://relay.ftw.energy'
@@ -118,8 +121,11 @@ live('a real box through the real relay', () => {
       const current = state.modes[modeIndex!]?.key
       expect(current, `mode index ${modeIndex} must be in the catalogue`).toBeDefined()
 
-      const result = await session.command('site.set_mode', { mode: current! }).promise
-      console.log(`[live] set_mode(${current}): ${result.state}`)
+      const result = await session.command(OP_SET_MODE, { mode: current! }).promise
+      console.log(
+        `[live] set_mode(${current}): ${result.state}` +
+          (result.error ? ` — ${result.error.code} ${JSON.stringify(result.error.args ?? {})}` : '')
+      )
       expect(result.state).toBe('applied')
 
       // -- History: whatever the box answers, print the truth of it.
