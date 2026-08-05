@@ -10,6 +10,8 @@ import {
   resetIdentity,
   enrollWrappingKey,
   unlockWrappingKey,
+  silentWrappingKey,
+  ensureLocalCopy,
   localWrappingKey,
   deviceStaticPublic,
   enrolledCredentialIds,
@@ -358,5 +360,89 @@ describe('starting over', () => {
     expect(await isEnrolled(store)).toBe(false)
     expect(await deviceStaticPublic(store)).toBeNull()
     expect(await enrolledCredentialIds(store)).toEqual([])
+  })
+})
+
+describe('connecting never costs a prompt', () => {
+  // The regression this suite exists for: every reload of the app on an
+  // iPhone opened the Face ID sheet, because connecting unlocked the device
+  // key through the PRF copy. Reading your own house is not a privilege.
+
+  it('unlocks silently once the local copy exists, PRF or no PRF', async () => {
+    const mock = installMockAuthenticator()
+    cleanup = () => mock.uninstall()
+
+    const { store, wrapping } = await passkeyVault()
+    const original = await deviceKey(store, wrapping)
+    await ensureLocalCopy(store, wrapping)
+
+    const before = mock.getCalls
+    const silent = await silentWrappingKey(store)
+    expect(silent).not.toBeNull()
+    expect(silent!.source).toBe('local')
+    expect(mock.getCalls).toBe(before) // the whole point: no prompt
+
+    expect(hex((await deviceKey(store, silent!)).publicKey)).toBe(hex(original.publicKey))
+  })
+
+  it('returns null for a PRF-only vault instead of prompting behind the caller', async () => {
+    const mock = installMockAuthenticator()
+    cleanup = () => mock.uninstall()
+
+    const { store, wrapping } = await passkeyVault()
+    await deviceKey(store, wrapping)
+
+    const before = mock.getCalls
+    expect(await silentWrappingKey(store)).toBeNull()
+    expect(mock.getCalls).toBe(before)
+  })
+
+  it('migrates a PRF-only vault with one last prompt, then stays silent', async () => {
+    const mock = installMockAuthenticator()
+    cleanup = () => mock.uninstall()
+
+    // A device enrolled before the local copy existed.
+    const { store, wrapping } = await passkeyVault()
+    const original = await deviceKey(store, wrapping)
+
+    // What connectToSite does when silent comes back null.
+    const unlocked = await unlockWrappingKey(store)
+    await ensureLocalCopy(store, unlocked)
+
+    // From now on: silent, same key.
+    const before = mock.getCalls
+    const silent = await silentWrappingKey(store)
+    expect(silent).not.toBeNull()
+    expect(mock.getCalls).toBe(before)
+    expect(hex((await deviceKey(store, silent!)).publicKey)).toBe(hex(original.publicKey))
+  })
+
+  it('keeps the PRF copy: privileged commands still have a key to demand', async () => {
+    const mock = installMockAuthenticator()
+    cleanup = () => mock.uninstall()
+
+    const { store, wrapping } = await passkeyVault()
+    await deviceKey(store, wrapping)
+    await ensureLocalCopy(store, wrapping)
+
+    const ids = await enrolledCredentialIds(store)
+    expect(ids).toContain(LOCAL_CREDENTIAL_ID)
+    expect(ids.length).toBe(2)
+
+    const viaPrf = await unlockWrappingKey(store)
+    expect(viaPrf.source).toBe('prf')
+  })
+
+  it('is idempotent, so a reconnect loop cannot stack copies', async () => {
+    const mock = installMockAuthenticator()
+    cleanup = () => mock.uninstall()
+
+    const { store, wrapping } = await passkeyVault()
+    await deviceKey(store, wrapping)
+    await ensureLocalCopy(store, wrapping)
+    await ensureLocalCopy(store, wrapping)
+    await ensureLocalCopy(store, wrapping)
+
+    expect((await enrolledCredentialIds(store)).length).toBe(2)
   })
 })

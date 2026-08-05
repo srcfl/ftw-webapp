@@ -18,7 +18,15 @@
  */
 
 import { parseEnrollmentUrl, parseEnrollmentFragment, EnrollmentError, type Enrollment } from './enrollment'
-import { openVaultStore, enrollWrappingKey, unlockWrappingKey, deviceKey, isEnrolled, type VaultStore } from './vault'
+import {
+  openVaultStore,
+  enrollWrappingKey,
+  unlockWrappingKey,
+  ensureLocalCopy,
+  deviceKey,
+  isEnrolled,
+  type VaultStore,
+} from './vault'
 import type { KeyPair } from '$lib/crypto/noise'
 import { db, requestPersistence, type StoredSite } from '$lib/store/db'
 
@@ -86,6 +94,11 @@ export async function pairWithBox(
     : await enrollWrappingKey(store, opts.label ? { label: opts.label } : {})
 
   const device = await deviceKey(store, wrapping)
+
+  // The local copy, so this is the last prompt reading ever costs. The PRF
+  // copy stays for enrollment and privileged commands; connecting to look at
+  // your own house is not a privilege. See silentWrappingKey.
+  await ensureLocalCopy(store, wrapping)
 
   const siteId = await siteIdFor(enrollment.boxStaticPublic)
   const site: PairedSite = {
