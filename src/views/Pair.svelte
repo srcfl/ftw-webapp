@@ -29,6 +29,31 @@
   type Stage = 'intro' | 'scanning' | 'pairing' | 'error'
 
   let stage = $state<Stage>('intro')
+
+  /**
+   * A device that is already enrolled and already knows a site.
+   *
+   * Reaching this screen in that state means something local went missing —
+   * an evicted pointer, a fresh install that cannot see the browser tab's
+   * storage — not that the phone is a stranger. Offering only "scan a code"
+   * there asks the owner to mint a credential for a house their phone is
+   * still holding the key to, and the box would rightly refuse the spent one
+   * they last used. So: open it.
+   */
+  let known = $state<{ siteId: string; label: string } | null>(null)
+
+  $effect(() => {
+    void (async () => {
+      const [{ openVaultStore, isEnrolled }, { pairedSites }] = await Promise.all([
+        import('$lib/identity/vault'),
+        import('$lib/identity/pairing'),
+      ])
+      if (!(await isEnrolled(openVaultStore()))) return
+      const sites = await pairedSites()
+      const first = sites[0]
+      if (first) known = { siteId: first.siteId, label: first.label }
+    })()
+  })
   let message = $state('')
   let video = $state<HTMLVideoElement | null>(null)
   let handle: ScanHandle | null = null
@@ -101,18 +126,34 @@
     <h1>Connecting</h1>
     <p>Confirming it's really your box.</p>
   {:else}
-    <h1>Connect your box</h1>
+    <h1>{known ? 'Welcome back' : 'Connect your box'}</h1>
     <p>
-      Scan the code on your FTW box. Everything stays between this app and your
-      box — nothing readable passes through Sourceful.
+      {#if known}
+        Your key is still on this phone — nothing to set up again.
+      {:else}
+        Scan the code on your FTW box. Everything stays between this app and
+        your box — nothing readable passes through Sourceful.
+      {/if}
     </p>
 
     {#if message}
       <p class="problem">{message}</p>
     {/if}
 
+    {#if known}
+      <button class="primary" onclick={() => onPaired({ siteId: known!.siteId } as PairedSite)}>
+        Open {known.label}
+      </button>
+      <p class="hint">
+        This phone is already set up for {known.label}. Adding a code is only
+        for a different box.
+      </p>
+    {/if}
+
     {#if canScan()}
-      <button class="primary" onclick={startScan}>Scan code</button>
+      <button class={known ? 'quiet' : 'primary'} onclick={startScan}>
+        {known ? 'Add another box' : 'Scan code'}
+      </button>
     {/if}
     <p class="hint">
       Or point your phone's camera at the code. It opens the same link.

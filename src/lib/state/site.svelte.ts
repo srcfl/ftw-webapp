@@ -43,6 +43,8 @@ export class SiteStore {
   #writer = new SnapshotWriter()
   #siteId: string | null = null
   #markedLive = false
+  /** Wall clock when the last frame arrived. Null until one does. */
+  #lastFrameAtMs = $state<number | null>(null)
 
   session = $state<SessionState>(new Session({ build: 'boot' }).state)
 
@@ -55,6 +57,9 @@ export class SiteStore {
   constructor(build: string) {
     this.#session = new Session({ build })
     this.#unsub = this.#session.subscribe((s) => {
+      // A moved uptime is the one reliable sign that a frame arrived: ticks
+      // carry it even when nothing else changed, which is why they exist.
+      if (s.uptimeMs !== this.session.uptimeMs) this.#lastFrameAtMs = Date.now()
       this.session = s
 
       if (s.phase === 'streaming') {
@@ -92,6 +97,8 @@ export class SiteStore {
     // Asked for after the first paint, never before — the prompt is not on
     // the critical path and some browsers show UI for it.
     void requestPersistence()
+
+    this.#ticker ??= setInterval(() => (this.#now = Date.now()), 1_000)
   }
 
   get siteId(): string | null {
@@ -149,8 +156,45 @@ export class SiteStore {
       return Date.now() - this.cachedAtMs
     }
     const ages = NOW_SOURCES.map((s) => this.#session.ageOf(s)).filter((a) => !Number.isNaN(a))
-    return ages.length > 0 ? Math.max(...ages) : NaN
+    if (ages.length === 0) return NaN
+
+    // The box's own uptime says how old a reading was when it was sent. It
+    // says nothing about how long ago that was — so while frames are arriving
+    // the two agree, and the moment they stop the number freezes exactly when
+    // it most needs to move. A phone in a tunnel would show "readings 4s ago"
+    // an hour later. Wall clock since the last frame is added for that, and it
+    // is zero while the stream is live.
+    return Math.max(...ages) + this.sinceLastFrameMs
   }
+
+  /**
+   * Wall-clock milliseconds since a frame last arrived, or 0 while streaming.
+   *
+   * Wall clock is the wrong instrument for a reading's age and the right one
+   * for "how long since we last heard anything" — which is a question about
+   * this phone, not about the box.
+   */
+  get sinceLastFrameMs(): number {
+    const at = this.#lastFrameAtMs
+    if (at === null) return 0
+    const since = this.#now - at
+    // A 1 Hz stream is always a fraction of a second behind its last frame.
+    // Reporting that would make a healthy view flicker between "now" and "1s
+    // ago" forever, which reads as a fault where there is none. Past a couple
+    // of beats the silence is real and every millisecond of it counts.
+    if (since < 3_000) return 0
+    return since
+  }
+
+  /**
+   * A clock the views can depend on.
+   *
+   * Ages are derived, so without something that changes they would sit still
+   * on screen while the world moved — the freezing this fix is about. One
+   * timer for the whole app, at the coarsest rate the display can show.
+   */
+  #now = $state(Date.now())
+  #ticker: ReturnType<typeof setInterval> | null = null
 
   get explanation(): Explanation {
     return explain({
@@ -185,6 +229,10 @@ export class SiteStore {
   }
 
   destroy(): void {
+    if (this.#ticker !== null) {
+      clearInterval(this.#ticker)
+      this.#ticker = null
+    }
     this.#writer.stop()
     this.#unsub?.()
     this.#unsub = null
