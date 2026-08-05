@@ -7,7 +7,8 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
-  import { formatPower } from '$lib/format/power'
+  import EnergyFlow from '$lib/ui/EnergyFlow.svelte'
+  import { FID } from '$lib/format/explanation'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -16,7 +17,8 @@
 
   let { site }: Props = $props()
 
-  const soc = $derived(site.socPercent)
+  const fields = $derived(site.session.fields)
+  const live = $derived(site.session.phase === 'streaming' && site.carrier !== 'cache')
 </script>
 
 {#if !site.paired}
@@ -60,46 +62,14 @@
     <p class="headline">{site.explanation.headline}</p>
   </section>
 
-  <section class="readings">
-    {#each site.readings as r (r.fid)}
-      {@const p = formatPower(r.watts ?? NaN)}
-      <div class="reading" data-tone={r.tone}>
-        <span class="label">{r.label}</span>
-        <span class="value num">
-          {r.watts === undefined ? '—' : p.text}<span class="unit">{p.unit}</span>
-        </span>
-        <!-- Each asset gets its own verb. "Drawing" is right for the grid and
-             wrong for a panel: the sun generates, it does not draw. -->
-        <span class="dir">
-          {#if r.watts === undefined}
-            no reading
-          {:else if r.tone === 'load'}
-            using
-          {:else if p.direction === 'idle'}
-            idle
-          {:else if r.tone === 'generation'}
-            generating
-          {:else if r.tone === 'storage'}
-            {p.direction === 'in' ? 'charging' : 'supplying'}
-          {:else}
-            {p.direction === 'in' ? 'drawing' : 'exporting'}
-          {/if}
-        </span>
-      </div>
-    {/each}
-  </section>
-
-  {#if soc !== null}
-    <section class="soc">
-      <div class="soc-head">
-        <span class="label">Battery charge</span>
-        <span class="num soc-value">{soc}<span class="unit">%</span></span>
-      </div>
-      <div class="soc-track" role="img" aria-label="Battery at {soc} percent">
-        <div class="soc-fill" style:width="{soc}%"></div>
-      </div>
-    </section>
-  {/if}
+  <EnergyFlow
+    gridW={fields.get(FID.GRID_W)}
+    pvW={fields.get(FID.PV_W)}
+    batteryW={fields.get(FID.BATTERY_W)}
+    loadW={fields.get(FID.LOAD_W)}
+    socPercent={site.socPercent}
+    {live}
+  />
 {/if}
 
 <style>
@@ -165,83 +135,4 @@
     text-wrap: balance;
   }
 
-  .readings {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: var(--space-2);
-    padding: 0 var(--space-4) var(--space-4);
-  }
-
-  .reading {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    background: var(--surface-raised);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-    padding: var(--pad-card);
-  }
-
-  .value {
-    font-size: 28px;
-    font-weight: 500;
-    line-height: 1;
-    letter-spacing: -0.02em;
-  }
-
-  .unit {
-    font-size: 13px;
-    color: var(--fg-muted);
-    margin-left: 0.2em;
-    letter-spacing: 0;
-  }
-
-  .dir {
-    font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
-  }
-
-  /* Colour carries meaning here, so it is never decorative. */
-  .reading[data-tone='import'] .value {
-    color: var(--energy-import);
-  }
-  .reading[data-tone='generation'] .value {
-    color: var(--energy-generation);
-  }
-  .reading[data-tone='storage'] .value {
-    color: var(--energy-storage);
-  }
-
-  .soc {
-    padding: 0 var(--space-4) var(--space-6);
-  }
-
-  .soc-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: var(--space-2);
-  }
-
-  .soc-value {
-    font-size: 18px;
-    font-weight: 500;
-  }
-
-  .soc-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--surface-elevated);
-    border: 1px solid var(--line);
-    overflow: hidden;
-  }
-
-  .soc-fill {
-    height: 100%;
-    background: var(--energy-storage);
-    transition: width var(--motion-slow) var(--ease);
-  }
 </style>

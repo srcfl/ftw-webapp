@@ -11,5 +11,10 @@ export default mergeConfig(
       include: ['tests/**/*.test.ts', 'src/**/*.test.ts', 'relay/**/*.test.ts'],
       globals: false,
     },
+    // Component tests mount real Svelte components in jsdom. Without this the
+    // resolver picks Svelte's server build and mount() refuses to run.
+    resolve: {
+      conditions: ['browser'],
+    },
   })
 )
