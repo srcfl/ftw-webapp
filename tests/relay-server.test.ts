@@ -7,6 +7,7 @@
  * does something the routing path is not allowed to interpret.
  */
 
+import net from 'node:net'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { RelayServer, parseJoin } from '../relay/src/server.ts'
 import { CLOSE_BAD_JOIN, CLOSE_EPOCH, CLOSE_BUSY } from '../relay/src/protocol.ts'
@@ -185,5 +186,109 @@ describe('rate limiting', () => {
     expect(JSON.stringify(relay.inspect())).not.toContain('127.0.0.1')
 
     await relay.stop()
+  })
+})
+
+/* Four faults an adversarial audit found, each reproduced against the real
+ * server before it was fixed. They share a shape: the relay must survive
+ * anything an unauthenticated client can do to it, because every client is
+ * unauthenticated — that is the design.
+ */
+describe('surviving hostile and clumsy clients', () => {
+  it('keeps running when a socket errors on a rejection path', async () => {
+    // socket.on('error') used to be attached only after six early returns, so
+    // a socket that failed while being rejected raised an unhandled 'error' —
+    // which Node turns into an uncaught exception, killing the process. No
+    // credential and no valid handle required.
+    //
+    // Reproduced the way it happens: complete the HTTP upgrade, then send
+    // bytes that are not a valid WebSocket frame. ws emits 'error' on the
+    // server socket, and with no listener attached the process dies.
+    const relay = await RelayServer.start({ heartbeatMs: 1000 })
+    let died: unknown = null
+    const onUncaught = (err: unknown) => (died = err)
+    process.on('uncaughtException', onUncaught)
+
+    try {
+      const { port } = new URL(relay.url)
+      for (let i = 0; i < 4; i++) {
+        await new Promise<void>((resolve) => {
+          const sock = net.connect(Number(port), '127.0.0.1', () => {
+            // A join that will be rejected: epoch 0 is never current.
+            sock.write(
+              `GET /r/0/${'a'.repeat(32)}/app HTTP/1.1\r\n` +
+                `Host: 127.0.0.1:${port}\r\n` +
+                'Upgrade: websocket\r\n' +
+                'Connection: Upgrade\r\n' +
+                'Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n' +
+                'Sec-WebSocket-Version: 13\r\n\r\n'
+            )
+            // Then garbage, once the upgrade has been answered.
+            setTimeout(() => {
+              sock.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]))
+              sock.destroy()
+              resolve()
+            }, 25)
+          })
+          sock.on('error', () => resolve())
+        })
+      }
+      await new Promise((r) => setTimeout(r, 120))
+      expect(died, `an uncaught error would have killed the relay: ${died}`).toBeNull()
+
+      // Still serving.
+      const peer = new TestPeer(relay.url, relay.epoch, rendezvousHandle(SECRET, relay.epoch), 'box')
+      await waitFor(() => peer.open, 'the relay still accepts joins')
+      peer.close()
+    } finally {
+      process.off('uncaughtException', onUncaught)
+      await relay.stop()
+    }
+  })
+
+  it('caps how many sockets one address may hold open', async () => {
+    // The attempt limiter bounds the rate; without this one client could
+    // still hold maxSockets open and lock every household out.
+    const relay = await RelayServer.start({ heartbeatMs: 1000, maxSocketsPerAddress: 3 })
+    try {
+      const peers: TestPeer[] = []
+      for (let i = 0; i < 5; i++) {
+        peers.push(
+          new TestPeer(relay.url, relay.epoch, rendezvousHandle(new Uint8Array(32).fill(i), relay.epoch), 'box')
+        )
+      }
+      await waitFor(() => peers.filter((p) => p.closes.length > 0).length >= 2, 'the surplus refused')
+
+      expect(peers.filter((p) => p.open).length).toBe(3)
+      for (const p of peers.filter((p) => p.closes.length > 0)) {
+        expect(p.closes[0]!.code).toBe(CLOSE_BUSY)
+      }
+      for (const p of peers) p.close()
+    } finally {
+      await relay.stop()
+    }
+  })
+
+  it('drops a peer that has stopped reading rather than buffering for it', async () => {
+    // send() queued unconditionally, so a socket the kernel had stopped
+    // draining grew the relay's heap without bound.
+    const relay = await RelayServer.start({ heartbeatMs: 1000, maxBufferedBytes: 4096 })
+    try {
+      const handle = rendezvousHandle(SECRET, relay.epoch)
+      const box = new TestPeer(relay.url, relay.epoch, handle, 'box')
+      const app = new TestPeer(relay.url, relay.epoch, handle, 'app')
+      await waitFor(() => box.linked && app.linked, 'both peers in the room')
+
+      // The app never reads; the box floods. The relay must shed it.
+      for (let i = 0; i < 500; i++) box.send(new Uint8Array(4096))
+      await waitFor(() => app.closes.length > 0 || box.closes.length > 0, 'a peer shed')
+
+      const shed = app.closes[0] ?? box.closes[0]!
+      expect(shed.code).toBe(CLOSE_BUSY)
+      box.close()
+      app.close()
+    } finally {
+      await relay.stop()
+    }
   })
 })

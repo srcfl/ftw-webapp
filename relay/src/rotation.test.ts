@@ -73,8 +73,27 @@ describe('the rate limiter sees a real client', () => {
     expect(clientAddress(req('127.0.0.1', '9.9.9.9'), true)).toBe('9.9.9.9')
   })
 
-  it('takes the original client from a chain, not the last hop', () => {
-    expect(clientAddress(req('127.0.0.1', '9.9.9.9, 10.0.0.1, 172.16.0.1'), true)).toBe('9.9.9.9')
+  it('takes the nearest trusted hop from a chain, not the head', () => {
+    // This assertion used to read the head, on the reasoning that the head is
+    // the original client. It is — and it is also the one entry the client
+    // writes itself. Caddy's reverse_proxy appends by default, so a client
+    // that sends its own X-Forwarded-For produces "<whatever it invented>,
+    // <its real address>", and a limiter reading the head is a limiter any
+    // client can walk straight past by changing a header per connection.
+    //
+    // The tail is what the nearest trusted proxy observed. Our Caddy replaces
+    // the header outright so there is exactly one entry in production either
+    // way; reading the tail is what keeps that a detail of the deployment
+    // rather than the thing the rate limit rests on.
+    expect(clientAddress(req('127.0.0.1', '9.9.9.9, 10.0.0.1, 172.16.0.1'), true)).toBe('172.16.0.1')
+  })
+
+  it('cannot be walked past by a client that sends its own header', () => {
+    const spoofed = ['1.1.1.1', '2.2.2.2', '3.3.3.3'].map((claim) =>
+      clientAddress(req('198.51.100.7', `${claim}, 198.51.100.7`), true)
+    )
+    // Every connection lands on the same counter, whatever the client claims.
+    expect(new Set(spoofed)).toEqual(new Set(['198.51.100.7']))
   })
 
   it('falls back to the socket when the header is absent or empty', () => {

@@ -54,9 +54,20 @@ export interface RelayOptions {
   /** Aggregate counts only. Never a handle, never a byte of payload. */
   log?: (line: string) => void
   now?: () => number
+  /**
+   * Outbound bytes allowed to queue for one peer before it is dropped.
+   *
+   * A socket the kernel has stopped draining — a phone that went through a
+   * tunnel, a deliberately silent reader — otherwise accumulates every frame
+   * the box sends, in the relay's heap, until the process dies. The peer's own
+   * carrier reconnects, so dropping it costs a reconnection and nothing else.
+   */
+  maxBufferedBytes?: number
   /** Attempts allowed per address per window. */
   attemptLimit?: number
   attemptWindowMs?: number
+  /** Concurrent sockets allowed from one address. */
+  maxSocketsPerAddress?: number
   /**
    * Read X-Forwarded-For for rate limiting.
    *
@@ -93,11 +104,25 @@ interface Peer {
   alive: boolean
   /** Whether this peer has been told the other side is present. */
   linked: boolean
+  /** Kept only to decrement the per-address count on close. */
+  address?: string
 }
 
 interface Room {
   uplink: Peer | null
   streams: Set<Peer>
+  /**
+   * The epoch this room's handle belongs to.
+   *
+   * Rotation may only evict a room from an *earlier* epoch. Without this the
+   * sweep walks every room in the map, including ones that joined seconds ago
+   * on the current epoch with a perfectly good handle, and kicks them the
+   * moment their offset passes — again on the next tick, and the next, for the
+   * whole five-minute window. Which is both an outage and the correlation
+   * signal rotation exists to deny: a room that vanishes and reappears on the
+   * same handle is a room an observer can follow.
+   */
+  epoch: number
 }
 
 const DEFAULTS = {
@@ -112,6 +137,10 @@ const DEFAULTS = {
   bytesPerSecond: 512 << 10,
   attemptLimit: 30,
   attemptWindowMs: 60_000,
+  /** Two bulk bursts' worth. Past this the reader is not reading. */
+  maxBufferedBytes: 8 << 20,
+  /** Concurrent sockets from one address. A household needs a handful. */
+  maxSocketsPerAddress: 16,
   trustProxy: false,
   rotateSpreadMs: 300_000,
 } as const
@@ -145,9 +174,15 @@ export function rotationOffsetMs(handle: string, spreadMs: number): number {
 export function clientAddress(req: IncomingMessage, trustProxy: boolean): string {
   if (!trustProxy) return req.socket.remoteAddress ?? ''
 
+  // The LAST entry, not the first. Every hop appends, so the tail is what the
+  // nearest trusted proxy wrote and the head is whatever the client sent —
+  // which a client that sends its own X-Forwarded-For chooses freely, spreading
+  // itself across the whole counter array. Our Caddy replaces the header
+  // outright, so today there is exactly one entry either way; reading the tail
+  // is what keeps that a configuration detail rather than a load-bearing one.
   const forwarded = req.headers['x-forwarded-for']
-  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded
-  const client = first?.split(',')[0]?.trim()
+  const chain = Array.isArray(forwarded) ? forwarded.join(',') : forwarded
+  const client = chain?.split(',').at(-1)?.trim()
   return client && client.length > 0 ? client : (req.socket.remoteAddress ?? '')
 }
 
@@ -161,6 +196,8 @@ export class RelayServer {
   #epoch: number
   #rotateStartedAtMs: number | null = null
   #sockets = 0
+  /** Concurrent sockets per address, so one client cannot fill the relay. */
+  #perAddress = new Map<string, number>()
   #framesRouted = 0
   #bytesRouted = 0
   #heartbeats = 0
@@ -179,6 +216,8 @@ export class RelayServer {
       attemptWindowMs: opts.attemptWindowMs ?? DEFAULTS.attemptWindowMs,
       trustProxy: opts.trustProxy ?? DEFAULTS.trustProxy,
       rotateSpreadMs: opts.rotateSpreadMs ?? DEFAULTS.rotateSpreadMs,
+      maxBufferedBytes: opts.maxBufferedBytes ?? DEFAULTS.maxBufferedBytes,
+      maxSocketsPerAddress: opts.maxSocketsPerAddress ?? DEFAULTS.maxSocketsPerAddress,
     }
 
     const now = this.#opts.now()
@@ -292,6 +331,16 @@ export class RelayServer {
   #onConnection(socket: WebSocket, req: IncomingMessage): void {
     const now = this.#opts.now()
 
+    // First, before any validation can return.
+    //
+    // Every rejection below closes the socket, and a socket that errors with
+    // no 'error' listener attached makes Node throw the event as an uncaught
+    // exception — which kills the process. So a peer that sends a malformed
+    // frame and is rejected takes the whole relay down with it, and it takes
+    // no credential and no valid handle to do. Attaching here means the
+    // listener exists before any path that can reject.
+    socket.on('error', () => socket.terminate())
+
     if (this.#sockets >= this.#opts.maxSockets) {
       socket.close(CLOSE_BUSY, 'full')
       return
@@ -320,7 +369,17 @@ export class RelayServer {
       return
     }
 
-    const room = this.#rooms.get(join.handle) ?? { uplink: null, streams: new Set<Peer>() }
+    const address = clientAddress(req, this.#opts.trustProxy)
+    if ((this.#perAddress.get(address) ?? 0) >= this.#opts.maxSocketsPerAddress) {
+      // The attempt limiter bounds how fast one address may connect; this
+      // bounds how many it may hold open at once. Without it a single client
+      // reaches maxSockets on its own and every household is refused.
+      socket.close(CLOSE_BUSY, 'full')
+      return
+    }
+
+    const room =
+      this.#rooms.get(join.handle) ?? { uplink: null, streams: new Set<Peer>(), epoch: join.epoch }
 
     if (join.role === 'box' && room.uplink) {
       // The incumbent uplink keeps the room. A box whose socket died silently
@@ -348,13 +407,14 @@ export class RelayServer {
     else room.streams.add(peer)
     this.#rooms.set(join.handle, room)
     this.#sockets += 1
+    this.#perAddress.set(address, (this.#perAddress.get(address) ?? 0) + 1)
+    peer.address = address
 
     socket.on('pong', () => {
       peer.alive = true
     })
     socket.on('message', (data, isBinary) => this.#onMessage(peer, room, data, isBinary))
     socket.on('close', () => this.#onClose(join.handle, room, peer))
-    socket.on('error', () => socket.terminate())
 
     this.#sync(room)
   }
@@ -389,15 +449,21 @@ export class RelayServer {
     // reaches all of them, because it cannot be told apart which stream a
     // ciphertext belongs to without reading it, and reading it is the one
     // thing this service must not do.
+    const cap = this.#opts.maxBufferedBytes
     if (peer.role === 'box') {
-      for (const stream of room.streams) send(stream, frame)
+      for (const stream of room.streams) send(stream, frame, cap)
     } else if (room.uplink) {
-      send(room.uplink, frame)
+      send(room.uplink, frame, cap)
     }
   }
 
   #onClose(handle: string, room: Room, peer: Peer): void {
     this.#sockets -= 1
+    if (peer.address !== undefined) {
+      const left = (this.#perAddress.get(peer.address) ?? 1) - 1
+      if (left > 0) this.#perAddress.set(peer.address, left)
+      else this.#perAddress.delete(peer.address)
+    }
     if (room.uplink === peer) room.uplink = null
     else room.streams.delete(peer)
 
@@ -468,6 +534,12 @@ export class RelayServer {
     if (this.#rotateStartedAtMs !== null) {
       const elapsed = nowMs - this.#rotateStartedAtMs
       for (const [handle, room] of this.#rooms) {
+        // Only rooms still on the old handle. A room that joined during the
+        // window already derived this epoch's handle and has nothing to
+        // rotate to; evicting it would kick a healthy peer, and kick it again
+        // every tick until the window closed — while handing an observer the
+        // vanish-and-return pattern that identifies a household.
+        if (room.epoch === this.#epoch) continue
         if (elapsed < rotationOffsetMs(handle, this.#opts.rotateSpreadMs)) continue
         for (const peer of peers(room)) peer.socket.close(CLOSE_ROTATED, String(this.#epoch))
         this.#rooms.delete(handle)
@@ -486,8 +558,15 @@ function peers(room: Room): Peer[] {
   return room.uplink ? [room.uplink, ...room.streams] : [...room.streams]
 }
 
-function send(peer: Peer, frame: Buffer): void {
+function send(peer: Peer, frame: Buffer, maxBufferedBytes: number): void {
   if (peer.socket.readyState !== 1) return
+  if (peer.socket.bufferedAmount > maxBufferedBytes) {
+    // The peer has stopped reading. Queueing more only grows the relay's heap
+    // on behalf of a socket that is not coming back on its own; its carrier
+    // reconnects, so this costs a reconnection and saves the process.
+    peer.socket.close(CLOSE_BUSY, 'slow reader')
+    return
+  }
   peer.socket.send(frame, { binary: true })
 }
 
