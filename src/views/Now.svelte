@@ -7,8 +7,11 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
-  import EnergyFlow from '$lib/ui/EnergyFlow.svelte'
-  import { FID } from '$lib/format/explanation'
+  // The box's own hero component, vendored verbatim. Importing registers
+  // <ftw-energy-flow>; the app and the on-box dashboard render one file.
+  import '$vendor/ftw/ftw-energy-flow.js'
+  import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
+  import { flowReadings } from '$lib/state/flow'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -17,8 +20,16 @@
 
   let { site }: Props = $props()
 
-  const fields = $derived(site.session.fields)
   const live = $derived(site.session.phase === 'streaming' && site.carrier !== 'cache')
+
+  let flow = $state<FtwEnergyFlowElement | null>(null)
+
+  // The component takes data by method, the way the dashboard feeds it.
+  // An effect rather than an attribute because setReadings() is the
+  // component's whole API, and inventing a second one would fork it.
+  $effect(() => {
+    flow?.setReadings(flowReadings(site.session.fields))
+  })
 </script>
 
 {#if !site.paired}
@@ -62,14 +73,12 @@
     <p class="headline">{site.explanation.headline}</p>
   </section>
 
-  <EnergyFlow
-    gridW={fields.get(FID.GRID_W)}
-    pvW={fields.get(FID.PV_W)}
-    batteryW={fields.get(FID.BATTERY_W)}
-    loadW={fields.get(FID.LOAD_W)}
-    socPercent={site.socPercent}
-    {live}
-  />
+  <div class="flow">
+    <!-- static is the honesty switch: a cached view holds still, because a
+         moving particle claims power is flowing at this very moment. -->
+    <ftw-energy-flow bind:this={flow} embedded static={live ? undefined : true}
+    ></ftw-energy-flow>
+  </div>
 {/if}
 
 <style>
@@ -109,6 +118,10 @@
     font-size: 13px;
     color: var(--fg-dim);
     background: var(--surface-raised);
+  }
+
+  .flow {
+    padding: 0 var(--space-3) var(--space-5);
   }
 
   .primary {
