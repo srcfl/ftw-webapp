@@ -1,14 +1,14 @@
 /* Reading the code off the box.
  *
- * BarcodeDetector where it exists, which is Chrome, Edge and — since 17 —
- * Safari. It is the only option that costs nothing: no decoder in the bundle,
- * and detection happens off the main thread.
+ * BarcodeDetector where it exists — Chrome and Edge — because it costs nothing
+ * and decodes off the main thread. Safari does not have it, on any version,
+ * and iPhone is the phone this app is for. So there is a decoder behind a
+ * dynamic import: it never enters the launch bundle, and it is fetched once,
+ * at the moment someone taps Scan on a browser that needs it.
  *
- * Where it does not exist there is deliberately no fallback decoder. Shipping
- * one would add tens of kilobytes to every launch to serve a shrinking
- * minority, and there is already a path that always works: open the QR's link
- * directly. A phone that cannot scan in-app can still point its own camera at
- * the box, and the operating system opens the same URL.
+ * Pointing the phone's own camera at the code still works and opens the same
+ * link. That is a fine second path, but it cannot be the only one — a person
+ * who has just installed an app expects to scan from inside it.
  */
 
 export interface ScanHandle {
@@ -41,8 +41,55 @@ function detectorCtor(): BarcodeDetectorCtor | null {
   return ctor ?? null
 }
 
+/**
+ * A camera is the whole requirement.
+ *
+ * Decoding is no longer a reason to hide the button: where BarcodeDetector is
+ * missing the fallback is fetched on demand. This must stay a camera check
+ * only — gating it on the detector is what left iPhone with no button at all.
+ */
 export function canScan(): boolean {
-  return detectorCtor() !== null && typeof navigator?.mediaDevices?.getUserMedia === 'function'
+  return typeof navigator?.mediaDevices?.getUserMedia === 'function'
+}
+
+/**
+ * The decoder, whichever this browser can use.
+ *
+ * Both shapes are reduced to one call: give it a video frame, get back the
+ * strings found in it. The import is inside the fallback branch so a browser
+ * with BarcodeDetector never fetches the chunk.
+ */
+type Decode = (video: HTMLVideoElement) => Promise<string[]>
+
+async function decoder(): Promise<Decode> {
+  const Ctor = detectorCtor()
+  if (Ctor) {
+    const detector = new Ctor({ formats: ['qr_code'] })
+    return async (video) => (await detector.detect(video)).map((c) => c.rawValue)
+  }
+
+  const { default: jsQR } = await import('jsqr')
+
+  // One canvas for the whole scan, sized to the frame on first use. Allocating
+  // per frame is what makes a software decoder feel slow on a phone.
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new ScanError('failed', "The camera didn't start. Try again.")
+
+  return async (video) => {
+    const w = video.videoWidth
+    const h = video.videoHeight
+    if (!w || !h) return []
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w
+      canvas.height = h
+    }
+    ctx.drawImage(video, 0, 0, w, h)
+    const found = jsQR(ctx.getImageData(0, 0, w, h).data, w, h, {
+      inversionAttempts: 'dontInvert',
+    })
+    return found ? [found.data] : []
+  }
 }
 
 /**
@@ -56,14 +103,6 @@ export async function scanForEnrollment(
   video: HTMLVideoElement,
   onCode: (raw: string) => void
 ): Promise<ScanHandle> {
-  const Ctor = detectorCtor()
-  if (!Ctor) {
-    throw new ScanError(
-      'unsupported',
-      "This browser can't scan in-app. Point your phone's camera at the code instead — it opens the same link."
-    )
-  }
-
   let stream: MediaStream
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -92,7 +131,6 @@ export async function scanForEnrollment(
   video.setAttribute('playsinline', '') // iOS goes fullscreen without it
   await video.play().catch(() => {})
 
-  const detector = new Ctor({ formats: ['qr_code'] })
   let running = true
   let frame = 0
 
@@ -101,6 +139,21 @@ export async function scanForEnrollment(
     cancelAnimationFrame(frame)
     for (const track of stream.getTracks()) track.stop()
     video.srcObject = null
+  }
+
+  // After the camera, so the permission sheet is the first thing that happens
+  // and the fetch overlaps with the person aiming at the box. If it fails the
+  // camera is already open and must be released.
+  let detect: Decode
+  try {
+    detect = await decoder()
+  } catch (err) {
+    stop()
+    if (err instanceof ScanError) throw err
+    throw new ScanError(
+      'unsupported',
+      "The scanner didn't load. Point your phone's camera at the code instead — it opens the same link."
+    )
   }
 
   // Every other frame. Detection at 60 Hz burns battery for no gain — a code
@@ -112,10 +165,10 @@ export async function scanForEnrollment(
     skip = !skip
     if (!skip && video.readyState >= 2) {
       try {
-        for (const code of await detector.detect(video)) {
-          if (looksLikeEnrollment(code.rawValue)) {
+        for (const raw of await detect(video)) {
+          if (looksLikeEnrollment(raw)) {
             stop()
-            onCode(code.rawValue)
+            onCode(raw)
             return
           }
         }
