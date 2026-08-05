@@ -12,9 +12,10 @@ import { RelayCarrier } from '$lib/carrier/relay'
 import type { Carrier } from '$lib/carrier/carrier'
 import { openVaultStore, unlockWrappingKey, deviceKey, isEnrolled } from '$lib/identity/vault'
 import { db, type StoredSite } from '$lib/store/db'
+import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
 
-/** Where the relay lives. One value, no setting — see CLAUDE.md. */
-export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? 'wss://relay.ftw.energy'
+/** Overridable only for development against a local relay. */
+export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL
 
 /**
  * The rendezvous secret, derived from the box's public key.

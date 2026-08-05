@@ -17,8 +17,14 @@
 
 import { decodeBase64url, encodeBase64url, Base64urlError } from './base64url'
 
+import { APP_HOST, isDevHost } from './origin'
+
 export const ENROLLMENT_VERSION = 'v1'
-export const ENROLLMENT_HOST = 'app.ftw.energy'
+/**
+ * Re-exported rather than restated: the QR's host and the RP ID must be the
+ * same string, and two literals is how they stop being.
+ */
+export const ENROLLMENT_HOST = APP_HOST
 export const ENROLLMENT_PATH = '/p'
 
 export const BOX_KEY_BYTES = 32
@@ -171,7 +177,4 @@ function decodeSegment(segment: string, what: string): Uint8Array {
  * but it removed the one shape check in front of a hostile QR while reading
  * as though the check were enforced.
  */
-function isLocalDev(hostname: string): boolean {
-  if (!import.meta.env.DEV) return false
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')
-}
+const isLocalDev = isDevHost

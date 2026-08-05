@@ -17,6 +17,7 @@
  */
 
 import { encodeBase64url, decodeBase64url } from './base64url'
+import { currentRpId, RP_NAME } from './origin'
 
 /**
  * One fixed salt per purpose, forever.
@@ -102,7 +103,7 @@ export async function registerPasskey(opts: RegisterOptions): Promise<Registrati
   const credential = (await navigator.credentials.create({
     publicKey: {
       challenge: randomChallenge(),
-      rp: { id: rpId, name: opts.rpName ?? 'FTW' },
+      rp: { id: rpId, name: opts.rpName ?? RP_NAME },
       user: { id: opts.userHandle, name: label, displayName: label },
       pubKeyCredParams: [
         { type: 'public-key', alg: -7 },
@@ -179,7 +180,7 @@ export function isUserCancelled(err: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 function defaultRpId(): string {
-  return globalThis.location?.hostname ?? ''
+  return currentRpId()
 }
 
 function saltFor(purpose: PrfPurpose): Uint8Array<ArrayBuffer> {
