@@ -38,13 +38,18 @@ possible. Caddy needs to reach Let's Encrypt directly for ACME anyway.
 
 ## Bringing it up
 
+`bootstrap.sh` is the whole thing — pass it as EC2 user-data on a fresh
+Amazon Linux 2023 arm64 instance, or run it by hand on an existing one. It is
+idempotent.
+
+The host has no SSH and no key pair. Access is through SSM:
+
 ```bash
-ssh <instance>
-git clone https://github.com/srcfl/ftw-webapp && cd ftw-webapp/relay/deploy
-docker compose up -d
+aws ssm start-session --region eu-central-1 --target <instance-id>
 ```
 
-Caddy gets its certificate on first start. Check it took:
+Caddy gets its certificate on first start, which needs the DNS record to exist
+already. Check it took:
 
 ```bash
 curl -s https://relay.ftw.energy/healthz
@@ -55,7 +60,8 @@ curl -s https://relay.ftw.energy/healthz
 ## Updating
 
 ```bash
-git pull && docker compose up -d --build
+aws ssm start-session --region eu-central-1 --target <instance-id>
+cd /opt/ftw-webapp && git pull && cd relay/deploy && docker compose up -d --build
 ```
 
 Every peer reconnects, which is a few seconds of a freshness stamp falling
