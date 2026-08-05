@@ -74,6 +74,7 @@ export default defineConfig({
     alias: {
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
       $views: fileURLToPath(new URL('./src/views', import.meta.url)),
+      $vendor: fileURLToPath(new URL('./src/vendor', import.meta.url)),
     },
   },
 

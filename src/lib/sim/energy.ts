@@ -49,6 +49,8 @@ export const DEFAULT_HOUSE: HouseConfig = {
 }
 
 export interface Reading {
+  /** Positive while the charger draws; the site has one in the simulation. */
+  evW: number
   gridW: number
   /** Never positive. Negative means generating. */
   pvW: number
@@ -131,9 +133,14 @@ export function sample(
   const pv = -generation
   const load = loadW(cfg, hourOfDay, rand)
 
-  // grid_w = load_w + bat_w + pv_w, so the net before the battery acts is
-  // simply load plus a negative PV.
-  const netBeforeBattery = load + pv
+  // The EV charges in the early evening — plugged in after the commute —
+  // which is exactly when it is interesting: it overlaps the load peak, so
+  // the flow view gets a fourth active corner to draw.
+  const ev = hourOfDay >= 17 && hourOfDay < 19.5 ? 7200 + Math.round(rand() * 200) : 0
+
+  // grid_w = load_w + bat_w + pv_w (+ ev), so the net before the battery
+  // acts is the consumption side plus a negative PV.
+  const netBeforeBattery = load + ev + pv
 
   let battery = 0
   if (cfg.batteryCapacityWh > 0) {
@@ -154,6 +161,7 @@ export function sample(
     batteryW: Math.round(battery),
     batterySocPermille: socPermille,
     loadW: Math.round(load),
+    evW: ev,
   }
 }
 

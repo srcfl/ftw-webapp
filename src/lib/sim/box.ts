@@ -42,6 +42,10 @@ import {
 } from '$lib/protocol/history'
 import type { SourceState } from '$lib/protocol/types'
 import { DEFAULT_HOUSE, sample, stepSoc, type HouseConfig, type Reading } from './energy'
+// One FID table, shared with the client. The simulator briefly kept its
+// own copy, which is exactly the drift contract/registry.yaml exists to
+// prevent — field 10 landed in one and not the other.
+import { FID } from '$lib/format/explanation'
 
 export interface SimFaults {
   /** Still starting. Answers hello with boot progress, refuses subscriptions. */
@@ -85,15 +89,6 @@ export const NO_FAULTS: SimFaults = {
   planStale: false,
 }
 
-/** Field ids 1–9, frozen permanently. See contract/registry.yaml. */
-const FID = {
-  MODE: 1,
-  GRID_W: 2,
-  PV_W: 3,
-  BATTERY_W: 4,
-  BATTERY_SOC: 5,
-  LOAD_W: 6,
-} as const
 
 const SRC = {
   METER: 'meter.p1',
@@ -108,6 +103,9 @@ const DICT: Snap['dict'] = {
   [FID.BATTERY_W]: { name: 'battery_w', unit: 'W', srcId: SRC.BATTERY },
   [FID.BATTERY_SOC]: { name: 'battery_soc', unit: 'permille', srcId: SRC.BATTERY },
   [FID.LOAD_W]: { name: 'load_w', unit: 'W', srcId: SRC.METER },
+  // Present because the simulated site has a charger. No single source —
+  // several chargers can feed the sum — matching the box's dictionary.
+  [FID.EV_W]: { name: 'ev_w', unit: 'W', srcId: null },
 }
 
 /** Series the box can serve, named as in contract/registry.yaml. */
@@ -327,6 +325,7 @@ export class SimBox {
       [FID.BATTERY_W]: reading.batteryW,
       [FID.BATTERY_SOC]: Math.round(reading.batterySocPermille),
       [FID.LOAD_W]: reading.loadW,
+      [FID.EV_W]: reading.evW,
     }
 
     for (const [fid, value] of Object.entries(candidate)) {
@@ -426,6 +425,7 @@ export class SimBox {
       [FID.BATTERY_W]: reading.batteryW,
       [FID.BATTERY_SOC]: Math.round(reading.batterySocPermille),
       [FID.LOAD_W]: reading.loadW,
+      [FID.EV_W]: reading.evW,
     }
     for (const [fid, v] of Object.entries(fields)) this.#lastSent.set(Number(fid), v)
 
@@ -728,6 +728,7 @@ export class SimBox {
       [FID.BATTERY_W]: this.#lastReading.batteryW,
       [FID.BATTERY_SOC]: Math.round(this.#socPermille),
       [FID.LOAD_W]: this.#lastReading.loadW,
+      [FID.EV_W]: this.#lastReading.evW,
     }
 
     return cmd.expect.guards.every((g) => {

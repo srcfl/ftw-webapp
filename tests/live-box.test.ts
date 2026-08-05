@@ -105,7 +105,8 @@ live('a real box through the real relay', () => {
       const pv = fields.get(FID.PV_W)
       console.log(
         `[live] grid=${fields.get(FID.GRID_W)} pv=${pv} bat=${fields.get(FID.BATTERY_W)} ` +
-          `load=${fields.get(FID.LOAD_W)} soc=${fields.get(FID.BATTERY_SOC)} mode#=${fields.get(FID.MODE)}`
+          `load=${fields.get(FID.LOAD_W)} soc=${fields.get(FID.BATTERY_SOC)} mode#=${fields.get(FID.MODE)} ` +
+          `ev=${fields.get(FID.EV_W) ?? '(no charger field)'}`
       )
       if (pv !== undefined) expect(pv, 'pv_w must never be positive').toBeLessThanOrEqual(0)
 

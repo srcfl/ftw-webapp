@@ -21,6 +21,8 @@ export const FID = {
   BATTERY_W: 4,
   BATTERY_SOC: 5,
   LOAD_W: 6,
+  /** Present only on a site with a charger. Absent means no EV node. */
+  EV_W: 10,
 } as const
 
 export type Situation =

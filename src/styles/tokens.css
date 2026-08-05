@@ -57,6 +57,38 @@
   --fresh-stale: var(--energy-generation);
   --fresh-lost: var(--fg-muted);
 
+  /* ----- Bridge to the box's component names -----
+   * src/vendor/ftw carries components copied verbatim from the box's own
+   * dashboard, and they speak that dashboard's token names. Aliases, not
+   * copies: every value stays defined once, above, so the palettes cannot
+   * drift apart. Same hues, two vocabularies. */
+  --ink-sunken: var(--surface-sunken);
+  --ink-raised: var(--surface-raised);
+  --ink-elevated: var(--surface-elevated);
+  --amber: var(--energy-generation);
+  --red-e: var(--energy-import);
+  --green-e: var(--energy-export);
+  --cyan: var(--energy-storage);
+  --cyan-dim: var(--energy-storage-dim);
+  --violet: var(--energy-mobility);
+  --white-s: var(--fg);
+  --accent-e: var(--accent);
+
+  /* Hero surfaces for the energy flow, from the box's theme.css. */
+  --hero-bg-top: #1a1a1a;
+  --hero-bg-bot: #111111;
+  --hero-glow-a: oklch(0.4 0.15 var(--accent-hue) / 0.08);
+  --hero-line-base: #2a2a2a;
+  --hero-box-fill: rgb(22 22 22 / 95%);
+  --hero-box-border: #303030;
+  --hero-house-fill: #1c1c1c;
+  --hero-house-stroke: oklch(0.7 0.14 var(--accent-hue));
+  --hero-house-ring: oklch(0.55 0.1 var(--accent-hue));
+  --hero-load-text: oklch(0.9 0.08 var(--accent-hue));
+  --hero-label-text: #d8d8d8;
+  --hero-sub-text: #b8b8b8;
+  --hero-soc-track: #2a2a2a;
+
   /* ----- Type -----
    * No CDN. Inter and JetBrains Mono lead the stack and are picked up when
    * self-hosted or installed; every fallback ships with the OS. */
@@ -116,6 +148,21 @@ html[data-theme='light'] {
 
   --accent: oklch(0.68 0.16 var(--accent-hue));
   --accent-strong: oklch(0.55 0.14 var(--accent-hue));
+
+  /* Hero surfaces in daylight, from the box's theme.css light block. */
+  --hero-bg-top: #fafaf8;
+  --hero-bg-bot: #ecece8;
+  --hero-glow-a: oklch(0.72 0.14 var(--accent-hue) / 0.1);
+  --hero-line-base: #cecec7;
+  --hero-box-fill: rgb(255 255 255 / 96%);
+  --hero-box-border: #cecec7;
+  --hero-house-fill: #fafaf8;
+  --hero-house-stroke: oklch(0.55 0.14 var(--accent-hue));
+  --hero-house-ring: oklch(0.72 0.1 var(--accent-hue));
+  --hero-load-text: oklch(0.4 0.18 var(--accent-hue));
+  --hero-label-text: #4f4f4b;
+  --hero-sub-text: #686862;
+  --hero-soc-track: #ddddd7;
 }
 
 @media (prefers-reduced-motion: reduce) {
