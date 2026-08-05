@@ -147,11 +147,11 @@ content half of that promise sound and the metadata half not. These are open,
 and listed here rather than in a tracker because a privacy claim with quiet
 exceptions is worse than no claim.
 
-- **The rendezvous secret has no home in the QR payload.** The fragment
-  carries a version, the box's static key, a single-use pairing code and a
-  LAN hint. Rotation needs a long-lived secret that is none of those. Until
-  it has an explicit field with its own rotation path, handle rotation is
-  specified but not provisioned.
+- **The rendezvous secret cannot yet be rotated from a session.** The v2 QR
+  payload carries one, so the handle is no longer a hash of a key that never
+  changes, but replacing it still means scanning a new code. The field exists
+  so that a `rendezvous.rotate` command can arrive later without another
+  payload version.
 - **The box authenticates nobody.** Noise IK proves the box's identity to the
   app, not the reverse. The pairing code that would close it is parsed and
   then unused. So today the guarantee is one-way.

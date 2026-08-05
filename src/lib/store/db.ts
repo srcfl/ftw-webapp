@@ -38,6 +38,20 @@ export interface StoredSite {
   label: string
   /** Box's static Noise key, pinned optically at enrollment. */
   boxStaticKey: Uint8Array
+  /**
+   * The rendezvous secret from the QR fragment. Optional only because rows
+   * written before the v2 payload existed do not have one; a site without it
+   * cannot derive a rotating handle and is re-paired rather than guessed at.
+   */
+  rendezvousSecret?: Uint8Array
+  /**
+   * The single-use code from the QR, kept so the first session can present it.
+   *
+   * It is not a second secret: it is on a sticker on the box. The box spends
+   * it on the first handshake that carries it and remembers this device's key
+   * instead, so a copy left here cannot pair anything a second time.
+   */
+  pairingCode?: Uint8Array
   addedAtMs: number
   lastSeenAtMs: number
 }

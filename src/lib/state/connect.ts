@@ -17,30 +17,6 @@ import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
 /** Overridable only for development against a local relay. */
 export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL
 
-/**
- * The rendezvous secret, derived from the box's public key.
- *
- * KNOWN GAP, and deliberately not hidden: the QR payload has no field for a
- * rendezvous secret, so there is nothing long-lived and private to derive a
- * rotating handle from. Deriving it from the box's public key makes the handle
- * stable for the life of the box, which means the relay can correlate one
- * household across epochs — exactly what the rotation exists to prevent.
- *
- * The pairing code is not a substitute: it is single-use, so it cannot be a
- * long-lived anchor, and anyone who ever photographs the QR would hold it.
- *
- * The fix is a fifth QR segment with its own rotation path, and it needs the
- * box side to mint it. Until then this is honest about what it is.
- * See docs/architecture.md, "What is not yet true".
- */
-async function rendezvousSecret(boxStaticKey: Uint8Array): Promise<Uint8Array> {
-  const salt = new TextEncoder().encode('ftw.rendezvous.v1.provisional')
-  const material = new Uint8Array(salt.length + boxStaticKey.length)
-  material.set(salt, 0)
-  material.set(boxStaticKey, salt.length)
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', material as BufferSource))
-}
-
 export interface ConnectOptions {
   /** Injected by tests. Defaults to a real relay carrier. */
   makeInner?: (opts: { url: string; secret: Uint8Array }) => Carrier
@@ -49,7 +25,7 @@ export interface ConnectOptions {
 
 export class ConnectError extends Error {
   constructor(
-    readonly code: 'not_paired' | 'not_enrolled' | 'locked',
+    readonly code: 'not_paired' | 'not_enrolled' | 'locked' | 'stale_pairing',
     /** What the user does now. */
     readonly help: string
   ) {
@@ -82,10 +58,21 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     throw new ConnectError('not_enrolled', 'This device has no key for that home. Scan its code again.')
   }
 
+  // Read from the QR, never derived. A handle derived from the box's public
+  // key would be stable for the life of the box, which hands the relay
+  // operator one household identifier good for years — the exact thing the
+  // hourly rotation exists to deny it.
+  const secret = site.rendezvousSecret
+  if (!secret) {
+    throw new ConnectError(
+      'stale_pairing',
+      'This home was paired before this app could reach it privately. Scan its code again.'
+    )
+  }
+
   const wrapping = await unlockWrappingKey(vault)
   const device = await deviceKey(vault, wrapping)
 
-  const secret = await rendezvousSecret(site.boxStaticKey)
   const relayUrl = opts.relayUrl ?? RELAY_URL
   const inner = opts.makeInner
     ? opts.makeInner({ url: relayUrl, secret })
@@ -102,6 +89,11 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     // Binds the session to this box, so a captured handshake cannot be
     // replayed into a different one.
     prologue: prologueFor(site.boxStaticKey),
+    // Message 1's payload, which is how the box learns this device is
+    // allowed. It spends the code once and remembers the key it came with,
+    // so a session after that is authorised by the key alone and the payload
+    // is ignored.
+    ...(site.pairingCode ? { handshakePayload: site.pairingCode } : {}),
   })
 }
 
