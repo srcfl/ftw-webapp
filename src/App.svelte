@@ -114,6 +114,20 @@
   }
 
   /** Nothing paired and nothing cached: the only screen is pairing. */
+  /**
+   * Which views have ever been opened.
+   *
+   * A view is built the first time it is reached and kept from then on, so
+   * the second visit is instant and keeps its state. Not built up front,
+   * because nothing that has not been asked for belongs on the path to the
+   * first frame.
+   */
+  let seen = $state({ plan: false, history: false })
+  $effect(() => {
+    if (router.current === 'plan') seen.plan = true
+    if (router.current === 'history') seen.history = true
+  })
+
   const needsPairing = $derived(!siteId && !site.paired && !resolvingSite)
 
   onMount(() => {
@@ -199,17 +213,37 @@
       <section class="settling"></section>
     {:else if needsPairing || pairingFragment}
       <Pair fragment={pairingFragment} onPaired={(s) => onPaired(s.siteId)} />
-    {:else if router.current === 'plan'}
-      <Plan {site} />
-    {:else if router.current === 'history'}
-      <!-- Loaded on demand: the chart, its canvas and the tile cache must not
-           sit on the path to the first frame of the app. -->
-      {#await import('$views/History.svelte') then module}
-        {@const History = module.default}
-        <History {site} />
-      {/await}
     {:else}
-      <Now {site} />
+      <!-- Views are hidden, never destroyed.
+           An {#if} chain tore the whole view down on every tap and built the
+           next one from nothing: Plan threw away a plan it was holding and
+           re-asked the box, History blanked although its tiles were on disk,
+           and the scroll position went with them. That is what "going from
+           live to plan feels like a page reload" was — because it was one.
+           The box's own dashboard keeps every panel in the DOM and toggles a
+           class, which is why it feels instant, and this now does the same.
+           A view that has never been opened is still not built: `seen` gates
+           the first mount, so the cost is paid once and never again. -->
+      <div class="view" hidden={router.current !== 'now'}>
+        <Now {site} />
+      </div>
+
+      {#if seen.plan}
+        <div class="view" hidden={router.current !== 'plan'}>
+          <Plan {site} />
+        </div>
+      {/if}
+
+      {#if seen.history}
+        <!-- Loaded on demand: the chart, its canvas and the tile cache must
+             not sit on the path to the first frame of the app. -->
+        <div class="view" hidden={router.current !== 'history'}>
+          {#await import('$views/History.svelte') then module}
+            {@const History = module.default}
+            <History {site} />
+          {/await}
+        </div>
+      {/if}
     {/if}
   </main>
 
@@ -242,6 +276,13 @@
 <style>
   .settling {
     min-height: 60vh;
+  }
+
+  /* `hidden` is the switch, so a view that is not showing costs no layout and
+     is invisible to assistive technology — while keeping its element
+     instances, its scroll position and whatever it had already loaded. */
+  .view[hidden] {
+    display: none;
   }
 
   .app {

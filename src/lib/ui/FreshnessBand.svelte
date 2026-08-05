@@ -51,26 +51,58 @@
         case 'down':
           return `${where} · a device stopped responding`
         default:
-          return `${where} · readings ${formatAge(ageMs)}`
+          // The age rides in its own element now, so the sentence says what
+          // the connection is doing and nothing else.
+          return `${where} · readings`
       }
     }
 
     // Not connected. Say how old the readings are, which is the question
     // being asked, rather than diagnosing a connection we have not finished
     // testing.
-    const age = Number.isFinite(ageMs) ? formatAge(ageMs) : null
-    if (reaching) return age ? `Reaching your box · ${age}` : 'Reaching your box'
-    return age ? `Can't reach your box · ${age}` : "Can't reach your box"
+    if (reaching) return 'Reaching your box'
+    return "Can't reach your box"
+  })
+
+  /**
+   * The age, as its own field.
+   *
+   * It used to be glued onto the end of the sentence with a middle dot, so
+   * two orthogonal facts arrived as one string and neither could be found at
+   * a glance. An em dash means the box's clock cannot place the reading at
+   * all — after a restart, where pretending to know would be the lie the
+   * whole design is built to avoid.
+   */
+  const ageText = $derived.by(() => {
+    if (carrier === 'relay' || carrier === 'webrtc') {
+      if (srcState === 'live') return null
+      if (srcState === 'never') return null
+    }
+    if (Number.isNaN(ageMs)) return '—'
+    return Number.isFinite(ageMs) ? formatAge(ageMs) : null
   })
 </script>
 
+<!-- Sticky, because this is the one claim the whole app rests on and it was
+     the first thing to scroll away. Pinned to the top it stays answerable at
+     any scroll position, which is what "you cannot easily see freshness"
+     was actually about. -->
 <div class="band" data-tone={tone} role="status" aria-live="polite">
   <span class="dot" aria-hidden="true"></span>
   <span class="text">{message}</span>
+  <!-- The two fields stay two things. The carrier is the dot and the words;
+       the age is its own element, in tabular figures so a number that changes
+       every second does not shift the line under the reader's eye. -->
+  {#if ageText}
+    <span class="age num" class:unknown={ageText === '—'}>{ageText}</span>
+  {/if}
 </div>
 
 <style>
   .band {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -81,6 +113,24 @@
     color: var(--fg-dim);
     border-bottom: 1px solid var(--line-soft);
     background: var(--surface-sunken);
+  }
+
+  .age {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg-muted);
+    flex: none;
+  }
+
+  .age.unknown {
+    /* The box cannot place this reading in time. Saying so quietly beats
+       showing a number that would be invented. */
+    opacity: 0.7;
+  }
+
+  .band[data-tone='stale'] .age,
+  .band[data-tone='lost'] .age {
+    color: var(--fresh-stale);
   }
 
   .dot {

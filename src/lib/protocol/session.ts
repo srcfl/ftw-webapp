@@ -280,7 +280,15 @@ export class Session {
   ageOf(srcId: string): number {
     const src = this.#state.sources.get(srcId)
     if (!src) return NaN
-    return Math.max(0, this.#state.uptimeMs - src.lastOkMs)
+    const age = this.#state.uptimeMs - src.lastOkMs
+    // Negative means the two numbers come from different boots: the box
+    // restarted, its uptime reset, and a source stamp from before the restart
+    // survived in the cache. Clamping that to zero reported "just now" over
+    // readings from another lifetime of the box — the one lie this protocol
+    // exists to prevent. Unknown is the honest answer, and the band already
+    // knows how to say it.
+    if (age < 0) return NaN
+    return age
   }
 
   /** Worst state across the given sources. Drives the freshness band. */
