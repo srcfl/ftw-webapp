@@ -335,6 +335,49 @@ export async function unlockWrappingKey(
 }
 
 /**
+ * The wrapping key for connecting, without a prompt — or null.
+ *
+ * Reading is not a privilege. The invariant is that nothing stands before the
+ * first frame — not a network round trip, not a passkey sheet — and a Face ID
+ * prompt on every reconnect taught people that opening the app costs a
+ * ceremony. So connecting unlocks with the local copy, silently.
+ *
+ * PRF still guards what it was always for: enrolling this device, and the
+ * privileged commands that will demand a fresh assertion. The honest claim
+ * for the local copy is the cache key's claim — it resists an offline disk
+ * read and other origins, not someone holding the unlocked phone. That
+ * person can already read the house by opening the app.
+ *
+ * Null means only PRF copies exist (a device enrolled before the local copy
+ * existed). The caller prompts once and calls ensureLocalCopy, and every
+ * start after that is silent.
+ */
+export async function silentWrappingKey(store: VaultStore): Promise<WrappingKey | null> {
+  const record = await readVault(store)
+  if (!record) throw emptyVault()
+
+  if (record.copies.some((c) => c.credentialId === LOCAL_CREDENTIAL_ID)) {
+    return localWrappingKey(store)
+  }
+  return null
+}
+
+/**
+ * Add the local copy, so the next start never prompts.
+ *
+ * The self-healing half of the migration: a device enrolled when PRF wrapped
+ * the only copy pays one last prompt, and this turns it into the layout new
+ * enrollments get from the start.
+ */
+export async function ensureLocalCopy(store: VaultStore, current: WrappingKey): Promise<void> {
+  const record = await readVault(store)
+  if (!record) throw emptyVault()
+  if (record.copies.some((c) => c.credentialId === LOCAL_CREDENTIAL_ID)) return
+
+  await addCredential(store, current, await localWrappingKey(store))
+}
+
+/**
  * The fallback wrapping key: non-extractable, in IndexedDB, no user
  * verification in front of it.
  *

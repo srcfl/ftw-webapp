@@ -10,7 +10,14 @@
 import { NoiseCarrier } from '$lib/carrier/noise'
 import { RelayCarrier } from '$lib/carrier/relay'
 import type { Carrier } from '$lib/carrier/carrier'
-import { openVaultStore, unlockWrappingKey, deviceKey, isEnrolled } from '$lib/identity/vault'
+import {
+  openVaultStore,
+  silentWrappingKey,
+  unlockWrappingKey,
+  ensureLocalCopy,
+  deviceKey,
+  isEnrolled,
+} from '$lib/identity/vault'
 import { db, type StoredSite } from '$lib/store/db'
 import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
 
@@ -40,12 +47,14 @@ export async function loadSite(siteId: string): Promise<StoredSite | null> {
 }
 
 /**
- * Build a carrier for a paired site.
+ * Build a carrier for a paired site — silently, in the ordinary case.
  *
- * Prompts for the passkey, because unwrapping the device key needs it. That
- * is why this is never on the cold-start path: the app paints cached readings
- * first and only then asks, so pressing the icon never opens a Face ID sheet
- * before it shows a watt.
+ * Reading your own house is not a privilege, so connecting unlocks the device
+ * key with the local copy and never prompts. The one exception is a device
+ * enrolled before the local copy existed: it pays one final passkey prompt,
+ * ensureLocalCopy records the result, and every start after that is silent.
+ * PRF keeps guarding what it was always for — enrollment and privileged
+ * commands — not the act of looking.
  */
 export async function connectToSite(siteId: string, opts: ConnectOptions = {}): Promise<Carrier> {
   const site = await loadSite(siteId)
@@ -70,7 +79,13 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     )
   }
 
-  const wrapping = await unlockWrappingKey(vault)
+  let wrapping = await silentWrappingKey(vault)
+  if (!wrapping) {
+    // Enrolled when PRF wrapped the only copy. One last prompt, then the
+    // local copy exists and this branch never runs again on this device.
+    wrapping = await unlockWrappingKey(vault)
+    await ensureLocalCopy(vault, wrapping)
+  }
   const device = await deviceKey(vault, wrapping)
 
   const relayUrl = opts.relayUrl ?? RELAY_URL
