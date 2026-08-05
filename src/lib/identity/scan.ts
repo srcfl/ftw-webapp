@@ -131,7 +131,13 @@ export async function scanForEnrollment(
   return { stop }
 }
 
-/** Cheap shape check, so unrelated codes in view are ignored silently. */
+/**
+ * Cheap shape check, so unrelated codes in view are ignored silently.
+ *
+ * Any version, not just ours: a payload from a box we are too old for must
+ * reach the parser, which is the only thing that can say "update the app".
+ * Matching our version alone would leave the camera looking past it forever.
+ */
 function looksLikeEnrollment(raw: string): boolean {
-  return raw.includes('/p#v1.')
+  return /\/p#v\d+\./.test(raw)
 }

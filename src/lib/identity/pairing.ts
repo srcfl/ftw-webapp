@@ -29,6 +29,8 @@ export interface PairedSite {
   boxStaticKey: Uint8Array
   /** Single use. Goes in handshake message 1 so the box can accept us. */
   pairingCode: Uint8Array
+  /** Long-lived. The rotating relay handle is derived from it, and only from it. */
+  rendezvousSecret: Uint8Array
   lanHint: string | null
 }
 
@@ -91,6 +93,7 @@ export async function pairWithBox(
     label: 'Home',
     boxStaticKey: enrollment.boxStaticPublic,
     pairingCode: enrollment.pairingCode,
+    rendezvousSecret: enrollment.rendezvousSecret,
     lanHint: enrollment.lanHint || null,
   }
 
@@ -121,6 +124,12 @@ async function storeSite(site: PairedSite): Promise<void> {
     siteId: site.siteId,
     label: site.label,
     boxStaticKey: site.boxStaticKey,
+    // Kept because the handle has to keep rotating long after the pairing
+    // code is spent. The QR is the only place it ever appears.
+    rendezvousSecret: site.rendezvousSecret,
+    // Kept because the box wants it in handshake message 1, and the first
+    // handshake happens after this function has returned.
+    pairingCode: site.pairingCode,
     addedAtMs: Date.now(),
     lastSeenAtMs: Date.now(),
   }
