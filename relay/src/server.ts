@@ -54,6 +54,18 @@ export interface RelayOptions {
   /** Aggregate counts only. Never a handle, never a byte of payload. */
   log?: (line: string) => void
   now?: () => number
+  /** Attempts allowed per address per window. */
+  attemptLimit?: number
+  attemptWindowMs?: number
+  /**
+   * Read X-Forwarded-For for rate limiting.
+   *
+   * Only true when something trusted terminates TLS in front, because
+   * otherwise the header is a value the client chooses.
+   */
+  trustProxy?: boolean
+  /** How long an epoch rotation is spread over. Five minutes by default. */
+  rotateSpreadMs?: number
 }
 
 export interface RoomInspection {
@@ -100,7 +112,44 @@ const DEFAULTS = {
   bytesPerSecond: 512 << 10,
   attemptLimit: 30,
   attemptWindowMs: 60_000,
+  trustProxy: false,
+  rotateSpreadMs: 300_000,
 } as const
+
+/**
+ * Where in the rotation window this room's turn falls.
+ *
+ * Derived from the handle so it needs no state and no timer, and so two rooms
+ * do not have to coordinate to end up in different places. The handle is
+ * already uniformly distributed, so its first bytes are as good a spread as
+ * anything.
+ */
+export function rotationOffsetMs(handle: string, spreadMs: number): number {
+  const bucket = parseInt(handle.slice(0, 4), 16)
+  return Math.floor((bucket / 0x10000) * spreadMs)
+}
+
+/**
+ * The client's address, for rate limiting only.
+ *
+ * Never stored — hashed into a counter that is thrown away every window. But
+ * behind a TLS terminator `socket.remoteAddress` is the proxy for every client
+ * in the world, so the whole fleet shares one limit and ordinary reconnection
+ * load takes the service down. Reading the forwarded header is the only way
+ * the limiter works at all in the deployment its own README describes.
+ *
+ * Off unless `trustProxy` is set: a forwarded header from an untrusted peer is
+ * a value the client chooses, which would let anyone spread themselves across
+ * the whole counter array.
+ */
+export function clientAddress(req: IncomingMessage, trustProxy: boolean): string {
+  if (!trustProxy) return req.socket.remoteAddress ?? ''
+
+  const forwarded = req.headers['x-forwarded-for']
+  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded
+  const client = first?.split(',')[0]?.trim()
+  return client && client.length > 0 ? client : (req.socket.remoteAddress ?? '')
+}
 
 export class RelayServer {
   #wss: WebSocketServer
@@ -109,6 +158,7 @@ export class RelayServer {
   #timer: ReturnType<typeof setInterval>
   #opts: Required<Omit<RelayOptions, 'port' | 'host'>>
   #epoch: number
+  #rotateStartedAtMs: number | null = null
   #sockets = 0
   #framesRouted = 0
   #bytesRouted = 0
@@ -123,12 +173,16 @@ export class RelayServer {
       heartbeatMs: opts.heartbeatMs ?? DEFAULTS.heartbeatMs,
       log: opts.log ?? (() => {}),
       now: opts.now ?? (() => Date.now()),
+      attemptLimit: opts.attemptLimit ?? DEFAULTS.attemptLimit,
+      attemptWindowMs: opts.attemptWindowMs ?? DEFAULTS.attemptWindowMs,
+      trustProxy: opts.trustProxy ?? DEFAULTS.trustProxy,
+      rotateSpreadMs: opts.rotateSpreadMs ?? DEFAULTS.rotateSpreadMs,
     }
 
     const now = this.#opts.now()
     this.#epoch = currentEpoch(now)
     this.#attempts = new AttemptCounter(
-      { limit: DEFAULTS.attemptLimit, windowMs: DEFAULTS.attemptWindowMs },
+      { limit: this.#opts.attemptLimit, windowMs: this.#opts.attemptWindowMs },
       now
     )
 
@@ -154,6 +208,17 @@ export class RelayServer {
       wss.once('error', reject)
       wss.once('listening', () => {
         wss.off('error', reject)
+
+        // Something has to stay attached. An 'error' with no listener is an
+        // unhandled 'error' event, which takes the process down — so a
+        // transient fault after startup would kill a relay that could have
+        // carried on. Logged and survived instead; the supervisor restarts it
+        // if it turns out to be fatal.
+        wss.on('error', (err) => {
+          const log = opts.log ?? ((line: string) => console.log(line))
+          log(`relay: server error after start: ${String(err)}`)
+        })
+
         resolve(new RelayServer(wss, opts))
       })
     })
@@ -209,7 +274,7 @@ export class RelayServer {
       socket.close(CLOSE_BUSY, 'full')
       return
     }
-    if (!this.#attempts.allow(req.socket.remoteAddress ?? '', now)) {
+    if (!this.#attempts.allow(clientAddress(req, this.#opts.trustProxy), now)) {
       socket.close(CLOSE_BUSY, 'slow down')
       return
     }
@@ -219,6 +284,13 @@ export class RelayServer {
       socket.close(CLOSE_BAD_JOIN, 'join')
       return
     }
+    // Exact, not tolerant.
+    //
+    // A window here looks kinder and is not: both peers derive the handle from
+    // the epoch, so a client left on the wrong one derives a handle its box
+    // never registers and waits forever in an empty room. Saying "wrong epoch"
+    // is what gets the two of them to the same string. The client clamps how
+    // far it will be moved, so this cannot be used to steer it.
     if (join.epoch !== this.#epoch) {
       // The peer guessed from its own clock. Hand back the right number so it
       // can derive this epoch's handle and come straight back.
@@ -343,13 +415,42 @@ export class RelayServer {
       }
     }
 
-    const epoch = currentEpoch(this.#opts.now())
+    // Rotation is spread, not simultaneous.
+    //
+    // Both peers derive the handle from the epoch, so when it advances they
+    // genuinely both have to reconnect — a room cannot straddle the boundary,
+    // because handle(secret, N) and handle(secret, N-1) are unrelated strings
+    // and the relay has no way to know they belong together. That is the
+    // design working.
+    //
+    // What was wrong was doing it to everyone at once. Every peer came back
+    // inside the client's three-second jitter, and a limiter that sees one
+    // address behind a TLS terminator rejected all but the first few — for a
+    // window, then longer as backoff compounded. A self-inflicted outage every
+    // hour, on the hour.
+    //
+    // It leaked, too: a relay watching every handle vanish together and a
+    // fresh set appear seconds later can line the two up by timing alone,
+    // which is the correlation rotation exists to prevent.
+    //
+    // So each room gets a deterministic offset from its own handle, spread
+    // across the rotation window. No timer per room, no thundering herd, and
+    // nothing for an observer to pair up.
+    const nowMs = this.#opts.now()
+    const epoch = currentEpoch(nowMs)
     if (epoch !== this.#epoch) {
       this.#epoch = epoch
-      for (const room of this.#rooms.values()) {
-        for (const peer of peers(room)) peer.socket.close(CLOSE_ROTATED, String(epoch))
+      this.#rotateStartedAtMs = nowMs
+    }
+
+    if (this.#rotateStartedAtMs !== null) {
+      const elapsed = nowMs - this.#rotateStartedAtMs
+      for (const [handle, room] of this.#rooms) {
+        if (elapsed < rotationOffsetMs(handle, this.#opts.rotateSpreadMs)) continue
+        for (const peer of peers(room)) peer.socket.close(CLOSE_ROTATED, String(this.#epoch))
+        this.#rooms.delete(handle)
       }
-      this.#rooms.clear()
+      if (elapsed >= this.#opts.rotateSpreadMs) this.#rotateStartedAtMs = null
     }
 
     this.#opts.log(
