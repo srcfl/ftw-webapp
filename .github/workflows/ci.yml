@@ -66,3 +66,22 @@ jobs:
             echo "over budget — see docs/architecture.md on why the first frame matters"
             exit 1
           fi
+
+      # The QR decoder is 47 kB gzip — half the budget again — and only Safari
+      # needs it. It earns its place by being fetched when someone taps Scan,
+      # so a static import that pulls it into the entry chunk is a regression
+      # the byte count alone would not make obvious.
+      - name: QR decoder stays out of the launch bundle
+        run: |
+          if ! ls dist/assets/jsQR-*.js >/dev/null 2>&1; then
+            echo "no separate decoder chunk — it was inlined somewhere"
+            exit 1
+          fi
+          # "binarize" is jsQR's own, not ours — grepping for a string we pass
+          # in would match our call site, which lives in the entry bundle by
+          # design and says nothing about where the library ended up.
+          if grep -l "binarize" dist/assets/index-*.js >/dev/null 2>&1; then
+            echo "the decoder reached the entry bundle; keep the import dynamic"
+            exit 1
+          fi
+          echo "decoder is its own chunk: $(gzip -c dist/assets/jsQR-*.js | wc -c | tr -d ' ') bytes gzip, fetched on demand"

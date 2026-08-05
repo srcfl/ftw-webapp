@@ -113,12 +113,10 @@
 
     {#if canScan()}
       <button class="primary" onclick={startScan}>Scan code</button>
-    {:else}
-      <p class="hint">
-        Point your phone's camera at the code on the box. It opens the same
-        link.
-      </p>
     {/if}
+    <p class="hint">
+      Or point your phone's camera at the code. It opens the same link.
+    </p>
   {/if}
 </section>
 
