@@ -83,6 +83,22 @@ export class PlanStore {
     return this.#site.session.caps.has('plan.dispatch')
   }
 
+  /**
+   * Reload the plan until its revision moves past the one on screen.
+   *
+   * Every three seconds for at most thirty: the box acknowledges a mode
+   * change before its optimizer has replanned, so the first fetch usually
+   * returns the plan of the old mode with its old rev.
+   */
+  async #followPlan(): Promise<void> {
+    const before = this.plan?.rev
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await this.load()
+      if (this.plan?.rev !== before) return
+      await new Promise((r) => setTimeout(r, 3_000))
+    }
+  }
+
   async load(): Promise<void> {
     this.loading = true
     this.problem = null
@@ -116,8 +132,12 @@ export class PlanStore {
       switch (result.state) {
         case 'applied':
           this.command = { kind: 'applied', mode }
-          // The plan is a function of the mode, so it is now wrong on screen.
-          void this.load()
+          // The plan is a function of the mode, so it is now wrong on screen —
+          // and the box replans in the background, so one reload can race the
+          // optimizer and fetch the old plan again. Follow until the revision
+          // moves, then stop; a bounded follow, because an optimizer that
+          // never finishes must not leave a poller running forever.
+          void this.#followPlan()
           break
         case 'unconfirmed':
           // The box took it; the hardware has not said so. Neither a success
