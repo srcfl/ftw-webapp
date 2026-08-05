@@ -16,7 +16,13 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 
 const DB_NAME = 'ftw'
-const DB_VERSION = 1
+// 2 repairs the databases version 1 could leave behind. The launch probe in
+// index.html used to create 'ftw' at version 1 with no object stores; an app
+// opening the same version then got no upgrade callback and created none
+// either, so every read and write failed for the life of the install. The
+// probe no longer does that — but installs that already suffered it cannot be
+// healed by prevention, only by a version they have not seen.
+const DB_VERSION = 2
 
 export interface StoredSnapshot {
   siteId: string
@@ -112,12 +118,21 @@ let dbPromise: Promise<FtwDB> | null = null
 export function db(): Promise<FtwDB> {
   dbPromise ??= openDB<FtwSchema>(DB_NAME, DB_VERSION, {
     upgrade(database) {
-      database.createObjectStore('meta')
-      database.createObjectStore('keys')
-      database.createObjectStore('sites', { keyPath: 'siteId' })
-      database.createObjectStore('snapshot', { keyPath: 'siteId' })
-      database.createObjectStore('tiles', { keyPath: 'key' })
-      database.createObjectStore('prefs')
+      // Idempotent, so this doubles as the repair path: a database that was
+      // created empty gets its stores, and one that already has them is
+      // untouched. Data in an existing store is never rebuilt.
+      type StoreName = 'meta' | 'keys' | 'sites' | 'snapshot' | 'tiles' | 'prefs'
+      const ensure = (name: StoreName, options?: IDBObjectStoreParameters) => {
+        if (!database.objectStoreNames.contains(name)) {
+          database.createObjectStore(name, options)
+        }
+      }
+      ensure('meta')
+      ensure('keys')
+      ensure('sites', { keyPath: 'siteId' })
+      ensure('snapshot', { keyPath: 'siteId' })
+      ensure('tiles', { keyPath: 'key' })
+      ensure('prefs')
     },
     blocked() {
       // Another tab holds an older version open. Nothing to do but wait; the
