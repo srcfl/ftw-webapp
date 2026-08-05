@@ -260,5 +260,8 @@ describe('a passive observer learns only that a frame went by', () => {
     expect(a.lengths).toEqual(b.lengths)
     expect(Math.abs(a.mean - b.mean)).toBeLessThan(4)
     expect(Math.abs(a.zeros - b.zeros)).toBeLessThan(120)
-  })
+    // A sweep, not a unit: 256 sessions of real crypto. On a busy CI runner
+    // it brushes the default five seconds, and a timeout here would say
+    // "slow machine", never "leak".
+  }, 30_000)
 })
