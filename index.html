@@ -73,8 +73,23 @@
           try {
             const req = indexedDB.open('ftw', 1)
             req.onerror = () => done(null)
-            // An upgrade means there is nothing cached yet for this version.
-            req.onupgradeneeded = () => done(null)
+            // An upgrade here means the database does not exist yet — and
+            // opening it CREATED it, at version 1, with no object stores. The
+            // app's own open() uses the same version, so its upgrade would
+            // never run and the stores would never appear: every read and
+            // write broken for the life of the install, which the user meets
+            // as a pairing screen for a house they already paired.
+            //
+            // Aborting undoes the creation, so the app's open is the one that
+            // builds the schema. There is nothing to read either way.
+            req.onupgradeneeded = () => {
+              try {
+                req.transaction.abort()
+              } catch {
+                /* nothing to undo */
+              }
+              done(null)
+            }
             req.onsuccess = () => {
               try {
                 const database = req.result

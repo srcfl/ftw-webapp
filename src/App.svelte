@@ -25,12 +25,67 @@
   // Not awaited: the shell paints now, and cached readings land a frame or
   // two later. The read itself was started by the inline script in
   // index.html, before this bundle was even parsed.
-  let siteId = $state<string | null>(localStorage.getItem('ftw.site'))
+  // The fast path. localStorage is a hint, not the record: it is read
+  // synchronously so a warm launch paints without waiting on IndexedDB, and
+  // the database is consulted right after in case this hint is missing —
+  // which is exactly what happens to a freshly installed PWA that cannot see
+  // the browser tab's localStorage, and to any install whose localStorage was
+  // evicted while the sites survived.
+  let siteId = $state<string | null>(readSiteHint())
+
+  function readSiteHint(): string | null {
+    try {
+      return localStorage.getItem('ftw.site')
+    } catch {
+      // Blocked storage costs a slower start, never a broken launch.
+      return null
+    }
+  }
 
   // Read once at startup, on purpose: this is the launch path, not a reaction
   // to a value that changes. Pairing calls start() itself.
   const initialSiteId = untrack(() => siteId)
   if (initialSiteId) void site.start(initialSiteId)
+
+  /**
+   * The database is the record; localStorage only points at it.
+   *
+   * Without this a launch that has no hint shows the pairing screen even
+   * though this device is paired and its key is in the vault — the state a
+   * newly installed PWA starts in on iOS, where the standalone app does not
+   * inherit the tab's localStorage. Recovering here means the install pairs
+   * itself from what it already has instead of asking for a code the box
+   * would rightly refuse.
+   */
+  /**
+   * True while the database is still being asked whether this device is
+   * paired. The pairing screen is a large, decisive thing to show someone;
+   * flashing it for a frame before recovering would be worse than the bug it
+   * replaces. The shell paints regardless — only the content area waits, and
+   * only for a local read.
+   */
+  let resolvingSite = $state(!initialSiteId)
+
+  if (!initialSiteId) {
+    void (async () => {
+      const { currentSiteId } = await import('$lib/identity/pairing')
+      let recovered: string | null = null
+      try {
+        recovered = await currentSiteId()
+      } finally {
+        resolvingSite = false
+      }
+      if (!recovered || siteId) return
+      siteId = recovered
+      try {
+        localStorage.setItem('ftw.site', recovered)
+      } catch {
+        /* the database still holds the record */
+      }
+      await site.start(recovered)
+      await connect(recovered)
+    })()
+  }
 
   /**
    * Landing on a pairing link, from a camera or a shared URL.
@@ -59,7 +114,7 @@
   }
 
   /** Nothing paired and nothing cached: the only screen is pairing. */
-  const needsPairing = $derived(!siteId && !site.paired)
+  const needsPairing = $derived(!siteId && !site.paired && !resolvingSite)
 
   onMount(() => {
     // The last chance to persist. 'visibilitychange' rather than 'unload',
@@ -137,7 +192,12 @@
   <UpdateLine />
 
   <main>
-    {#if needsPairing || pairingFragment}
+    {#if resolvingSite && !pairingFragment}
+      <!-- A local read, so this is a frame or two. Deliberately quiet: it is
+           not a spinner for a network call, it is the app checking what it
+           already knows. -->
+      <section class="settling"></section>
+    {:else if needsPairing || pairingFragment}
       <Pair fragment={pairingFragment} onPaired={(s) => onPaired(s.siteId)} />
     {:else if router.current === 'plan'}
       <Plan {site} />
@@ -180,6 +240,10 @@
 </div>
 
 <style>
+  .settling {
+    min-height: 60vh;
+  }
+
   .app {
     display: flex;
     flex-direction: column;
