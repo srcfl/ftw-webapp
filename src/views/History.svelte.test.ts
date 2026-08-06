@@ -118,6 +118,90 @@ describe('a history window the wire cut short', () => {
     expect(document.body.textContent).not.toMatch(/no history yet/i)
   })
 
+  it('does not repaint the chart for a live stream it is not drawing', async () => {
+    // The series is a canvas, and a canvas has one way to change: repaint all
+    // of it. History draws a window that ended before the screen opened, so a
+    // second of live power is not news to it — and a chart that redrew at
+    // 1 Hz would reduce two thousand readings again every time, for a picture
+    // identical to the one already on screen. What the stream is allowed to
+    // move is the freshness band above, and nothing else here.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    let paints = 0
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      setTransform() {},
+      clearRect() {
+        paints++
+      },
+      fillRect() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      arc() {},
+      stroke() {},
+      fill() {},
+    } as never)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 20 }))
+
+    render(History, { props: { site } })
+    for (let i = 0; i < 100 && paints === 0; i++) await vi.advanceTimersByTimeAsync(20)
+    expect(paints, 'nothing was ever drawn, so this proves nothing').toBeGreaterThan(0)
+
+    await vi.advanceTimersByTimeAsync(500)
+    const drawn = paints
+    const before = site.session.uptimeMs
+
+    // Ten seconds of live power, one frame a second, the way the box sends it.
+    for (let i = 0; i < 10; i++) {
+      box.tick()
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+
+    // The stream really did land, or the count below is free.
+    expect(site.session.uptimeMs, 'no live frames arrived at all').toBeGreaterThan(before)
+    expect(site.session.phase).toBe('streaming')
+    expect(paints - drawn, 'the chart repainted for readings it does not draw').toBe(0)
+  })
+
+  it('prints the scale in round numbers, and says which way is which', async () => {
+    // The scale is what turns a height on the canvas into a quantity, so it
+    // has to survive being read at arm's length. Two faults it had: every
+    // rung under 10 kW carried a forced decimal, so "5.0 kW" sat under
+    // "10 kW" and the pair read as a mistake; and the axis was ruled on
+    // whichever round step first exceeded the average gap, which for a house
+    // that both draws and exports left the whole export half unlabelled —
+    // and with it the only word on the chart saying which way is which.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 20 }))
+
+    render(History, { props: { site } })
+    for (let i = 0; i < 100 && !document.querySelector('.ytick'); i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+
+    const rungs = [...document.querySelectorAll('.ytick')].map((e) =>
+      e.textContent!.replace(/\s+/g, ' ').trim()
+    )
+    expect(rungs.length, 'the chart drew no scale at all').toBeGreaterThanOrEqual(3)
+
+    for (const rung of rungs) {
+      expect(rung, 'a trailing zero the rung never needed').not.toMatch(/\.0(\D|$)/)
+      expect(rung, 'the wire sign convention leaked onto the axis').not.toMatch(/-/)
+    }
+
+    // The simulated house both draws and sends back, so both words belong.
+    expect(rungs.some((r) => r.endsWith('in')), 'nothing says which way is in').toBe(true)
+    expect(rungs.some((r) => r.endsWith('out')), 'nothing says which way is out').toBe(true)
+  })
+
   it('sends one window for one tap, not two', async () => {
     // The range is the question askWhenLive asks under, so setting it already
     // fetches. Fetching in select() as well put the same window on the wire

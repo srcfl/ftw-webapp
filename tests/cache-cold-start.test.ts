@@ -10,7 +10,7 @@ import 'fake-indexeddb/auto'
 import { Session } from '$lib/protocol/session'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import { db, resetDbForTests } from '$lib/store/db'
+import { db, resetDbForTests, type StoredSnapshot } from '$lib/store/db'
 import { cacheKey, seal, unseal, sealJson, unsealJson, type Bytes } from '$lib/store/seal'
 import {
   saveSnapshot,
@@ -18,6 +18,8 @@ import {
   snapshotFromSession,
   sessionPatchFromSnapshot,
 } from '$lib/store/snapshot'
+import { SiteStore } from '$lib/state/site.svelte'
+import { FID } from '$lib/format/explanation'
 
 
 /**
@@ -166,5 +168,42 @@ describe('cold start paints from cache', () => {
 
   it('reports nothing cached rather than failing on a first run', async () => {
     expect(await loadSnapshot('never-seen')).toBeNull()
+  })
+
+  it('paints from a row an older build wrote, rather than blanking', async () => {
+    // A row with readings but no dictionary. Every build that wrote one before
+    // the box started naming the source behind each field left exactly this,
+    // and it survives an update because the cache is not versioned.
+    //
+    // The row's type is a claim about what was written, not a fact about what
+    // comes back — so the restore has to make one. Undefined reached the
+    // session, because the spread that applies a patch copies a key whatever
+    // it holds, and the first getter to index the dictionary threw while the
+    // view was being built. A throw there is a blank app, and reloading is
+    // never the fix in this one.
+    await saveSnapshot({
+      siteId: 'sim-0001',
+      savedAtMs: Date.now() - 90_000,
+      uptimeMs: 3_600_000,
+      fields: { [FID.GRID_W]: 11_400 },
+      sources: {},
+      dispatchBlockedBy: [],
+      controlRev: 0,
+    } as unknown as StoredSnapshot)
+
+    const site = new SiteStore('test')
+    await site.start('sim-0001')
+
+    // Read the way the shell reads them, in the order it paints.
+    expect(() => site.carrier).not.toThrow()
+    expect(() => site.srcState).not.toThrow()
+    expect(() => site.ageMs).not.toThrow()
+
+    // And the readings are actually on screen, which is the point of the row.
+    expect(site.carrier).toBe('cache')
+    expect(site.session.fields.get(FID.GRID_W)).toBe(11_400)
+    expect(site.ageMs).toBeGreaterThan(60_000)
+
+    site.destroy()
   })
 })

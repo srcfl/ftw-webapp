@@ -16,9 +16,27 @@
 
   interface Props {
     site: SiteStore
+    /**
+     * This phone is pointed at a home, whether or not one has painted yet.
+     *
+     * Not `site.paired`, which is really "a reading has arrived". A phone that
+     * is paired, cannot reach its box and has nothing cached fails that test
+     * while being as paired as a phone gets — and this screen told it to scan
+     * a code, under a tab bar leading to a Box screen naming the very box it
+     * had just denied. The shell owns the answer, so both read the same one.
+     */
+    hasHome: boolean
+    /**
+     * What to do when no carrier could be built. Null while one exists.
+     *
+     * The difference decides what this screen may promise: with a carrier,
+     * waiting is genuinely the right thing to do, and without one nothing is
+     * happening at all.
+     */
+    connectHelp?: string | null
   }
 
-  let { site }: Props = $props()
+  let { site, hasHome, connectHelp = null }: Props = $props()
 
   const live = $derived(site.session.phase === 'streaming' && site.carrier !== 'cache')
 
@@ -32,7 +50,7 @@
   })
 </script>
 
-{#if !site.paired}
+{#if !hasHome}
   <section class="empty">
     <h1>Nothing paired yet</h1>
     <p>
@@ -60,6 +78,23 @@
       {site.session.terminated?.reason === 'revoked'
         ? 'Your access to this home was withdrawn by its owner.'
         : 'This session ended.'}
+    </p>
+  </section>
+{:else if site.session.fields.size === 0}
+  <!-- Paired, and not one reading has ever arrived — from the box or off the
+       disk. The house diagram below would draw itself hollow, which reads as a
+       home sitting at zero rather than as a phone that has heard nothing. So
+       say the second thing, and say what is being done about it: nothing, by
+       the person holding the phone. -->
+  <section class="empty">
+    <h1>Nothing from your box yet</h1>
+    <p>
+      {#if connectHelp}
+        {connectHelp}
+      {:else}
+        This phone is paired to it and keeps trying on its own. Your house
+        appears here as soon as the box answers.
+      {/if}
     </p>
   </section>
 {:else}

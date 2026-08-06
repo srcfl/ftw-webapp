@@ -54,6 +54,134 @@ export function segmentsOf(column: Int32Array): Segment[] {
   return out
 }
 
+/**
+ * Where sample `i` sits, in pixels from the left edge of the plot.
+ *
+ * One mapping, exported, because three things have to agree on it: the line,
+ * the per-pixel reduction below, and the hit test at the bottom of this file.
+ * When they drifted apart the readout named a different sample from the one
+ * under the finger.
+ */
+export function xOf(i: number, points: number, width: number): number {
+  if (points <= 1 || width <= 1) return 0
+  return (i / (points - 1)) * (width - 1)
+}
+
+/** One pixel column of a series: the true extent of the readings under it. */
+export interface Column {
+  /** Pixel column, from the left of the plot. */
+  px: number
+  min: number
+  max: number
+  /** Mean of the readings in this column. */
+  mid: number
+}
+
+/**
+ * Reduce a series to one entry per pixel column.
+ *
+ * A month at hourly resolution is 720 readings on a phone 300 pixels wide.
+ * Drawn as a polyline that is not a curve, it is a comb: two or three
+ * readings fight over every pixel and what the eye gets is the interference
+ * between them, not the shape of the month.
+ *
+ * So each pixel reports what is actually under it — the lowest reading, the
+ * highest, and their mean. Nothing is invented and nothing is dropped: the
+ * highest reading of the window is still the highest point drawn, which is
+ * exactly what a mean-only downsample would have thrown away.
+ *
+ * A pixel with no readings at all yields no entry, so the pen lifts there
+ * the same way it lifts over a gap in `segmentsOf`.
+ */
+export function columnsOf(column: Int32Array, width: number): Column[] {
+  const points = column.length
+  if (points === 0 || width <= 0) return []
+
+  const out: Column[] = []
+  let current: Column | null = null
+  let sum = 0
+  let count = 0
+
+  for (let i = 0; i < points; i++) {
+    const v = column[i]!
+    if (v === MISSING_SAMPLE) continue
+
+    const px = Math.round(xOf(i, points, width))
+    if (!current || current.px !== px) {
+      if (current) current.mid = sum / count
+      current = { px, min: v, max: v, mid: v }
+      out.push(current)
+      sum = 0
+      count = 0
+    }
+
+    if (v < current.min) current.min = v
+    if (v > current.max) current.max = v
+    sum += v
+    count++
+  }
+
+  if (current) current.mid = sum / count
+  return out
+}
+
+/**
+ * Split reduced columns into stretches of neighbouring pixels.
+ *
+ * A band must not close over a pixel that has no readings, for the same
+ * reason a line must not. `end` is exclusive and indexes the column array,
+ * not the pixel.
+ */
+export function runsOf(columns: readonly Column[]): Segment[] {
+  if (columns.length === 0) return []
+
+  const out: Segment[] = []
+  let start = 0
+  for (let i = 1; i <= columns.length; i++) {
+    if (i === columns.length || columns[i]!.px !== columns[i - 1]!.px + 1) {
+      out.push({ start, end: i })
+      start = i
+    }
+  }
+  return out
+}
+
+/**
+ * Runs where no series has a reading — the box recorded nothing at all.
+ *
+ * A per-series hole shows as a lifted pen, but four lifted pens over an
+ * outage read as "nothing happened" rather than "nothing is known", and the
+ * eye closes the distance between the two ends by itself. These runs are
+ * what the chart shades so an outage looks like one.
+ */
+export function blankSpans(columns: readonly Int32Array[]): Segment[] {
+  const points = columns[0]?.length ?? 0
+  if (points === 0 || columns.length === 0) return []
+
+  const out: Segment[] = []
+  let start = -1
+
+  for (let i = 0; i < points; i++) {
+    let any = false
+    for (const column of columns) {
+      if (isPresent(column[i])) {
+        any = true
+        break
+      }
+    }
+
+    if (!any) {
+      if (start < 0) start = i
+    } else if (start >= 0) {
+      out.push({ start, end: i })
+      start = -1
+    }
+  }
+
+  if (start >= 0) out.push({ start, end: points })
+  return out
+}
+
 export type Domain = [min: number, max: number]
 
 /**
@@ -91,20 +219,41 @@ export function unionDomain(a: Domain, b: Domain): Domain {
 }
 
 /**
+ * The vertical extent to draw against, held open by whatever is on screen.
+ *
+ * One function so the numbers printed beside the canvas and the rules drawn
+ * on it come from the same call. Two calls drift the moment one of them
+ * forgets the held domain, and then the labels name the wrong gridlines.
+ */
+export function axisOf(columns: readonly Int32Array[], locked: Domain | null): Domain {
+  const own = domainOf(columns)
+  return locked ? unionDomain(own, locked) : own
+}
+
+/**
  * Round numbers for the axis: at most `count` of them, on a 1/2/5 step.
  *
  * Arbitrary divisions of the range give ticks like "3417 W", which nobody
  * reads. A person checks a chart against numbers they already hold.
+ *
+ * The step is the narrowest on the ladder that still fits the budget, not the
+ * first one wider than the average gap. That distinction is the whole of this
+ * function: a house running between -8 kW and +12 kW asks for a 5 kW gap,
+ * and taking the next rung up ruled the chart at zero and 10 kW only —
+ * leaving every exported watt below an unlabelled half of the axis.
  */
 export function ticksOf([min, max]: Domain, count = 4): number[] {
-  const raw = (max - min) / Math.max(1, count)
-  if (!Number.isFinite(raw) || raw <= 0) return [0]
+  const span = max - min
+  if (!Number.isFinite(span) || span <= 0) return [0]
 
-  const magnitude = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) ?? magnitude * 10
+  const budget = Math.max(2, count)
+  const magnitude = 10 ** Math.floor(Math.log10(span / budget))
+  const ladder = [1, 2, 5, 10, 20].map((m) => m * magnitude)
+  const rungs = (step: number) => Math.floor(max / step) - Math.ceil(min / step) + 1
+  const step = ladder.find((s) => rungs(s) <= budget) ?? ladder[ladder.length - 1]!
 
   const out: number[] = []
-  for (let v = Math.ceil(min / step) * step; v <= max; v += step) out.push(v)
+  for (let k = Math.ceil(min / step); k * step <= max; k++) out.push(k * step)
   return out
 }
 
@@ -117,5 +266,7 @@ export function ticksOf([min, max]: Domain, count = 4): number[] {
  */
 export function indexAt(x: number, width: number, points: number): number | null {
   if (points <= 0 || width <= 0 || x < 0 || x > width) return null
-  return Math.min(points - 1, Math.max(0, Math.round((x / width) * (points - 1))))
+  if (points === 1 || width === 1) return 0
+  // The inverse of xOf, so the sample named is the sample drawn there.
+  return Math.min(points - 1, Math.max(0, Math.round((x / (width - 1)) * (points - 1))))
 }

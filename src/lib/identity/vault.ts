@@ -24,6 +24,7 @@
 
 import { openDB, type IDBPDatabase } from 'idb'
 import { x25519 } from '@noble/curves/ed25519.js'
+import { encodeBase64url } from './base64url'
 import {
   assertWrappingKey,
   isUserCancelled,
@@ -163,6 +164,23 @@ export async function deviceStaticPublic(store: VaultStore): Promise<Uint8Array 
 export async function enrolledCredentialIds(store: VaultStore): Promise<string[]> {
   return (await readVault(store))?.copies.map((c) => c.credentialId) ?? []
 }
+
+/**
+ * The name this device answers to on the box's list of paired phones.
+ *
+ * The box names a row by the first eight characters of the base64url of the
+ * static key it authenticated — appenroll.deviceID in srcfl/ftw. It is a
+ * prefix, not a key: enough to find the row and remove it, not enough to
+ * impersonate anyone. Computed here rather than asked for, because someone
+ * signing out needs it exactly when the box is out of reach.
+ */
+export async function deviceIdOnBox(store: VaultStore): Promise<string | null> {
+  const publicKey = await deviceStaticPublic(store)
+  return publicKey ? encodeBase64url(publicKey).slice(0, BOX_DEVICE_ID_CHARS) : null
+}
+
+/** appenroll.deviceID's prefix length. A test pins the two together. */
+export const BOX_DEVICE_ID_CHARS = 8
 
 // ---------------------------------------------------------------------------
 // The device key

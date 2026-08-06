@@ -16,7 +16,10 @@
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router } from '$lib/state/route.svelte'
 
-  const site = new SiteStore(__APP_BUILD__)
+  // Replaced wholesale when someone signs out. `$state.raw` rather than
+  // `$state`, because what changes is which store the views read, never a
+  // field inside it — the store owns its own reactivity.
+  let site = $state.raw(new SiteStore(__APP_BUILD__))
   const router = new Router()
 
   /** Reserved for the development simulator so a real pairing never collides. */
@@ -45,7 +48,10 @@
   // Read once at startup, on purpose: this is the launch path, not a reaction
   // to a value that changes. Pairing calls start() itself.
   const initialSiteId = untrack(() => siteId)
-  if (initialSiteId) void site.start(initialSiteId)
+  // Untracked for the same reason: the store only ever changes on a sign-out,
+  // which happens long after the launch path has run and replaces the views
+  // reading it anyway.
+  if (initialSiteId) void untrack(() => site.start(initialSiteId))
 
   /**
    * The database is the record; localStorage only points at it.
@@ -83,7 +89,7 @@
         /* the database still holds the record */
       }
       await site.start(recovered)
-      await connect(recovered)
+      await connect(site, recovered)
     })()
   }
 
@@ -122,13 +128,48 @@
    * because nothing that has not been asked for belongs on the path to the
    * first frame.
    */
-  let seen = $state({ plan: false, history: false })
+  let seen = $state({ plan: false, history: false, box: false })
   $effect(() => {
     if (router.current === 'plan') seen.plan = true
     if (router.current === 'history') seen.history = true
+    if (router.current === 'box') seen.box = true
   })
 
   const needsPairing = $derived(!siteId && !site.paired && !resolvingSite)
+
+  /** This phone is pointed at a home, whether or not one has painted yet. */
+  const hasHome = $derived(site.paired || siteId !== null)
+
+  /** Whatever is feeding the store: the development simulator, or nothing. */
+  let stopFeed: (() => void) | undefined
+
+  /** Development starts on the simulated box unless a real one is paired. */
+  const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
+
+  /**
+   * Point a store at its box.
+   *
+   * One function rather than a branch at every call site, because a home put
+   * back after a sign-out the disk refused has to be fed exactly the way the
+   * launch path feeds it — anything less leaves a house on screen that has
+   * quietly stopped moving.
+   *
+   * Which box is decided by the id, not by how the app started: the simulator
+   * has a reserved one, so a real pairing in the same browser takes the relay
+   * path. The store is passed rather than read, so a feed can never attach
+   * itself to whichever store happens to be current when its import lands.
+   */
+  function openFeed(store: SiteStore, id: string): void {
+    if (import.meta.env.DEV && id === SIM_SITE_ID) {
+      // Dynamic import keeps the simulator out of production bundles entirely.
+      void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
+        stopFeed = attachSimulatedSite(store).stop
+      })
+    } else {
+      // The passkey prompt lands here, after the first paint — never before.
+      void connect(store, id)
+    }
+  }
 
   onMount(() => {
     // The last chance to persist. 'visibilitychange' rather than 'unload',
@@ -139,42 +180,47 @@
     document.addEventListener('visibilitychange', onHide)
     const unlisten = router.listen()
 
-    let stop: (() => void) | undefined
-
-    // The simulated box has a reserved id, so a real pairing on the same
-    // browser takes the relay path instead. Dynamic import keeps the simulator
-    // out of production bundles entirely.
-    const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
-
     if (useSimulator) {
-      void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
-        siteId = SIM_SITE_ID
-        localStorage.setItem('ftw.site', SIM_SITE_ID)
-        // Only when the launch path did not already start it: a second start
-        // re-reads IndexedDB on the very path that exists to touch it once.
-        if (!initialSiteId) void site.start(SIM_SITE_ID)
-        stop = attachSimulatedSite(site).stop
-      })
+      siteId = SIM_SITE_ID
+      localStorage.setItem('ftw.site', SIM_SITE_ID)
+      // Only when the launch path did not already start it: a second start
+      // re-reads IndexedDB on the very path that exists to touch it once.
+      if (!initialSiteId) void site.start(SIM_SITE_ID)
+      openFeed(site, SIM_SITE_ID)
     } else if (initialSiteId) {
-      // The passkey prompt lands here, after the first paint — never before.
-      void connect(initialSiteId)
+      openFeed(site, initialSiteId)
     }
 
     return () => {
       document.removeEventListener('visibilitychange', onHide)
       unlisten()
-      stop?.()
+      stopFeed?.()
       site.destroy()
     }
   })
-  async function connect(id: string) {
+  /**
+   * What to do when no carrier could be built at all. Null while there is one.
+   *
+   * Every other failure on this path heals itself, because the carrier
+   * reconnects from the inside. This one cannot: there is no carrier. A phone
+   * whose identity was evicted while its launch pointer survived would
+   * otherwise sit forever on a screen promising that it keeps trying.
+   */
+  let connectHelp = $state<string | null>(null)
+
+  async function connect(store: SiteStore, id: string) {
     try {
       const { connectToSite } = await import('$lib/state/connect')
-      site.connect(await connectToSite(id))
-    } catch {
+      store.connect(await connectToSite(id))
+      connectHelp = null
+    } catch (err) {
       // The cached readings stay on screen with an honest age. There is no
-      // "try again" button because the carrier reconnects on its own; this
-      // only covers the passkey being dismissed or the vault being empty.
+      // "try again" button because the carrier reconnects on its own — but
+      // that is only true once one exists, and these are the failures where
+      // none does. ConnectError already carries the sentence saying what to
+      // do instead of waiting; throwing it away is what made the screen lie.
+      const { ConnectError } = await import('$lib/state/connect')
+      connectHelp = err instanceof ConnectError ? err.help : null
     }
   }
 
@@ -191,15 +237,73 @@
     if (location.pathname === '/p') history.replaceState(null, '', '/')
     pairingFragment = null
     void site.start(pairedSiteId)
-    void connect(pairedSiteId)
+    openFeed(site, pairedSiteId)
+  }
+
+  /**
+   * Leave this home — or put it back, if the disk would not let go of it.
+   *
+   * It lives in the shell because the shell owns the two things that write:
+   * the session that is still receiving frames, and whatever is feeding it.
+   * Both have to stop before the disk is touched, or a reading that lands
+   * mid-clear writes the home straight back; leaveHome() is where that order
+   * is kept and tested.
+   *
+   * Imported at the moment someone asks for it. A handful of installs will
+   * ever run this, and none of them on the path to the first frame.
+   *
+   * When the disk refuses, this phone still holds the home. So the shell puts
+   * it back on screen and back on the wire rather than leaving a frozen view
+   * behind a message promising it still works, and rethrows so the Box screen
+   * can say what happened.
+   */
+  async function leave() {
+    const id = site.siteId ?? siteId
+
+    try {
+      const { leaveHome } = await import('$lib/state/leave')
+      await leaveHome({ home: site, stopFeed })
+    } catch (err) {
+      stopFeed = undefined
+      // The old store is stopped for good; a fresh one restores from what is
+      // still on the disk, which is the launch path with the cache warm.
+      site = new SiteStore(__APP_BUILD__)
+      if (id) {
+        const restored = site
+        void restored.start(id)
+        openFeed(restored, id)
+        // The pointer is cleared before the rows are, so it went even though
+        // they stayed. Put it back, or the next cold start finds this home
+        // the slow way — through the database, after painting nothing.
+        void import('$lib/identity/pairing').then(({ setCurrentSite }) => setCurrentSite(id))
+      }
+      throw err
+    }
+
+    // The disk holds no home now, and the copy in memory has stopped. What is
+    // left is the views, still holding readings that are no longer anyone's.
+    // Reloading would clear them — and reloading is never the fix in this
+    // app, so the shell replaces its own state and paints the pairing screen
+    // from the frame after.
+    stopFeed = undefined
+    site = new SiteStore(__APP_BUILD__)
+    siteId = null
+    // A view kept from the old store would come back holding the old home.
+    seen = { plan: false, history: false, box: false }
+    router.go('now')
   }
 </script>
 
 <div class="app">
   <!-- Freshness describes data from a box. With nothing paired there is no
        box and no data, so the band would be answering a question nobody
-       asked — and "showing last known" would be a plain lie. -->
-  {#if site.paired}
+       asked — and "showing last known" would be a plain lie.
+
+       Pointed at a home is the test, not "a reading has arrived". A phone
+       that cannot reach its box has no reading and the most pressing question
+       in the app: whether anything is getting through, and how old what it is
+       looking at is. Hiding the band there hides the answer. -->
+  {#if hasHome}
     <FreshnessBand
       carrier={site.carrier}
       srcState={site.srcState}
@@ -230,7 +334,7 @@
            A view that has never been opened is still not built: `seen` gates
            the first mount, so the cost is paid once and never again. -->
       <div class="view" hidden={router.current !== 'now'}>
-        <Now {site} />
+        <Now {site} {hasHome} {connectHelp} />
       </div>
 
       {#if seen.plan}
@@ -249,13 +353,29 @@
           {/await}
         </div>
       {/if}
+
+      {#if seen.box}
+        <!-- Opened by hand a handful of times in the life of an install, so it
+             is loaded when someone asks for it and never before. -->
+        <div class="view" hidden={router.current !== 'box'}>
+          {#await import('$views/Box.svelte') then module}
+            {@const Box = module.default}
+            <Box {site} {leave} />
+          {/await}
+        </div>
+      {/if}
     {/if}
   </main>
 
-  <!-- Three screens, so three buttons. The hash already works and the back
+  <!-- Four screens, so four buttons. The hash already works and the back
        button comes free; a router library would add a matcher and a history
-       stack to decide between three names. -->
-  {#if site.paired}
+       stack to decide between four names.
+
+       Shown whenever this phone is pointed at a home, not only once a reading
+       has landed. A phone that cannot reach its box and has nothing cached
+       otherwise loses its whole tab bar — including the one screen that lets
+       it leave, which is exactly the screen someone in that state wants. -->
+  {#if hasHome}
     <nav aria-label="Views">
       <button
         type="button"
@@ -271,6 +391,11 @@
         type="button"
         aria-current={router.current === 'history' ? 'page' : undefined}
         onclick={() => router.go('history')}>History</button
+      >
+      <button
+        type="button"
+        aria-current={router.current === 'box' ? 'page' : undefined}
+        onclick={() => router.go('box')}>Box</button
       >
     </nav>
   {/if}
@@ -290,10 +415,17 @@
     display: none;
   }
 
+  /* The shell is exactly one screen, and the view inside it scrolls.
+     `min-height` let the shell grow past the screen instead, so the document
+     took the scrolling, `main` never scrolled inside itself, and the tab bar
+     was pushed below the fold on any view with more than a screenful in it.
+     Minus the top inset because <body> already reserves that for the notch;
+     a shell sized to the whole viewport would hang off the bottom by exactly
+     that much. */
   .app {
     display: flex;
     flex-direction: column;
-    min-height: 100dvh;
+    height: calc(100dvh - env(safe-area-inset-top));
   }
 
   main {

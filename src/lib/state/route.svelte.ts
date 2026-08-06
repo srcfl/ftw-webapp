@@ -1,6 +1,6 @@
 /* Navigation, in full.
  *
- * Three screens. A router library would bring a matcher, a history stack and
+ * Four screens. A router library would bring a matcher, a history stack and
  * a lifecycle to choose between them, none of which this app has a use for.
  * The hash is enough, and it comes with the back button already working —
  * which is what a phone user reaches for first.
@@ -9,9 +9,9 @@
  * to the first frame. The History view itself is loaded on demand.
  */
 
-export type Route = 'now' | 'plan' | 'history'
+export type Route = 'now' | 'plan' | 'history' | 'box'
 
-const ROUTES: Route[] = ['now', 'plan', 'history']
+const ROUTES: Route[] = ['now', 'plan', 'history', 'box']
 
 function fromHash(hash: string): Route {
   const name = hash.replace(/^#\/?/, '')

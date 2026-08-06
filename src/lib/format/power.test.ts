@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatPower, formatSoc, formatAge, directionOf, NOISE_W } from './power'
+import { formatPower, formatScaleWatts, formatSoc, formatAge, directionOf, NOISE_W } from './power'
 import { explain, FID } from './explanation'
 
 describe('formatPower', () => {
@@ -47,6 +47,33 @@ describe('formatPower', () => {
       expect(p.text).not.toContain('NaN')
       expect(p.direction).toBe('idle')
     }
+  })
+})
+
+describe('the numbers beside a chart', () => {
+  it('drops a decimal that is always a zero', () => {
+    // A scale's rungs are round by construction, so formatPower's fixed
+    // decimal puts "5.0 kW" under "10 kW" and the pair looks like a mistake.
+    expect(formatScaleWatts(5000)).toBe('5 kW')
+    expect(formatScaleWatts(10_000)).toBe('10 kW')
+    expect(formatScaleWatts(500)).toBe('500 W')
+  })
+
+  it('keeps a decimal that carries something', () => {
+    expect(formatScaleWatts(1500)).toBe('1.5 kW')
+  })
+
+  it('never writes the minus sign the wire uses', () => {
+    // The direction is a word on the axis. On a rung it would be a sign the
+    // rest of the app has spent every other screen not showing.
+    for (const w of [-500, -5000, -1_500_000]) {
+      expect(formatScaleWatts(w).startsWith('-')).toBe(false)
+    }
+    expect(formatScaleWatts(-5000)).toBe(formatScaleWatts(5000))
+  })
+
+  it('survives non-finite input rather than rendering NaN', () => {
+    for (const bad of [NaN, Infinity, -Infinity]) expect(formatScaleWatts(bad)).toBe('')
   })
 })
 
