@@ -28,6 +28,16 @@ export class PlanStore {
   #timer: ReturnType<typeof setTimeout> | null = null
 
   plan = $state<Plan | null>(null)
+
+  /**
+   * Bumped when something other than the session wants the plan again.
+   *
+   * Part of the name `askWhenLive` asks under, so a replan chased after a
+   * mode change is the same rule as every other ask: one place decides when
+   * to ask again, and one place heals an ask that failed.
+   */
+  want = $state(0)
+
   loading = $state(false)
   /** Set when the box could not answer. A sentence, never a code. */
   problem = $state<string | null>(null)
@@ -93,21 +103,34 @@ export class PlanStore {
   async #followPlan(): Promise<void> {
     const before = this.plan?.rev
     for (let attempt = 0; attempt < 10; attempt++) {
-      await this.load()
-      if (this.plan?.rev !== before) return
+      // Asks by changing the question rather than fetching here. A fetch of
+      // its own would be a second one outside `askWhenLive`, and when these
+      // thirty seconds were up a failed one would leave the screen saying it
+      // was still trying while nothing was.
+      this.want += 1
       await new Promise((r) => setTimeout(r, 3_000))
+      if (this.plan?.rev !== before) return
     }
   }
 
+  /**
+   * Fetch the plan, and say so when the box could not send one.
+   *
+   * Rejects on failure as well as saying it, because the caller that heals
+   * this — `askWhenLive` — has no other way to tell an answer from a failure
+   * the store swallowed. The view keeps whatever plan it had either way.
+   */
   async load(): Promise<void> {
     this.loading = true
     this.problem = null
     try {
       this.plan = await this.#site.plan()
-    } catch {
-      // A plan the box could not send is not a broken app. The view keeps
-      // whatever it had and says the one useful thing.
-      this.problem = "Couldn't reach your box for the plan. It'll load when it's back."
+    } catch (err) {
+      // A plan the box could not send is not a broken app. What happens now
+      // is that the app asks again on its own, so that is what it says — the
+      // sentence is true because askWhenLive makes it true.
+      this.problem = "Couldn't get the plan from your box. Still trying."
+      throw err
     } finally {
       this.loading = false
     }

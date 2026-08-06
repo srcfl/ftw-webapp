@@ -88,18 +88,27 @@ export class HistoryStore {
     return frame.startMs + this.cursor * frame.stepMs
   }
 
+  /**
+   * Choose what the chart covers.
+   *
+   * Only sets the range, because the range is the question `askWhenLive` asks
+   * under: changing it is already what fetches, and what heals a tap whose
+   * answer never comes. Fetching here as well would send the same window
+   * twice for one tap — a second bulk round trip that `#token` then throws
+   * away, on the screen where the wire is busiest.
+   */
   select(range: RangeKey): void {
-    if (range === this.range && this.frame) return
     this.range = range
-    void this.load()
   }
 
   /**
    * Fill the chart: cache first, box second.
    *
-   * Never rejects. A history request that fails leaves whatever was cached on
-   * screen with a line saying it is not current, because that is more useful
-   * than an empty chart and an apology.
+   * A window the box could not serve leaves whatever was cached on screen
+   * with a line saying it is not current, because that is more useful than an
+   * empty chart and an apology — and then rejects, because the caller that
+   * heals this has no other way to tell an answer from a failure the store
+   * swallowed.
    */
   async load(): Promise<void> {
     const token = ++this.#token
@@ -157,10 +166,13 @@ export class HistoryStore {
       show()
 
       if (siteId) void pruneTiles(siteId, toMs - RESOLUTIONS[end.resActual].retentionMs)
-    } catch {
+    } catch (err) {
+      // A reply for a range the user has already moved off is not this
+      // range's news, and it is not a reason to ask for this one again.
       if (token !== this.#token) return
       // What happens now, not what broke inside. The cached chart stays up.
       this.error = tiles.size > 0 ? 'Not up to date — your box is out of reach' : 'No history yet'
+      throw err
     } finally {
       if (token === this.#token) {
         this.loading = false

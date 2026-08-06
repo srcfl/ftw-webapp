@@ -66,6 +66,9 @@
   --ink-raised: var(--surface-raised);
   --ink-elevated: var(--surface-elevated);
   --amber: var(--energy-generation);
+  /* The price chart's "they pay you to take it" colour, and its midnight
+     rule. The box aliases it to amber too — see theme.css. */
+  --yellow: var(--amber);
   --red-e: var(--energy-import);
   --green-e: var(--energy-export);
   --cyan: var(--energy-storage);

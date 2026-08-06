@@ -12,12 +12,13 @@
   Loaded on demand, so none of this sits on the path to the first frame.
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
   import type { Trace } from '$lib/ui/chart'
   import { formatPower } from '$lib/format/power'
   import { MISSING_SAMPLE } from '$lib/protocol/messages'
   import { HistoryStore, RANGES, RANGE_KEYS, type RangeKey } from '$lib/state/history.svelte'
+  import { askWhenLive } from '$lib/state/ask.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -40,9 +41,13 @@
     { name: 'load_w', label: 'House', colorVar: '--fg-dim' },
   ]
 
-  onMount(() => {
-    void history.load()
-  })
+  // Asked for when the session is up, again whenever it comes back, and again
+  // after a window the box could not serve. The cached tiles are already on
+  // screen by then; what a drop cost was the difference between them and now,
+  // and on mount alone nothing ever went back for it. The range in flight is
+  // whichever one is selected, so a reconnect refills the chart the user is
+  // actually looking at.
+  askWhenLive(untrack(() => site), () => history.range, () => history.load())
 
   const frame = $derived(history.frame)
   const hasData = $derived((frame?.points ?? 0) > 0)

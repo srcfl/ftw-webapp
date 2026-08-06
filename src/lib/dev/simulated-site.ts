@@ -18,6 +18,16 @@ export interface SimHandle {
   stop: () => void
   /** Force a fault and watch the UI respond. */
   fault: (patch: Partial<SimFaults>) => void
+  /**
+   * Lose the wire the way a socket loses it, and bring it back.
+   *
+   * The failure state that cannot be reached with a fault switch: the box is
+   * fine, the connection is not. Everything asked for rather than streamed —
+   * the plan, a history window, the price day — fails the moment this is
+   * called, and healing is what happens on the way back.
+   */
+  drop: () => void
+  restore: () => void
 }
 
 declare global {
@@ -30,7 +40,8 @@ export function attachSimulatedSite(store: SiteStore): SimHandle {
 
   // Roughly what the relay costs in production. Zero latency would hide every
   // pending state the UI is supposed to handle.
-  store.connect(new LoopbackCarrier(box, { latencyMs: 120 }))
+  const carrier = new LoopbackCarrier(box, { latencyMs: 120 })
+  store.connect(carrier)
 
   // The box defends an import ceiling; the Now view explains that.
   store.ceilingW = 11_000
@@ -43,6 +54,8 @@ export function attachSimulatedSite(store: SiteStore): SimHandle {
     fault: (patch) => {
       box.faults = { ...box.faults, ...patch }
     },
+    drop: () => carrier.drop('dropped from the console'),
+    restore: () => carrier.restore(),
   }
 
   globalThis.ftwSim = handle

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { planHeadline, slotAction, reasonText, formatPrice, modeLabel, modeHelp } from './plan'
+import { formatPrice as boxPrice, unitLabel } from '$vendor/ftw/price-units.js'
 import type { Plan, PlanSlot, PlanReason, ModeInfo } from '$lib/protocol/messages'
 
 /**
@@ -170,13 +171,32 @@ describe('mode wording comes from the box', () => {
 })
 
 describe('formatPrice', () => {
-  it('renders minor units as currency', () => {
-    expect(formatPrice(80)).toBe('0.80')
-    expect(formatPrice(145)).toBe('1.45')
+  it('is the number the chart puts on the same hour', () => {
+    // The chart directly above the timeline renders every price through the
+    // box's table, so that table is the reference here rather than a number
+    // written out by hand: this column and that chart have to be the same
+    // money in the same unit, or the screen asks its reader to divide by a
+    // hundred to compare two lines of it.
+    //
+    // Both scales, because they are the interesting difference between
+    // currencies: öre and cent are quoted in the minor unit, koruna in the
+    // major one, and only the table knows which is which.
+    const cases = [
+      [144, 'SEK'],
+      [80, 'SEK'],
+      [17, 'EUR'],
+      [400, 'CZK'],
+    ] as const
+
+    for (const [minor, currency] of cases) {
+      expect(`${formatPrice(minor, currency)} ${unitLabel(currency)}`).toBe(
+        boxPrice(minor, currency)
+      )
+    }
   })
 
   it('returns null rather than a fake price', () => {
-    expect(formatPrice(null)).toBeNull()
-    expect(formatPrice(NaN)).toBeNull()
+    expect(formatPrice(null, 'SEK')).toBeNull()
+    expect(formatPrice(NaN, 'SEK')).toBeNull()
   })
 })

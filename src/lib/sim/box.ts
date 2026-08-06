@@ -27,12 +27,15 @@ import {
   type HistQuery,
   type HistChunk,
   type HistEnd,
+  type PriceQuery,
+  type PriceSlot,
+  type Prices,
   type SiteMode,
   type ModeInfo,
   OP_SET_MODE,
   isRetryable,
 } from '$lib/protocol/messages'
-import { buildPlan } from './planner'
+import { buildPlan, priceAt, importTotalMinor } from './planner'
 import {
   RESOLUTIONS,
   DEFAULT_MAX_POINTS,
@@ -215,7 +218,20 @@ const CAPS = [
   'cmd.readback',
   'der.battery',
   'plan.dispatch',
+  'price.spot',
 ]
+
+/**
+ * The hour tomorrow's rates publish.
+ *
+ * Day-ahead markets clear in the early afternoon, so for most of a day a
+ * window reaching into tomorrow genuinely ends early — which is the case
+ * `stale` exists to express, and the one a real box spends every morning in.
+ */
+const PRICE_PUBLISH_HOUR = 14
+
+/** Settlement slot the sim publishes. Hourly, as the Nordic day-ahead was. */
+const HOUR_MS = 3_600_000
 
 export interface SimBoxOptions {
   house?: Partial<HouseConfig>
@@ -301,6 +317,9 @@ export class SimBox {
         break
       case 'hist.query':
         this.#onHistQuery(id, b as HistQuery)
+        break
+      case 'price.get':
+        this.#onPriceGet(id, b as PriceQuery)
         break
       default:
         // Unknown types are answered, never fatal — that is what lets a newer
@@ -412,6 +431,19 @@ export class SimBox {
 
     this.#bucket = sub.bucket
     this.#subscribed = true
+    this.#sendSnapshot()
+  }
+
+  /**
+   * Send the whole state, and reset what the delta stream is measured against.
+   *
+   * On subscribe, and again whenever `controlRev` moves. The real box does the
+   * second one too: without it the app holds a revision the box has left
+   * behind, and every command after the first is refused as a conflict with a
+   * change the app itself made. That looked like an app bug on the dev screen
+   * for exactly as long as nobody tapped a mode twice.
+   */
+  #sendSnapshot(): void {
     this.#lastSent.clear()
     this.#lastSourcesJson = JSON.stringify(this.#sources())
 
@@ -479,6 +511,7 @@ export class SimBox {
     const lease = { leaseId: `lease-${cmd.cmdId.slice(0, 8)}`, expiresAtMs: this.uptimeMs + 900_000 }
     this.#idempotency.set(cmd.cmdId, lease)
     this.#controlRev += 1
+    if (this.#subscribed) this.#sendSnapshot()
 
     this.#send(
       { lane: LANE_CONTROL, flags: 0, envelope: { t: 'cmd.ack', b: { cmdId: cmd.cmdId, ...lease } } },
@@ -545,6 +578,70 @@ export class SimBox {
         flags: 0,
         envelope: { t: 'plan', ...(typeof id === 'number' ? { id } : {}), b: plan },
       },
+      bulkBucketFor(16000) ?? 16384
+    )
+  }
+
+  /**
+   * Answer a price window with the slots the market has actually published.
+   *
+   * The curve is the planner's, so the price on the chart and the price on
+   * the timeline below it are the same number for the same hour. The total is
+   * computed here because the box is where the tariff and the tax live.
+   */
+  #onPriceGet(id: number | undefined, q: PriceQuery): void {
+    if (typeof id !== 'number') return
+
+    if (this.faults.booting) {
+      this.#error('E_BOOTING', isRetryable('E_BOOTING'), { etaMs: 90_000 }, id)
+      return
+    }
+
+    const nowMs = this.#now()
+    const dayStart = new Date(nowMs).setHours(0, 0, 0, 0)
+    const publishedTo =
+      dayStart + (new Date(nowMs).getHours() >= PRICE_PUBLISH_HOUR ? 2 : 1) * DAY_MS
+
+    const slots: PriceSlot[] = []
+    // Aligned to the local hour, not the UTC one. Every window this is asked
+    // for starts at local midnight, and where the zone is offset by half an
+    // hour — Kolkata, Chatham — a UTC-hour floor puts every slot thirty
+    // minutes off the local day. The chart's midnight would then not be the
+    // day boundary the rest of the view is drawn against, and a window that
+    // reaches its end would report itself short.
+    const first = new Date(q.fromMs).setMinutes(0, 0, 0)
+    for (let at = first; at + HOUR_MS <= Math.min(q.toMs, publishedTo); at += HOUR_MS) {
+      // Local hours, the same clock the day boundary and the publish hour
+      // above are read in. Mixing the two shifted the sim's peaks off the
+      // local hours the rest of the view is drawn in.
+      const spot = priceAt(new Date(at).getHours())
+      slots.push({
+        startMs: at,
+        durationMs: HOUR_MS,
+        spotMinor: spot,
+        totalMinor: importTotalMinor(spot),
+      })
+    }
+
+    const last = slots[slots.length - 1]
+    const prices: Prices = {
+      zone: 'SE4',
+      currency: 'SEK',
+      slots,
+      // An answer that reaches the end of the window is complete; anything
+      // short of it says so, and an empty store is the shortest answer there is.
+      //
+      // The box also sets this for a window that begins after the start and for
+      // a hole in the middle — three shapes, one flag, see docs/protocol.md.
+      // The tail is the whole test here only because this loop can produce
+      // neither of the others: it floors to the hour at or before `fromMs` and
+      // walks one unbroken hour at a time. Read the contract, not this line,
+      // for what `stale` means.
+      stale: last === undefined || last.startMs + last.durationMs < q.toMs,
+    }
+
+    this.#send(
+      { lane: LANE_BULK, flags: 0, envelope: { t: 'price', id, b: prices } },
       bulkBucketFor(16000) ?? 16384
     )
   }
