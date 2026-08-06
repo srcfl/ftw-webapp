@@ -17,6 +17,12 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    # No TZ set here on purpose. Local time is not decoration in this app —
+    # the price window starts at local midnight, the publish hour is local,
+    # and the day the chart draws is the local one — so the suite pins its own
+    # zone in vitest.config.ts and runs the same on a UTC runner as on a
+    # laptop. Setting one here would only hide it if the pin were removed.
     steps:
       - uses: actions/checkout@v5
 
@@ -85,3 +91,24 @@ jobs:
             exit 1
           fi
           echo "decoder is its own chunk: $(gzip -c dist/assets/jsQR-*.js | wc -c | tr -d ' ') bytes gzip, fetched on demand"
+
+      # The price chart is 10.4 kB gzip against about 15 kB of headroom, so a
+      # static import would pass the budget above while spending most of what
+      # is left — on a screen many opens never reach. The comment in
+      # Plan.svelte says it is fetched on demand; this is what makes that
+      # comment true rather than a hope.
+      - name: Price chart stays out of the launch bundle
+        run: |
+          if ! ls dist/assets/ftw-price-chart-*.js >/dev/null 2>&1; then
+            echo "no separate chart chunk — it was inlined somewhere"
+            exit 1
+          fi
+          # The component's own prose, not ours. Grepping for the element name
+          # would match the tag in Plan.svelte's template, which lives in the
+          # entry bundle by design and says nothing about where the component
+          # ended up.
+          if grep -l "Cheapest 2 h" dist/assets/index-*.js >/dev/null 2>&1; then
+            echo "the chart reached the entry bundle; keep the import dynamic"
+            exit 1
+          fi
+          echo "chart is its own chunk: $(gzip -c dist/assets/ftw-price-chart-*.js | wc -c | tr -d ' ') bytes gzip, fetched on demand"

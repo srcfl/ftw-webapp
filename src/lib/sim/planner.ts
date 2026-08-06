@@ -21,12 +21,37 @@ const HORIZON_SLOTS = 96 // a day ahead
  *
  * Two peaks and a night trough, which is what a Nordic day looks like and
  * what makes a plan interesting: there is something to shift.
+ *
+ * Exported because the price window the box serves has to be the same curve
+ * the plan was built from. Two curves would put one price on the timeline and
+ * another on the chart above it, for the same hour.
  */
-function priceAt(hourOfDay: number): number {
+export function priceAt(hourOfDay: number): number {
   const morning = 90 * Math.exp(-((hourOfDay - 7.5) ** 2) / 3)
   const evening = 130 * Math.exp(-((hourOfDay - 18) ** 2) / 4)
   const base = 45 + 12 * Math.sin((hourOfDay / 24) * 2 * Math.PI)
   return Math.round(base + morning + evening)
+}
+
+/**
+ * What the sim's grid operator charges, and the tax on both.
+ *
+ * On this side because the box is the only side that knows them: it is why
+ * the wire carries a total per slot at all.
+ */
+const SIM_GRID_TARIFF_MINOR = 70
+const SIM_VAT_PCT = 25
+
+/**
+ * What a kilowatt-hour costs to import: spot plus tariff, taxed.
+ *
+ * One function because two callers need it — the price window and the plan's
+ * `priceMinor`, which the box documents as the import price and not the spot.
+ * Two arithmetics would put a different number on the timeline than on the
+ * chart directly above it, for the same hour, on the same screen.
+ */
+export function importTotalMinor(spotMinor: number): number {
+  return Math.round((spotMinor + SIM_GRID_TARIFF_MINOR) * (1 + SIM_VAT_PCT / 100))
 }
 
 export interface PlanInput {
@@ -53,8 +78,15 @@ export function buildPlan(input: PlanInput): Plan {
 
   for (let i = 0; i < HORIZON_SLOTS; i++) {
     const at = start + i * SLOT_MS
-    const hour = new Date(at).getUTCHours() + new Date(at).getUTCMinutes() / 60
-    const price = priceAt(hour)
+    // Whole hours, though the plan's slots are quarters of one: a market
+    // price is flat across its settlement slot, and pricing 09:15 a little
+    // above 09:00 would put four different numbers on the plan under one
+    // bar of the price chart.
+    //
+    // Local hours, because every hour on this screen is a local one. Reading
+    // the curve in UTC put the sim's peaks an hour or two off the labels
+    // beside them, which makes the dev screen a wrong thing to review against.
+    const price = priceAt(new Date(at).getHours())
 
     const reading = sample(house, at, soc, ceilingW)
     // pv_w is never positive, so the house's net demand is load + pv and a
@@ -124,7 +156,9 @@ export function buildPlan(input: PlanInput): Plan {
       durationMs: SLOT_MS,
       batteryW: Math.round(batteryW),
       gridW: Math.round(gridW),
-      priceMinor: price,
+      // The import price, which is what the box puts here — the decisions
+      // above are taken on spot, but spot is not what a slot costs.
+      priceMinor: importTotalMinor(price),
       reason,
     })
   }

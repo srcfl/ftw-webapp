@@ -235,6 +235,62 @@ export interface Plan {
 }
 
 // --------------------------------------------------------------------------
+// Prices
+// --------------------------------------------------------------------------
+
+/**
+ * The window of prices to ask for.
+ *
+ * Wall clock, not box uptime. Prices are about hours a person plans around,
+ * and every other age in this protocol is measured against uptime precisely
+ * because it is about the box rather than about the day.
+ */
+export interface PriceQuery {
+  fromMs: number
+  toMs: number
+}
+
+/**
+ * One settlement slot's price, in minor units per kWh.
+ *
+ * Integers — öre, cents — because a price is money, and money in a float is a
+ * rounding argument waiting to happen. `spotMinor` is the raw market price;
+ * `totalMinor` is what the household actually pays, tariff and tax included.
+ * The box computes the total because the box holds the configuration.
+ */
+export interface PriceSlot {
+  startMs: number
+  /** Slot length. An hour or a quarter of one, depending on the market.  */
+  durationMs: number
+  spotMinor: number
+  totalMinor: number
+}
+
+export interface Prices {
+  /** Bidding zone, and what the minor units are. Without them 45 is a guess. */
+  zone: string
+  currency: string
+  slots: PriceSlot[]
+  /**
+   * The answer does not cover the window asked for.
+   *
+   * Three shapes, not one: it begins after the start, it has a hole in the
+   * middle, or it stops short of the end. Tomorrow's rates publish in the
+   * afternoon, so a window asked for at breakfast genuinely ends early; one
+   * failed midday fetch on the box leaves a day holding 00:00-06:00 and
+   * 12:00-24:00; a box that first heard from the market at breakfast holds
+   * 06:00-24:00 of a day the app asked for from midnight. Saying so beats
+   * drawing a cliff the market did not have.
+   *
+   * Which shape it is has to be read off `slots` — see `hasHole` in
+   * `$lib/state/price`, which covers the first two. A day missing its own
+   * morning is not a day waiting for tomorrow, and the flag cannot tell them
+   * apart.
+   */
+  stale: boolean
+}
+
+// --------------------------------------------------------------------------
 // Commands
 // --------------------------------------------------------------------------
 
@@ -343,6 +399,7 @@ export type ServerMessage =
   | { t: 'tick'; b: Tick }
   | { t: 'hist.chunk'; id: number; b: HistChunk }
   | { t: 'hist.end'; id: number; b: HistEnd }
+  | { t: 'price'; id: number; b: Prices }
   | { t: 'cmd.ack'; b: CmdAck }
   | { t: 'cmd.result'; b: CmdResult }
   | { t: 'event'; b: EventMsg }
@@ -354,4 +411,5 @@ export type ClientMessage =
   | { t: 'sub'; b: Sub }
   | { t: 'plan.get'; id: number }
   | { t: 'hist.query'; id: number; b: HistQuery }
+  | { t: 'price.get'; id: number; b: PriceQuery }
   | { t: 'cmd'; b: Cmd }

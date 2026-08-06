@@ -12,7 +12,7 @@
  */
 
 import { Session, type SessionState } from '$lib/protocol/session'
-import type { Plan, CmdResult, Guard } from '$lib/protocol/messages'
+import type { Plan, PriceQuery, Prices, CmdResult, Guard } from '$lib/protocol/messages'
 import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
@@ -118,6 +118,11 @@ export class SiteStore {
   /** What the box intends to do. */
   plan(): Promise<Plan> {
     return this.#session.plan()
+  }
+
+  /** What electricity costs across a window. */
+  prices(query: PriceQuery): Promise<Prices> {
+    return this.#session.prices(query)
   }
 
   /**

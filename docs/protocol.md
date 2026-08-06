@@ -62,7 +62,7 @@ junk keys.
 
 ## Messages
 
-Fifteen types in v1.
+Nineteen types in v1.
 
 | Type | Direction | Purpose |
 |---|---|---|
@@ -72,6 +72,8 @@ Fifteen types in v1.
 | `delta` | B→C | Changed fields by id |
 | `tick` | B→C | Nothing changed; keeps the cadence constant |
 | `hist.query` / `hist.chunk` / `hist.end` | | Time window and resolution |
+| `plan.get` / `plan` | | What the box intends to do, slot by slot |
+| `price.get` / `price` | | What electricity costs across a window |
 | `cmd` / `cmd.ack` / `cmd.result` | | Intent, receipt, and observed outcome |
 | `event` | B→C | Something worth surfacing happened |
 | `error` | B→C | Stable code with machine-readable args |
@@ -139,6 +141,45 @@ partial and never cached.
 Chunks are column-packed int32 little-endian inside CBOR byte strings, so the
 client gets an `Int32Array` without parsing. `INT32_MIN` marks a missing
 sample — distinct from zero, which is a real reading.
+
+## Prices
+
+Gated on the `price.spot` capability: absent means the app draws no price view
+rather than an empty one.
+
+`price.get {fromMs, toMs}` is answered with slots carrying `spotMinor` and
+`totalMinor` — integer minor units per kWh, öre or cents. **Money never
+crosses as a float.** The box rounds once and nothing rounds again, because a
+second rounding is how two screens start disagreeing about what 18.7 öre is.
+
+`totalMinor` is what the household actually pays, tariff and tax included, and
+the box computes it because the box holds that configuration. An app that
+multiplied spot by its own guess would put a different number under the same
+hour than the box's own dashboard does.
+
+Times are wall clock, unlike every age in this protocol: prices are about
+hours a person plans around rather than about the box.
+
+`stale` means the answer does not cover the window asked for. That is three
+shapes, not one: it begins after the start, it has a hole in the middle, or it
+stops short of the end. The box judges all three against the window it was
+asked for and sets the one flag for any of them; a slot that starts at or
+before `fromMs` covers the head, because that is the slot running at `fromMs`
+and it is the price right now.
+
+Tomorrow's rates publish in the afternoon, so a window asked for at breakfast
+genuinely ends early, and the box also drops the far end rather than failing an
+encode that will not fit a bulk bucket. One failed midday fetch is the second
+shape — a store holding 00:00–06:00 and 12:00–24:00. A box that first heard
+from the market at breakfast is the third: 06:00–24:00 of a day the app asked
+for from midnight, every slot joining the last. A tail-only reading calls the
+last two a covered day.
+
+The flag cannot say which shape it is, and the app does not need it to: the app
+holds the slots, so it reads the missing hours off them. They are different
+sentences to the reader — a day missing its own morning is not a day waiting
+for tomorrow — and drawing either as a market that simply went quiet is "never
+fake live" with prices in it.
 
 ## Commands
 

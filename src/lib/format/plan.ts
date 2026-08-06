@@ -9,6 +9,7 @@
  */
 
 import type { Plan, PlanSlot, PlanReason, SiteMode, ModeInfo } from '$lib/protocol/messages'
+import { toDisplay, unitFor } from '$vendor/ftw/price-units.js'
 import { formatPower } from './power'
 
 /**
@@ -149,8 +150,18 @@ function inWords(ms: number): string {
   return 'later today'
 }
 
-/** Price in whole currency units per kWh, for display beside a slot. */
-export function formatPrice(minor: number | null): string | null {
+/**
+ * A slot's price, for display beside it — in the chart's unit, to the chart's
+ * precision.
+ *
+ * The chart directly above the timeline prices the same hours, and it reads
+ * this table for every number it draws. Anything else here puts two numbers
+ * for 21:00 one above the other in units a hundred apart: 144.0 öre on the
+ * chart, 1.44 on the timeline, and a reader left to work out that they are
+ * the same money. The unit is named once above the column rather than on
+ * every row, which is what `unitPerKwh` is for.
+ */
+export function formatPrice(minor: number | null, currency: string): string | null {
   if (minor === null || !Number.isFinite(minor)) return null
-  return (minor / 100).toFixed(2)
+  return toDisplay(minor, currency).toFixed(unitFor(currency).decimals)
 }

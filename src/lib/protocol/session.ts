@@ -27,6 +27,8 @@ import {
   type HistChunk,
   type HistEnd,
   type Plan,
+  type PriceQuery,
+  type Prices,
   type ModeInfo,
   type Guard,
   type CmdAck,
@@ -137,6 +139,29 @@ interface PendingPlan {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** A price window is one bulk message too, so it keeps the plan's deadline. */
+export const PRICE_TIMEOUT_MS = 8_000
+
+interface PendingPrices {
+  resolve: (prices: Prices) => void
+  reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+/**
+ * How long to wait before asking a box that is still starting again.
+ *
+ * A box coming back from an update answers hello with mode 'booting' and
+ * refuses a subscription until it is up. It does not announce being ready, and
+ * the carrier stays open throughout, so no reconnect is coming to ask again —
+ * without a timer of the session's own the app sits on the starting screen for
+ * as long as it is open, and reloading is never the fix here.
+ *
+ * Five seconds. A VACUUM runs for minutes, so this is nowhere near a poll, and
+ * it is close enough that the progress on the starting screen keeps moving.
+ */
+export const BOOT_RETRY_MS = 5_000
+
 /**
  * How long an intent stays valid, in ms of box uptime.
  *
@@ -205,6 +230,14 @@ export class HistoryError extends Error {
   }
 }
 
+/** Thrown when the box answers a price request with a stable error code. */
+export class PriceError extends Error {
+  constructor(readonly detail: ErrorMsg) {
+    super(detail.code)
+    this.name = 'PriceError'
+  }
+}
+
 export class Session {
   #state: SessionState = EMPTY
   #carrier: Carrier | null = null
@@ -216,7 +249,10 @@ export class Session {
   #nextRequestId = 1
   #pendingHistory = new Map<number, PendingHistory>()
   #pendingPlan = new Map<number, PendingPlan>()
+  #pendingPrices = new Map<number, PendingPrices>()
   #pendingCmd = new Map<string, PendingCmd>()
+  /** Set only while the box says it is starting. See BOOT_RETRY_MS. */
+  #bootRetry: ReturnType<typeof setTimeout> | undefined
 
   constructor(opts: SessionOptions) {
     this.#opts = opts
@@ -261,6 +297,18 @@ export class Session {
           // Losing the carrier does not clear the readings. They are still
           // true, just older — and the freshness band says so.
           this.#patch({ phase: 'failed', carrier: 'none' })
+          // A box that cannot be reached is not one to ask how far along it
+          // is. The reopen above sends a fresh hello anyway.
+          clearTimeout(this.#bootRetry)
+          // But it does end every request in flight. This is the ordinary way
+          // a carrier goes away — the wire drops and the carrier reconnects
+          // inside itself, keeping its handlers — so it never reaches
+          // #detach. Settling has to happen here or a view waits out the
+          // request's own deadline against a reply that cannot arrive.
+          // #detach is deliberately not called: it closes the carrier and
+          // drops the handlers, and the carrier has to stay attached to come
+          // back.
+          this.#settlePending()
         }
       })
     )
@@ -354,6 +402,30 @@ export class Session {
   }
 
   /**
+   * Ask the box what electricity costs across a window.
+   *
+   * Bulk lane, for the same reason the plan is: two days of quarter-hour
+   * slots is far past lane 0's fixed bucket, and none of it belongs in the
+   * constant-cadence stream.
+   */
+  prices(query: PriceQuery): Promise<Prices> {
+    if (!this.#carrier) return Promise.reject(new Error('no carrier'))
+
+    const id = this.#nextRequestId
+    this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
+
+    return new Promise<Prices>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingPrices.delete(id)
+        reject(new Error('price request timed out'))
+      }, PRICE_TIMEOUT_MS)
+
+      this.#pendingPrices.set(id, { resolve, reject, timer })
+      this.#sendBulk({ t: 'price.get', id, b: query })
+    })
+  }
+
+  /**
    * Express an intent and follow it to its outcome.
    *
    * Three separate deadlines, because they are three different events and
@@ -416,6 +488,9 @@ export class Session {
   }
 
   #sendHello(): void {
+    // Any hello supersedes a retry waiting to send one — a reconnect asks the
+    // same question, and two hellos in flight would earn two answers.
+    clearTimeout(this.#bootRetry)
     this.#send({
       t: 'hello',
       b: {
@@ -461,6 +536,9 @@ export class Session {
       case 'plan':
         this.#onPlan(envelope.b as Plan, envelope.id)
         break
+      case 'price':
+        this.#settlePrices(envelope.id, envelope.b as Prices)
+        break
       case 'cmd.ack':
         this.#onCmdAck(envelope.b as CmdAck)
         break
@@ -493,9 +571,14 @@ export class Session {
     })
 
     if (b.mode === 'booting') {
-      // Nothing to subscribe to yet. The box will accept one once it is up;
-      // the caller retries rather than the session spinning silently.
+      // Nothing to subscribe to yet — the box refuses one until it is up, and
+      // it does not say when that is. So ask again on our own timer: the
+      // carrier stays open the whole time the box is starting, so no status
+      // change is coming to do it for us, and a phase parked here is the
+      // starting screen for as long as the app is open. Each answer also
+      // refreshes the boot progress the screen is showing.
       this.#patch({ phase: 'booting' })
+      this.#bootRetry = setTimeout(() => this.#sendHello(), BOOT_RETRY_MS)
       return
     }
 
@@ -577,6 +660,22 @@ export class Session {
     }
   }
 
+  /**
+   * Prices settle the request and nothing else.
+   *
+   * Unlike a plan, which the box pushes unasked after a mode change and which
+   * therefore lives on session state, a price window only ever arrives as an
+   * answer. Keeping a copy on state would be a second place for the view to
+   * read the same thing from, and the two would eventually disagree.
+   */
+  #settlePrices(id: number | undefined, prices: Prices): void {
+    const pending = this.#pendingPrices.get(id ?? -1)
+    if (!pending) return
+    this.#pendingPrices.delete(id!)
+    clearTimeout(pending.timer)
+    pending.resolve(prices)
+  }
+
   #onCmdAck(b: CmdAck): void {
     const pending = this.#pendingCmd.get(b.cmdId)
     if (!pending) return
@@ -621,6 +720,14 @@ export class Session {
         plan.reject(new PlanError(b))
         return
       }
+
+      const prices = this.#pendingPrices.get(id)
+      if (prices) {
+        this.#pendingPrices.delete(id)
+        clearTimeout(prices.timer)
+        prices.reject(new PriceError(b))
+        return
+      }
     }
 
     this.#patch({ lastError: b })
@@ -652,18 +759,45 @@ export class Session {
   }
 
   #detach(): void {
+    clearTimeout(this.#bootRetry)
     for (const u of this.#unsub) u()
     this.#unsub = []
     this.#carrier?.close()
     this.#carrier = null
+    this.#settlePending()
+  }
 
-    // A carrier that went away will never answer. Settling every pending
-    // request now is what keeps a view from waiting on a reply that cannot
-    // arrive — there is no "reload" button to rescue it.
-    for (const [id, pending] of this.#pendingHistory) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error('carrier closed'))
-      this.#pendingHistory.delete(id)
+  /**
+   * End everything waiting on a carrier that will not answer.
+   *
+   * Separate from #detach because the two ways a carrier goes away need
+   * different things done to the carrier and the same thing done to the
+   * requests. #detach tears the carrier down; an ordinary drop leaves it
+   * attached to reconnect. Either way a view must stop waiting on a reply
+   * that cannot arrive — there is no "reload" button to rescue it. Every map,
+   * not just the first: one left behind is a promise that settles minutes
+   * later, on its own timer, against a view that has long since moved on.
+   */
+  #settlePending(): void {
+    for (const map of [this.#pendingHistory, this.#pendingPlan, this.#pendingPrices]) {
+      for (const [id, pending] of map) {
+        clearTimeout(pending.timer)
+        pending.reject(new Error('carrier closed'))
+        map.delete(id)
+      }
+    }
+
+    // A command is settled the way its own deadlines would settle it, because
+    // the two cases are different answers. One the box never acknowledged did
+    // not reach it, and is never replayed silently. One it did acknowledge may
+    // well have been carried out, so "that didn't reach your box" would be a
+    // lie — and "accepted, never confirmed" is exactly what unconfirmed says.
+    for (const [cmdId, pending] of this.#pendingCmd) {
+      clearTimeout(pending.ackTimer)
+      clearTimeout(pending.confirmTimer)
+      this.#pendingCmd.delete(cmdId)
+      if (pending.acked) pending.resolve({ cmdId, state: 'unconfirmed' })
+      else pending.reject(new CommandError('E_NO_ACK', "That didn't reach your box. Try again."))
     }
   }
 
