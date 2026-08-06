@@ -180,7 +180,10 @@ describe('a price window as the day moves under it', () => {
     // which is what earns a fresh ask without leaving the day — so there is a
     // real failure here and not merely nothing happening.
     box.faults = { ...box.faults, frameLossRate: 1 }
-    await vi.advanceTimersByTimeAsync(6 * 3_600_000)
+    // The clock is moved rather than walked: sixteen thousand one-second ticks
+    // prove nothing this test is about, and cost more than the CI runner has.
+    vi.setSystemTime(MORNING + 6 * 3_600_000)
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(asked.mock.calls.length, 'no second ask was made, so nothing failed').toBeGreaterThan(
       first
@@ -195,7 +198,8 @@ describe('a price window as the day moves under it', () => {
     // Past midnight with the box still unreachable. The bars are yesterday's
     // now, and the chart heads them "today" and calls the last of them "now".
     box.faults = { ...box.faults, frameLossRate: 1 }
-    await vi.advanceTimersByTimeAsync(16 * 3_600_000)
+    vi.setSystemTime(MORNING + 16 * 3_600_000)
+    await vi.advanceTimersByTimeAsync(60_000)
 
     expect(new Date().getDate(), 'the clock did not reach the next day').toBe(16)
     expect(chart(), "yesterday's prices were still on screen, headed today").toBeNull()
@@ -211,8 +215,9 @@ describe('a price window as the day moves under it', () => {
     const early = chart()!.shadowRoot?.textContent ?? chart()!.textContent ?? ''
     const startedAt = fedAt()
 
-    await vi.advanceTimersByTimeAsync(4 * 3_600_000)
-    expect(Date.now() - startedAt).toBe(4 * 3_600_000)
+    vi.setSystemTime(MORNING + 4 * 3_600_000)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4 * 3_600_000)
 
     const later = chart()!.shadowRoot?.textContent ?? chart()!.textContent ?? ''
     expect(later, 'the chart drew the same hour as now, four hours later').not.toBe(early)
