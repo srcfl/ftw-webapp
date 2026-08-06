@@ -219,8 +219,13 @@
       // that is only true once one exists, and these are the failures where
       // none does. ConnectError already carries the sentence saying what to
       // do instead of waiting; throwing it away is what made the screen lie.
-      const { ConnectError } = await import('$lib/state/connect')
-      connectHelp = err instanceof ConnectError ? err.help : null
+      //
+      // Read for the sentence rather than for the class. An instanceof would
+      // mean importing connect.ts here, on the launch path, which puts the
+      // whole carrier stack in the entry chunk to answer a question about a
+      // failure — and the sentence is the only part being used.
+      const help = (err as { help?: unknown } | null)?.help
+      connectHelp = typeof help === 'string' ? help : null
     }
   }
 
