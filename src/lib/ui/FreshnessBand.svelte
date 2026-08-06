@@ -57,6 +57,12 @@
       }
     }
 
+    // The box is perfectly reachable; it told this phone to leave. Saying it
+    // cannot be reached sends somebody to check their wifi over a decision
+    // that was made about them — and the screen below already says what
+    // happened, so this one must not contradict it.
+    if (phase === 'terminated') return 'Access ended'
+
     // Not connected. Say how old the readings are, which is the question
     // being asked, rather than diagnosing a connection we have not finished
     // testing.
@@ -83,10 +89,11 @@
   })
 </script>
 
-<!-- Sticky, because this is the one claim the whole app rests on and it was
-     the first thing to scroll away. Pinned to the top it stays answerable at
-     any scroll position, which is what "you cannot easily see freshness"
-     was actually about. -->
+<!-- This is the one claim the whole app rests on, and it was the first thing
+     to scroll away. It now sits above the scrolling view rather than inside
+     it, so it is answerable at any scroll position — which is what "you
+     cannot easily see freshness" was actually about. Sticky as well, so it
+     holds that position even if it is ever placed inside a scroller. -->
 <div class="band" data-tone={tone} role="status" aria-live="polite">
   <span class="dot" aria-hidden="true"></span>
   <span class="text">{message}</span>

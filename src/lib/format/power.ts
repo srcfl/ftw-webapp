@@ -60,6 +60,28 @@ export function formatPower(watts: number): PowerParts {
   return { value: mw, unit: 'MW', direction, text: mw.toFixed(mw < 10 ? 2 : 1) }
 }
 
+/**
+ * A wattage for a chart's vertical scale.
+ *
+ * Separate from formatPower because a scale has a different job from a
+ * reading. Its numbers are round by construction — a 1, 2 or 5 step — so a
+ * forced decimal only makes "5.0 kW" sit under "10 kW" and look like a
+ * mistake. Same rule about the sign, though: the magnitude and nothing else,
+ * because the direction is a word on the axis, not a minus on every rung.
+ */
+export function formatScaleWatts(watts: number): string {
+  if (!Number.isFinite(watts)) return ''
+  const abs = Math.abs(watts)
+  if (abs < 1000) return `${Math.round(abs)} W`
+  if (abs < 1_000_000) return `${trim(abs / 1000)} kW`
+  return `${trim(abs / 1_000_000)} MW`
+}
+
+/** One decimal, and not even that when it would be a zero. */
+function trim(value: number): string {
+  return String(Math.round(value * 10) / 10)
+}
+
 /** State of charge arrives as permille to keep deltas integral. */
 export function formatSoc(permille: number): string {
   if (!Number.isFinite(permille)) return '—'

@@ -14,6 +14,7 @@ import {
   ensureLocalCopy,
   localWrappingKey,
   deviceStaticPublic,
+  deviceIdOnBox,
   enrolledCredentialIds,
   isEnrolled,
   VaultError,
@@ -340,6 +341,25 @@ describe('browsers with passkeys but no X25519 in WebCrypto', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('the name the box knows this device by', () => {
+  // The box lists a paired phone as the first eight characters of the
+  // base64url of the static key it authenticated — appenroll.deviceID in
+  // srcfl/ftw. Signing out prints it so the owner can find the row and
+  // remove it there, which only works while both ends spell it the same way.
+  it('is eight characters of unpadded base64url, exactly as the box spells it', async () => {
+    const store = memoryVaultStore()
+    expect(await deviceIdOnBox(store), 'a device with no key has no row').toBeNull()
+
+    await deviceKey(store, await localWrappingKey(store))
+    const publicKey = await deviceStaticPublic(store)
+    expect(publicKey).not.toBeNull()
+
+    const asTheBoxWouldWriteIt = Buffer.from(publicKey!).toString('base64url').slice(0, 8)
+    expect(await deviceIdOnBox(store)).toBe(asTheBoxWouldWriteIt)
+    expect(await deviceIdOnBox(store)).toMatch(/^[A-Za-z0-9_-]{8}$/)
   })
 })
 

@@ -81,15 +81,30 @@ export async function takeBootSnapshot(): Promise<StoredSnapshot | null> {
   }
 }
 
-/** Restores a cached snapshot into the shape the session exposes. */
+/**
+ * Restores a cached snapshot into the shape the session exposes.
+ *
+ * The row's type is a claim about what was written, not a fact about what
+ * comes back: an older build wrote fewer keys, and the cache carries no
+ * version to tell one from the other. So every part is defaulted here, at the
+ * one point where the disk stops and typed state begins.
+ *
+ * Missing is not the same as empty anywhere above this. A patch is applied by
+ * spreading it over the current state, and a spread copies a key whatever it
+ * holds — so an absent dictionary arrived as undefined rather than as the
+ * empty one the session starts with, and the first getter to index it threw
+ * while a view was being built. That is a blank app, and reloading is never
+ * the fix in this one.
+ */
 export function sessionPatchFromSnapshot(snap: StoredSnapshot): Partial<SessionState> {
+  const row: Partial<StoredSnapshot> = snap
   return {
-    uptimeMs: snap.uptimeMs,
-    controlRev: snap.controlRev,
-    dict: snap.dict as SessionState['dict'],
-    fields: new Map(Object.entries(snap.fields).map(([k, v]) => [Number(k), v])),
-    sources: new Map(Object.entries(snap.sources as Record<string, Source>)),
-    dispatchBlockedBy: snap.dispatchBlockedBy,
+    uptimeMs: row.uptimeMs ?? 0,
+    controlRev: row.controlRev ?? 0,
+    dict: (row.dict ?? {}) as SessionState['dict'],
+    fields: new Map(Object.entries(row.fields ?? {}).map(([k, v]) => [Number(k), v])),
+    sources: new Map(Object.entries((row.sources ?? {}) as Record<string, Source>)),
+    dispatchBlockedBy: row.dispatchBlockedBy ?? [],
   }
 }
 
@@ -98,8 +113,10 @@ export class SnapshotWriter {
   #lastWriteMs = 0
   #pending: StoredSnapshot | null = null
   #timer: ReturnType<typeof setTimeout> | null = null
+  #stopped = false
 
   offer(snap: StoredSnapshot): void {
+    if (this.#stopped) return
     this.#pending = snap
 
     const since = Date.now() - this.#lastWriteMs
@@ -116,9 +133,23 @@ export class SnapshotWriter {
     await this.#flush()
   }
 
+  /**
+   * Finished. Not paused — this writer never writes again.
+   *
+   * Cancelling the timer is not enough, because the frame it was going to
+   * write is still held here and every path that flushes by hand would still
+   * write it: the shell flushes on 'visibilitychange', which is exactly what
+   * happens when someone signs out and switches app. That write lands after
+   * the disk was cleared, so the household this phone has just left comes
+   * back sealed under a cache key minted on demand to replace the one the
+   * sign-out removed a moment earlier. Dropping the frame costs at most the
+   * last fifteen seconds of a cache the box holds the record for.
+   */
   stop(): void {
     if (this.#timer) clearTimeout(this.#timer)
     this.#timer = null
+    this.#pending = null
+    this.#stopped = true
   }
 
   async #flush(): Promise<void> {

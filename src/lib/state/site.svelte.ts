@@ -12,6 +12,7 @@
  */
 
 import { Session, type SessionState } from '$lib/protocol/session'
+import type { Fid } from '$lib/protocol/types'
 import type { Plan, PriceQuery, Prices, CmdResult, Guard } from '$lib/protocol/messages'
 import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
@@ -26,15 +27,44 @@ import {
 } from '$lib/store/snapshot'
 import { requestPersistence } from '$lib/store/db'
 
-/** Sources the Now view depends on. Drives the freshness band. */
-const NOW_SOURCES = ['meter.p1', 'inverter.sungrow', 'battery.sungrow'] as const
+/**
+ * Fields the Now view draws. Their sources drive the freshness band.
+ *
+ * Field ids, not source ids. A source id is the box's name for one of its own
+ * drivers — `sungrow`, `easee` — and it comes from the configuration of the
+ * house, so nothing here can know it. The box says which source is behind
+ * which field in the dictionary it sends with every snapshot, and that is the
+ * only place to read it from.
+ */
+const NOW_FIDS: readonly Fid[] = [
+  FID.GRID_W,
+  FID.PV_W,
+  FID.BATTERY_W,
+  FID.BATTERY_SOC,
+  FID.LOAD_W,
+  FID.EV_W,
+]
 
-export interface Reading {
-  label: string
-  fid: number
-  watts: number | undefined
-  tone: 'import' | 'generation' | 'storage' | 'load'
-  srcId: string | null
+/**
+ * The sources behind the readings on the Now view, named by the box.
+ *
+ * Two kinds of field contribute nothing. One with no value has nothing on
+ * screen to be fresh or stale about. One with no source — the mode is the
+ * box's own state, and the charger sum can come from several drivers — has no
+ * freshness of its own; the box sends a null srcId to say exactly that.
+ *
+ * A device the view does not draw is not here either. A heat pump that has
+ * gone offline is a real fault and it is not a fault in anything on this
+ * screen, so it must not make the band condemn the whole house.
+ */
+function nowSourceIds(s: SessionState): string[] {
+  const ids = new Set<string>()
+  for (const fid of NOW_FIDS) {
+    if (!s.fields.has(fid)) continue
+    const srcId = s.dict[String(fid)]?.srcId
+    if (srcId) ids.add(srcId)
+  }
+  return [...ids]
 }
 
 export class SiteStore {
@@ -57,9 +87,30 @@ export class SiteStore {
   constructor(build: string) {
     this.#session = new Session({ build })
     this.#unsub = this.#session.subscribe((s) => {
-      // A moved uptime is the one reliable sign that a frame arrived: ticks
-      // carry it even when nothing else changed, which is why they exist.
-      if (s.uptimeMs !== this.session.uptimeMs) this.#lastFrameAtMs = Date.now()
+      // What counts as a reading arriving, and what only looks like one.
+      //
+      // A moved uptime is the sign a frame carries: ticks carry it even when
+      // nothing else changed, which is why they exist. But two other things
+      // move it and carry no reading at all. Restoring the cache moves it
+      // from nothing to whatever was on disk. Answering hello moves it from
+      // the box's clock, before a single value has been sent — and a box can
+      // answer hello and then go quiet for an hour, boot for ten minutes, or
+      // refuse this device outright.
+      //
+      // Counting either would date the readings on screen from the moment
+      // they were displayed rather than from the box that sent them, and
+      // would let the band say "live" over a house two hours old with the
+      // age suppressed. Only a streaming session is a reading arriving.
+      // Entering the stream is itself the first reading: the snapshot that
+      // starts it carries the same uptime hello just announced, so waiting for
+      // that number to move would miss the moment the readings became the
+      // box's own.
+      if (
+        s.phase === 'streaming' &&
+        (this.session.phase !== 'streaming' || s.uptimeMs !== this.session.uptimeMs)
+      ) {
+        this.#lastFrameAtMs = Date.now()
+      }
       this.session = s
 
       if (s.phase === 'streaming') {
@@ -140,12 +191,61 @@ export class SiteStore {
     return this.session.box !== null || this.session.fields.size > 0
   }
 
+  /**
+   * How the readings ON SCREEN are reaching us — not which socket is open.
+   *
+   * The session claims its carrier the moment the socket opens, which is
+   * before hello has been answered and long before a reading has arrived. A
+   * phone launching from cache would then show a two-hour-old house under
+   * "Live via encrypted relay", with the age suppressed because the band
+   * hides it while live. That is the one thing this app must never do, and
+   * an open socket is not evidence of anything: the box may be booting, wedged
+   * or refusing this device.
+   *
+   * So a carrier is claimed once it has actually delivered a reading. An
+   * answered handshake is not one: a box can answer hello and then boot for
+   * ten minutes. Until a reading arrives, what is on screen is the cache, and
+   * the band says "Reaching your box" over an honest age.
+   */
   get carrier(): CarrierState {
+    if (this.#lastFrameAtMs === null) {
+      return this.cachedAtMs !== null ? 'cache' : 'none'
+    }
     return this.session.carrier
   }
 
   get srcState(): SourceState {
-    return this.#session.worstSourceState(NOW_SOURCES)
+    // Nothing has arrived, from the box or from the cache. That is "no
+    // reading yet" literally, and it is the only state that sentence belongs
+    // to — a box whose readings are on screen is never it, however its
+    // drivers happen to be named.
+    if (this.session.fields.size === 0) return 'never'
+
+    // Nothing has arrived on this session, so every source state below was
+    // read off the disk: true when it was written, and not a claim about now.
+    // The carrier says 'cache' in the same breath and the band puts the age
+    // back on screen.
+    if (this.#lastFrameAtMs === null) return 'stale'
+
+    const ids = nowSourceIds(this.session)
+    // A box that names no source for anything on screen must not be taken
+    // for a healthy one: worstSourceState starts at 'live' and an empty list
+    // never enters its loop, so silence would read as all clear. Judge by
+    // every source the box does report instead, and only when it reports
+    // none at all is the stream itself the freshness.
+    const worst =
+      ids.length > 0
+        ? this.#session.worstSourceState(ids)
+        : this.session.sources.size > 0
+          ? this.#session.worstSourceState([...this.session.sources.keys()])
+          : 'live'
+
+    // Every source state above was read off the last frame. If frames have
+    // stopped, so has that judgement — a stream that has gone quiet is not
+    // live however healthy it looked when it went. Saying 'lagging' is what
+    // puts the age back on screen, which is the fact being asked for.
+    if (worst === 'live' && this.sinceLastFrameMs > 0) return 'lagging'
+    return worst
   }
 
   /**
@@ -157,10 +257,12 @@ export class SiteStore {
    * the question the user is actually asking.
    */
   get ageMs(): number {
-    if (this.session.carrier === 'cache' && this.cachedAtMs !== null) {
+    if (this.carrier === 'cache' && this.cachedAtMs !== null) {
       return Date.now() - this.cachedAtMs
     }
-    const ages = NOW_SOURCES.map((s) => this.#session.ageOf(s)).filter((a) => !Number.isNaN(a))
+    const ages = nowSourceIds(this.session)
+      .map((s) => this.#session.ageOf(s))
+      .filter((a) => !Number.isNaN(a))
     if (ages.length === 0) return NaN
 
     // The box's own uptime says how old a reading was when it was sent. It
@@ -207,16 +309,6 @@ export class SiteStore {
       dispatchBlockedBy: this.session.dispatchBlockedBy,
       ceilingW: this.ceilingW,
     })
-  }
-
-  get readings(): Reading[] {
-    const f = this.session.fields
-    return [
-      { label: 'Grid', fid: FID.GRID_W, watts: f.get(FID.GRID_W), tone: 'import', srcId: 'meter.p1' },
-      { label: 'Solar', fid: FID.PV_W, watts: f.get(FID.PV_W), tone: 'generation', srcId: 'inverter.sungrow' },
-      { label: 'Battery', fid: FID.BATTERY_W, watts: f.get(FID.BATTERY_W), tone: 'storage', srcId: 'battery.sungrow' },
-      { label: 'House', fid: FID.LOAD_W, watts: f.get(FID.LOAD_W), tone: 'load', srcId: 'meter.p1' },
-    ]
   }
 
   get socPercent(): number | null {

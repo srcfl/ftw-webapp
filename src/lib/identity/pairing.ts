@@ -163,11 +163,36 @@ export function setCurrentSite(siteId: string): void {
   // The inline boot script reads this before the bundle is parsed, which is
   // what lets a cold start paint cached readings in the first frame.
   try {
-    localStorage.setItem('ftw.site', siteId)
+    localStorage.setItem(SITE_POINTER, siteId)
   } catch {
     // Blocked storage costs a slower start, not a broken pairing.
   }
 }
+
+/**
+ * Point the app at nothing.
+ *
+ * The counterpart of setCurrentSite, and it lives here for the same reason:
+ * this file owns which home the app opens. A pointer left behind after the
+ * row it names is gone is worse than no pointer at all — the launch path
+ * believes this phone is paired, so it opens an empty house instead of the
+ * pairing screen, and there is no way out of it.
+ */
+export function clearCurrentSite(): void {
+  try {
+    localStorage.removeItem(SITE_POINTER)
+  } catch {
+    // Storage that cannot be written was never read either.
+  }
+
+  // The inline boot script's read, if it is still in flight. It resolves to a
+  // sealed blob, and the key that opens it is about to go — but dropping the
+  // promise costs nothing and removes the question.
+  if (typeof window !== 'undefined') window.__ftwBoot = undefined
+}
+
+/** Also spelled in index.html, which runs before any module exists. */
+const SITE_POINTER = 'ftw.site'
 
 export async function pairedSites(): Promise<StoredSite[]> {
   const database = await db()
@@ -176,11 +201,28 @@ export async function pairedSites(): Promise<StoredSite[]> {
 
 export async function currentSiteId(): Promise<string | null> {
   try {
-    const stored = localStorage.getItem('ftw.site')
+    const stored = localStorage.getItem(SITE_POINTER)
     if (stored) return stored
   } catch {
     /* fall through to the database */
   }
   const sites = await pairedSites()
   return sites[0]?.siteId ?? null
+}
+
+/**
+ * A short, stable name for a box key: six hex characters of its digest.
+ *
+ * Not a security control on its own — nobody memorises it — but it makes two
+ * different boxes visibly different, which is what a person needs in order to
+ * notice that the box being offered is not the one on their wall. It lives
+ * here so the screen that offers a box and the screen that names the one you
+ * are paired to cannot drift into calling the same box two things.
+ */
+export async function boxFingerprint(boxStaticKey: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', boxStaticKey as BufferSource)
+  return Array.from(new Uint8Array(digest).subarray(0, 3))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
 }

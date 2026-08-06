@@ -14,8 +14,8 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
-  import type { Trace } from '$lib/ui/chart'
-  import { formatPower } from '$lib/format/power'
+  import { axisOf, ticksOf, type Domain, type Trace } from '$lib/ui/chart'
+  import { formatPower, formatScaleWatts } from '$lib/format/power'
   import { MISSING_SAMPLE } from '$lib/protocol/messages'
   import { HistoryStore, RANGES, RANGE_KEYS, type RangeKey } from '$lib/state/history.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
@@ -52,6 +52,39 @@
   const frame = $derived(history.frame)
   const hasData = $derived((frame?.points ?? 0) > 0)
 
+  /** Tall enough for a day to have a shape, short enough to sit above the fold. */
+  const CHART_H = 200
+
+  // The axis is computed here, not inside the chart, so the numbers printed
+  // down the side and the rules drawn on the canvas come from one call. They
+  // used to be two, and the canvas was the only one that knew about them.
+  const axis = $derived.by((): Domain => (frame ? axisOf(frame.columns, history.lockedDomain) : [0, 0]))
+
+  const ticks = $derived(ticksOf(axis))
+
+  /**
+   * The gridline numbers, and which way is which.
+   *
+   * Magnitudes only — the wire's minus sign is right for the wire and wrong
+   * for a person, so the direction is a word on the outermost rule each side
+   * rather than a sign on every one of them.
+   */
+  const yLabels = $derived.by(() => {
+    const [min, max] = axis
+    const span = max - min || 1
+    const positive = ticks.filter((t) => t > 0)
+    const negative = ticks.filter((t) => t < 0)
+    const highest = positive[positive.length - 1]
+    const lowest = negative[0]
+
+    return ticks.map((value) => ({
+      value,
+      at: (max - value) / span,
+      text: value === 0 ? '0' : formatScaleWatts(value),
+      dir: value === highest ? 'in' : value === lowest ? 'out' : null,
+    }))
+  })
+
   /** Whole hours or whole days, whichever the span makes readable. */
   const axisLabels = $derived.by(() => {
     if (!frame || frame.points === 0) return []
@@ -62,10 +95,15 @@
         : { day: 'numeric', month: 'short' }
     const fmt = new Intl.DateTimeFormat(undefined, opts)
 
-    // Three. Five fit the card and not the phone it is held on.
+    // Three. Five fit the card and not the phone it is held on. The window
+    // always ends at this moment, and on a 24 h range both ends otherwise
+    // print the same clock time, which reads as a fault rather than a day.
     return [0, 0.5, 1].map((f) => ({
       at: f,
-      text: fmt.format(new Date(frame.startMs + f * (frame.points - 1) * frame.stepMs)),
+      text:
+        f === 1
+          ? 'now'
+          : fmt.format(new Date(frame.startMs + f * (frame.points - 1) * frame.stepMs)),
     }))
   })
 
@@ -129,17 +167,33 @@
 
   <div class="plot">
     {#if hasData && frame}
-      <Chart
-        {frame}
-        {traces}
-        lockedDomain={history.lockedDomain}
-        cursor={history.cursor}
-        onCursor={(i) => (history.cursor = i)}
-      />
-      <div class="axis" aria-hidden="true">
-        {#each axisLabels as label (label.at)}
-          <span class="tick num" style:left="{label.at * 100}%">{label.text}</span>
-        {/each}
+      <!-- The scale is DOM text beside the canvas, not pixels on it, so it
+           reflows and respects the text size the reader chose. It is hidden
+           from a screen reader on purpose: rungs on an axis are no use read
+           aloud, and the readout below carries the same numbers in words. -->
+      <div class="frame">
+        <div class="scale" aria-hidden="true" style:height="{CHART_H}px">
+          {#each yLabels as label (label.value)}
+            <span class="ytick num" style:top="{label.at * 100}%">
+              {label.text}
+              {#if label.dir}<em>{label.dir}</em>{/if}
+            </span>
+          {/each}
+        </div>
+        <Chart
+          {frame}
+          {traces}
+          {axis}
+          {ticks}
+          height={CHART_H}
+          cursor={history.cursor}
+          onCursor={(i) => (history.cursor = i)}
+        />
+        <div class="axis" aria-hidden="true">
+          {#each axisLabels as label (label.at)}
+            <span class="tick num" style:left="{label.at * 100}%">{label.text}</span>
+          {/each}
+        </div>
       </div>
     {:else}
       <p class="placeholder">
@@ -242,7 +296,43 @@
     padding: var(--space-3) var(--space-3) var(--space-2);
   }
 
+  /* Two columns: the scale, then everything measured against it. The x-axis
+     sits in the second column so its ends line up with the plot's ends. */
+  .frame {
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    column-gap: var(--space-2);
+  }
+
+  .scale {
+    position: relative;
+  }
+
+  .ytick {
+    position: absolute;
+    right: 0;
+    transform: translateY(-50%);
+    text-align: right;
+    font-size: 9px;
+    line-height: 1.2;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+
+  /* The direction word, under its number. The chart never shows a minus
+     sign; this is what carries the sign convention instead. */
+  .ytick em {
+    display: block;
+    font-style: normal;
+    font-size: 8px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    opacity: 0.75;
+  }
+
   .axis {
+    grid-column: 2;
     position: relative;
     height: 16px;
     margin-top: var(--space-2);
