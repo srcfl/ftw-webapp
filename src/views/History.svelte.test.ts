@@ -62,9 +62,15 @@ describe('a history window the wire cut short', () => {
     await vi.advanceTimersByTimeAsync(50)
 
     // Nothing cached and nothing served: the chart has nothing to draw and
-    // the note says so.
+    // the note says so — about the WIRE, which is what went wrong. It said
+    // "No history yet", which is a statement about the household's records
+    // made out of a request that never came back. A house with ten years on
+    // its box reads the same sentence.
     expect(document.querySelector('canvas')).toBeNull()
-    expect(document.body.textContent).toMatch(/no history yet/i)
+    expect(document.body.textContent, 'a lost answer was reported as an empty house').not.toMatch(
+      /no history yet|nothing recorded/i
+    )
+    expect(document.body.textContent).toMatch(/out of reach/i)
 
     carrier.restore()
     await vi.advanceTimersByTimeAsync(1_000)
@@ -75,7 +81,7 @@ describe('a history window the wire cut short', () => {
       document.querySelector('canvas'),
       'the chart stayed empty against a box that was answering'
     ).not.toBeNull()
-    expect(document.body.textContent).not.toMatch(/no history yet/i)
+    expect(document.body.textContent).not.toMatch(/out of reach/i)
   })
 
   it('goes back for a window the box never answered, with the wire still up', async () => {
@@ -105,7 +111,10 @@ describe('a history window the wire cut short', () => {
 
     expect(site.session.phase).toBe('streaming')
     expect(document.querySelector('canvas')).toBeNull()
-    expect(document.body.textContent).toMatch(/no history yet/i)
+    expect(document.body.textContent, 'a lost answer was reported as an empty house').not.toMatch(
+      /no history yet|nothing recorded/i
+    )
+    expect(document.body.textContent).toMatch(/out of reach/i)
 
     box.faults = { ...box.faults, frameLossRate: 0 }
     await vi.advanceTimersByTimeAsync(31_000)
@@ -115,7 +124,7 @@ describe('a history window the wire cut short', () => {
       document.querySelector('canvas'),
       'the chart stayed empty against a box that was answering'
     ).not.toBeNull()
-    expect(document.body.textContent).not.toMatch(/no history yet/i)
+    expect(document.body.textContent).not.toMatch(/out of reach/i)
   })
 
   it('does not repaint the chart for a live stream it is not drawing', async () => {

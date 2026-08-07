@@ -1,0 +1,77 @@
+# The escrow and its TLS terminator, on one small instance.
+#
+# Two containers and a volume. The volume is the whole store — one file of
+# fixed slots — and losing it costs every household a QR scan, which is what
+# makes this safe to run with no backup and no failover.
+#
+# ONE ESCROW CONTAINER, NEVER TWO. The rollback guard used to rest on SQLite's
+# atomicity for a single statement; it rests now on the store doing its whole
+# read-decide-write synchronously, which settles two devices racing inside one
+# process and settles nothing at all between two. Scaling this service is the
+# one change that breaks it silently.
+#
+# Note what is missing on purpose: no volume for logs, because neither
+# container writes one. The escrow produces no output at all and a test fails
+# if that stops being true; Caddy's two logs are discarded in the Caddyfile,
+# after a round where they were filtered instead and kept a household's
+# activity record anyway. Both containers still get a small cap on what Docker
+# would keep, for the one thing that can still print: a config so bad that
+# Caddy complains before its own config is in force.
+
+name: ftw-escrow
+
+services:
+  escrow:
+    build:
+      context: ../..
+      dockerfile: escrow/Dockerfile
+    restart: unless-stopped
+    # Loopback only. Caddy is the only thing that may reach it.
+    ports:
+      - '127.0.0.1:8788:8788'
+    volumes:
+      - escrow-data:/srv/escrow/data
+    environment:
+      PORT: '8788'
+      ESCROW_DB: /srv/escrow/data/escrow.slots
+      # Read once, the first time the file is made. Growing it is grow.ts with
+      # the service stopped; changing this on a running host does nothing.
+      ESCROW_HOUSEHOLDS: '4096'
+    # Cap it rather than leave the default. The process writes nothing, so this
+    # only ever holds a crash — but "nothing is written" should be enforced by
+    # the shape of the deployment and not only by the code being well behaved.
+    logging:
+      driver: json-file
+      options:
+        max-size: '1m'
+        max-file: '1'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # No log volume any more. Both of Caddy's logs are discarded in the
+    # Caddyfile — the access log because its byte counts told a save from a
+    # read from a miss, and the global one because an error line carries the
+    # client address and the URI. A volume for logs that must not exist is an
+    # invitation to point something at it.
+    #
+    # Same cap as the escrow, for the same reason: what it prints on a bad
+    # config goes to stdout before the Caddyfile is in force, so this is the
+    # one place anything can accumulate.
+    logging:
+      driver: json-file
+      options:
+        max-size: '1m'
+        max-file: '1'
+    depends_on:
+      - escrow
+
+volumes:
+  escrow-data:
+  caddy-data:
+  caddy-config:

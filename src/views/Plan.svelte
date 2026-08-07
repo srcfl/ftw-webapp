@@ -286,7 +286,11 @@
     </p>
   {:else if plan.command.kind === 'failed'}
     <p class="status warn">{plan.command.help}</p>
-  {:else if !plan.canControl}
+  {:else if plan.whyNoControl === 'role'}
+    <!-- Not "your box can't do this" — it can, and saying otherwise would
+         send a guest looking for a fault that is not there. -->
+    <p class="status">You have view-only access, so this is the owner's to change.</p>
+  {:else if plan.whyNoControl === 'box'}
     <p class="status">This box doesn't support changing how it runs.</p>
   {/if}
 </section>

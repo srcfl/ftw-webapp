@@ -12,6 +12,9 @@ import { CommandError } from '$lib/protocol/session'
 import type { SiteStore } from './site.svelte'
 import { FID } from '$lib/format/explanation'
 
+/** From contract/registry.yaml, and the scope the box checks for OP_SET_MODE. */
+const SCOPE_MODE_WRITE = 'ftw.mode.write'
+
 /** What the user sees while an intent is in flight. */
 export type CommandState =
   | { kind: 'idle' }
@@ -89,8 +92,51 @@ export class PlanStore {
     return this.actualMode
   }
 
+  /**
+   * Whether to draw the mode buttons at all.
+   *
+   * Two questions, and both have to be yes. The box has to offer dispatch,
+   * and this enrolment has to carry the scope the operation needs — the same
+   * scope the box checks before the dispatcher ever sees the command. Drawing
+   * a control a viewer will be refused is the one thing this app must not do:
+   * they tap it, watch it fail, and learn that the app lies.
+   *
+   * Hiding is presentation. The refusal is still the box's, so an app that
+   * gets this wrong is merely rude rather than unsafe.
+   */
   get canControl(): boolean {
-    return this.#site.session.caps.has('plan.dispatch')
+    return this.#site.session.caps.has('plan.dispatch') && this.#hasModeScope
+  }
+
+  /**
+   * Why there are no buttons — because the two reasons are different
+   * sentences, and "this box doesn't support it" is false for a guest in a
+   * house whose box supports it perfectly.
+   *
+   * Null until the box has answered, and that is the third case rather than a
+   * missing one. Before its hello, `caps` is empty because nobody asked and
+   * `role` reads owner because that is what an old box means by silence —
+   * rendered as an answer, the pair says "this box doesn't support changing
+   * how it runs" on every cold start, about a box that has said nothing. The
+   * sharing screen had the same bug and the same cause.
+   */
+  get whyNoControl(): 'box' | 'role' | null {
+    if (!this.#site.session.heardFromBox) return null
+    if (this.canControl) return null
+    return this.#hasModeScope ? 'box' : 'role'
+  }
+
+  /**
+   * The grant the box named, not this app's expansion of the role.
+   *
+   * `hello_ok` carries both, and the box sends both for exactly this: the
+   * role is what the sentence beside the buttons names, and the scope list is
+   * what a control is checked against. Expanding the role here instead put
+   * this app's copy of the registry's table above the box's answer, so a box
+   * whose table had moved on was overruled by an older one.
+   */
+  get #hasModeScope(): boolean {
+    return this.#site.session.scopes.has(SCOPE_MODE_WRITE)
   }
 
   /**

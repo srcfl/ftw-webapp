@@ -5,10 +5,21 @@
   the one screen that is about the pairing itself, and it exists because an app
   you cannot sign out of is not an app.
 
-  It is not a preferences screen and must not become one. Nothing here can be
-  set. What it holds is what someone leaving needs to know — which box this
-  phone is paired to, what it runs, when this phone joined, and the name to
-  look for on the box's own list — and the door.
+  It is not a preferences screen and must not become one. What it holds is what
+  someone leaving needs to know — which box this phone is paired to, what it
+  runs, when this phone joined, and the name to look for on the box's own list
+  — and the door.
+
+  One thing here can be turned on, and it belongs to the door rather than to a
+  settings list: whether Sourceful holds a sealed copy of this home, so a
+  phone that is lost or wiped can come back with the passkey alone. It is the
+  mirror image of signing out and it is answered in the same words on the same
+  screen, which is why it is not on the pairing flow — that flow's whole
+  budget is two taps, and a privacy question is not worth the third for
+  someone who has not lost a phone yet.
+
+  Nothing else may be set here. A second switch is how this becomes the
+  settings screen the app does not have.
 
   The two halves of leaving are kept apart on purpose. Signing out clears this
   phone; it does not tell the box to stop trusting it. Nothing on the wire can
@@ -23,6 +34,7 @@
   import type { SiteStore } from '$lib/state/site.svelte'
   import { boxFingerprint, pairedSites } from '$lib/identity/pairing'
   import { deviceIdOnBox, openVaultStore } from '$lib/identity/vault'
+  import Access from '$views/Access.svelte'
 
   interface Props {
     site: SiteStore
@@ -38,8 +50,21 @@
 
   let { site, leave }: Props = $props()
 
-  type Stage = 'idle' | 'confirming' | 'leaving' | 'stuck'
+  type Stage = 'idle' | 'confirming' | 'leaving' | 'stuck' | 'copy-kept'
   let stage = $state<Stage>('idle')
+
+  /**
+   * Whether Sourceful is holding a sealed copy of this home.
+   *
+   * Read from the row rather than asked of the service, because asking would
+   * cost a passkey prompt to answer a question about a screen — the id is
+   * derived from the passkey and from nothing else. The row is what this
+   * device believes, and it is what the next save acts on.
+   */
+  let copyKept = $state(false)
+  /** 'working' while a prompt or a request is in flight. */
+  let copyStage = $state<'idle' | 'working' | 'failed'>('idle')
+  let copyProblem = $state('')
 
   /**
    * The box's name, offline.
@@ -67,9 +92,63 @@
       const row = sites.find((s) => s.siteId === id)
       if (!row) return
       pairedAtMs = row.addedAtMs
+      copyKept = row.escrow === true
       name = await boxFingerprint(row.boxStaticKey)
     })()
   })
+
+  /**
+   * Ask Sourceful to hold a copy, or to stop holding one.
+   *
+   * The mark goes down first and comes back up if the write did not land, so
+   * "Sourceful is holding a copy" on this screen is never further ahead than
+   * what is actually out there. One passkey prompt either way — the id and
+   * the key come out of the same ceremony.
+   */
+  async function setCopyKept(on: boolean) {
+    const id = site.siteId
+    if (!id) return
+    copyStage = 'working'
+    copyProblem = ''
+    try {
+      const [{ markEscrowed, saveEscrowCopy }, { openVaultStore, unlockWrappingKey }] =
+        await Promise.all([import('$lib/identity/escrow'), import('$lib/identity/vault')])
+      await markEscrowed(id, on)
+      const store = openVaultStore()
+      const outcome = await saveEscrowCopy(store, await unlockWrappingKey(store))
+      if (outcome === 'saved' || outcome === 'cleared') {
+        copyKept = on
+        copyStage = 'idle'
+        return
+      }
+      await markEscrowed(id, !on)
+      copyStage = 'failed'
+      // Three endings and three sentences, because "try again when you're
+      // online" is wrong and unanswerable for a phone with no passkey that can
+      // seal anything.
+      copyProblem =
+        outcome === 'unsupported'
+          ? 'This phone has no passkey that can seal a copy. Everything else works exactly as it does now.'
+          : outcome === 'unreachable'
+            ? "That didn't reach Sourceful. Your home works either way — try again when you're back online."
+            : "That didn't work. Your home works either way. Try again."
+    } catch (err) {
+      await markEscrowedQuietly(id, !on)
+      // A dismissed passkey sheet is not a fault and gets no error voice.
+      copyStage = err instanceof DOMException && err.name === 'NotAllowedError' ? 'idle' : 'failed'
+      if (copyStage === 'failed') copyProblem = "That didn't work. Try again."
+    }
+  }
+
+  async function markEscrowedQuietly(id: string, on: boolean) {
+    try {
+      const { markEscrowed } = await import('$lib/identity/escrow')
+      await markEscrowed(id, on)
+    } catch {
+      // The mark is this device's belief about a copy; a stale one costs a
+      // wrong sentence on this screen and is put right by the next attempt.
+    }
+  }
 
   const build = $derived(site.session.box?.build ?? null)
   const timeZone = $derived(site.session.box?.tz ?? null)
@@ -84,7 +163,32 @@
         }).format(pairedAtMs)
   )
 
+  /**
+   * Take the sealed copy away, then leave.
+   *
+   * In that order, and it is not a detail. A copy that outlives a sign-out
+   * offers the next launch the home its owner just left, which would make
+   * signing out a lie — and once the phone is signed out this screen is gone,
+   * so there is no later moment at which anyone could be told. It costs
+   * nothing at all for a household that never asked for a copy.
+   */
   async function signOut() {
+    stage = 'leaving'
+    try {
+      const { removeEscrowCopy } = await import('$lib/identity/escrow')
+      const outcome = await removeEscrowCopy()
+      if (outcome !== 'removed' && outcome !== 'nothing-to-remove') {
+        stage = 'copy-kept'
+        return
+      }
+    } catch {
+      stage = 'copy-kept'
+      return
+    }
+    await finishSignOut()
+  }
+
+  async function finishSignOut() {
     stage = 'leaving'
     try {
       await leave()
@@ -130,12 +234,58 @@
 
   <hr />
 
+  <!-- Who else this box trusts. The same question signing out asks, from the
+       other end, which is why it lives on this screen and not a new one. -->
+  <Access {site} />
+
+  <hr />
+
+  <!-- The spare key. Written as what it costs, not as a feature: someone who
+       says no must be able to see that they are choosing today's behaviour,
+       and someone who says yes must be able to see what they are moving. -->
+  <h2>If you lose this phone</h2>
+  {#if copyKept}
+    <p>
+      Sourceful holds a sealed copy it cannot open, with an opaque id and
+      nothing beside it. A new phone gets this home back with your passkey
+      alone.
+    </p>
+    <p>
+      Which also means your passkey is enough to open this home, on any device
+      that can pass Face ID for it.
+    </p>
+    <button class="quiet outline" disabled={copyStage === 'working'} onclick={() => void setCopyKept(false)}>
+      {copyStage === 'working' ? 'Removing the copy' : 'Remove the copy'}
+    </button>
+  {:else}
+    <p>
+      Right now the only way back is the code on your box. Sourceful can hold a
+      sealed copy it cannot open, with an opaque id and nothing beside it, so a
+      new phone gets this home back with your passkey alone.
+    </p>
+    <p>
+      The cost: your passkey is then enough to open this home, on any device
+      that can pass Face ID for it. Nothing is saved unless you ask.
+    </p>
+    <button class="quiet outline" disabled={copyStage === 'working'} onclick={() => void setCopyKept(true)}>
+      {copyStage === 'working' ? 'Saving a sealed copy' : 'Keep a sealed copy'}
+    </button>
+  {/if}
+  {#if copyStage === 'failed'}
+    <p class="problem">{copyProblem}</p>
+  {/if}
+
+  <hr />
+
   {#if stage === 'confirming'}
     <h2>Sign out on this phone?</h2>
     <p>
       This phone stops showing your home and forgets its key. Nothing is removed
       from your box — it keeps running and keeps every reading.
     </p>
+    {#if copyKept}
+      <p>The sealed copy Sourceful holds is emptied first.</p>
+    {/if}
     <p>To come back you need to scan the code on the box itself.</p>
     <!-- What to check, not what is certainly there. A device key that never
          finished pairing was never recorded, and a phone removed on the box
@@ -152,6 +302,19 @@
   {:else if stage === 'leaving'}
     <h2>Signing out</h2>
     <p>Clearing this home from this phone.</p>
+  {:else if stage === 'copy-kept'}
+    <!-- Said before the sign-out rather than after, because after it this
+         screen is gone and nobody could be told. The copy is still out there
+         and this phone still holds the home, so both offers are honest. -->
+    <h2>The sealed copy is still there</h2>
+    <p>
+      This phone could not reach the copy Sourceful is holding, so it is still
+      out there and a new phone could still open this home with your passkey.
+    </p>
+    <p>You are not signed out yet. Nothing on this phone has changed.</p>
+    <button class="danger" onclick={() => void signOut()}>Try again</button>
+    <button class="quiet" onclick={() => void finishSignOut()}>Sign out anyway</button>
+    <button class="quiet" onclick={() => (stage = 'idle')}>Cancel</button>
   {:else if stage === 'stuck'}
     <h2>That didn't finish</h2>
     <p>

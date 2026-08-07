@@ -137,6 +137,24 @@
 
   const needsPairing = $derived(!siteId && !site.paired && !resolvingSite)
 
+  /**
+   * Someone asked for the way back into a home this phone already has.
+   *
+   * The pairing screen is the floor: no other device, no session, nothing on
+   * this phone that opens the house. It used to be mounted on one condition —
+   * this phone is pointed at no home at all — which is false for every state
+   * the floor exists for. A phone whose identity database was evicted while
+   * its site row survived kept pointing at a home it could not open, and the
+   * one screen that could put that right was the one it could never reach.
+   *
+   * Asked for, never imposed. Nothing here is broken enough to take the house
+   * off the screen by itself: a cached reading with an honest age is still
+   * worth looking at, and the app goes on trying underneath. See Now, which
+   * is where the offer sits, and $lib/state/ask for everything that does heal
+   * itself without asking anybody.
+   */
+  let recovering = $state(false)
+
   /** This phone is pointed at a home, whether or not one has painted yet. */
   const hasHome = $derived(site.paired || siteId !== null)
 
@@ -230,6 +248,7 @@
   }
 
   function onPaired(pairedSiteId: string) {
+    recovering = false
     // The decision the user just made, recorded here rather than as a side
     // effect of storing the row — see setCurrentSite.
     void import('$lib/identity/pairing').then(({ setCurrentSite }) =>
@@ -308,12 +327,16 @@
        that cannot reach its box has no reading and the most pressing question
        in the app: whether anything is getting through, and how old what it is
        looking at is. Hiding the band there hides the answer. -->
-  {#if hasHome}
+  <!-- Nothing about freshness while the pairing screen is up: the readings it
+       would date are not on screen, and this phone is being pointed at a box
+       rather than reading one. -->
+  {#if hasHome && !recovering}
     <FreshnessBand
       carrier={site.carrier}
       srcState={site.srcState}
       ageMs={site.ageMs}
       phase={site.session.phase}
+      noCarrier={connectHelp !== null}
     />
   {/if}
 
@@ -325,8 +348,18 @@
            not a spinner for a network call, it is the app checking what it
            already knows. -->
       <section class="settling"></section>
-    {:else if needsPairing || pairingFragment}
-      <Pair fragment={pairingFragment} onPaired={(s) => onPaired(s.siteId)} />
+    {:else if needsPairing || pairingFragment || recovering}
+      <!-- `problem` is what this phone cannot do, and it decides which ways in
+           the screen offers. Null unless a carrier could not be built at all,
+           which includes the ordinary case of someone opening the floor while
+           the box is merely quiet. `dismiss` exists because a screen reached
+           from a home has to lead back to it. -->
+      <Pair
+        fragment={pairingFragment}
+        problem={recovering ? connectHelp : null}
+        dismiss={recovering ? () => (recovering = false) : null}
+        onPaired={(s) => onPaired(s.siteId)}
+      />
     {:else}
       <!-- Views are hidden, never destroyed.
            An {#if} chain tore the whole view down on every tap and built the
@@ -339,7 +372,7 @@
            A view that has never been opened is still not built: `seen` gates
            the first mount, so the cost is paid once and never again. -->
       <div class="view" hidden={router.current !== 'now'}>
-        <Now {site} {hasHome} {connectHelp} />
+        <Now {site} {hasHome} {connectHelp} wayBack={() => (recovering = true)} />
       </div>
 
       {#if seen.plan}
@@ -379,8 +412,12 @@
        Shown whenever this phone is pointed at a home, not only once a reading
        has landed. A phone that cannot reach its box and has nothing cached
        otherwise loses its whole tab bar — including the one screen that lets
-       it leave, which is exactly the screen someone in that state wants. -->
-  {#if hasHome}
+       it leave, which is exactly the screen someone in that state wants.
+
+       Not while the pairing screen is up. Those four buttons switch between
+       views that are not mounted, so every one of them would do nothing; the
+       way back to them is a button on that screen. -->
+  {#if hasHome && !recovering}
     <nav aria-label="Views">
       <button
         type="button"

@@ -10,7 +10,15 @@
  * seconds ago", which is the case users most need to see.
  */
 
-import { encodeFrame, decodeFrame, isTruncated, LANE_CONTROL, LANE_BULK, FrameError } from './frame'
+import {
+  encodeFrame,
+  decodeFrame,
+  isTruncated,
+  wireBytes,
+  LANE_CONTROL,
+  LANE_BULK,
+  FrameError,
+} from './frame'
 import {
   PROTO_MIN,
   PROTO_MAX,
@@ -33,9 +41,17 @@ import {
   type Guard,
   type CmdAck,
   type CmdResult,
+  type ApiReq,
+  type ApiHead,
+  type ApiChunk,
+  type ApiEnd,
+  type Role,
+  ROLE_OWNER,
+  API_MAX_BYTES,
   CMD_ACK_TIMEOUT_MS,
   CMD_CONFIRM_TIMEOUT_MS,
 } from './messages'
+import { ROLE_SCOPES } from './contract'
 import type { Carrier } from '$lib/carrier/carrier'
 import type { CarrierState, Fid, Source, SourceState } from './types'
 
@@ -55,6 +71,48 @@ export interface SessionState {
   proto: number
   mode: BoxMode
   caps: ReadonlySet<string>
+  /**
+   * What this enrolment may do, as the box named it at handshake.
+   *
+   * Read only to decide what to draw. A box from before roles existed sends
+   * nothing and treats every paired phone as an owner, so that is what absent
+   * means here too — anything else would take a household's own controls away
+   * on the morning it updated its box.
+   *
+   * Absent from the handshake and absent BEFORE the handshake are two
+   * different facts. See `heardFromBox`.
+   */
+  role: Role
+  /**
+   * That role expanded, as the box expanded it.
+   *
+   * What a control is checked against, where `role` is what a sentence names.
+   * The box sends both and says why: an app that expands the role itself is
+   * an app deciding what its own grant contains, and the box decides that.
+   * This one did expand it, out of the registry table it ships with, so a box
+   * whose table had moved on was overruled by a copy of an older one.
+   *
+   * A box that sends none is one from before roles existed. Its silence means
+   * the same as an absent role — every paired phone may do everything — so
+   * the role's own expansion stands in, and `heardFromBox` is what says
+   * whether even that has been heard.
+   */
+  scopes: ReadonlySet<string>
+  /**
+   * Whether the box has answered a hello since this app was opened.
+   *
+   * `role`, `caps` and `modes` are only claims about the box once it has.
+   * Before that they are this app's opening assumptions — every paired phone
+   * is an owner, no capability is known — and a screen that states something
+   * about the box from them is inventing it. One screen did: it read the empty
+   * capability set as a box too old to share, on every cold start, about a box
+   * that had said nothing at all.
+   *
+   * The phase cannot stand in for this. `failed` before a first hello and
+   * `failed` after one are the same phase and opposite facts, which is the
+   * same reason freshness needs two fields rather than one.
+   */
+  heardFromBox: boolean
   box: HelloOk['box'] | null
   /** Box uptime at the last frame. All ages are deltas against this. */
   uptimeMs: number
@@ -92,6 +150,9 @@ const EMPTY: SessionState = {
   proto: PROTO_MAX,
   mode: 'full',
   caps: new Set(),
+  role: ROLE_OWNER,
+  scopes: new Set(ROLE_SCOPES[ROLE_OWNER] ?? []),
+  heardFromBox: false,
   box: null,
   uptimeMs: 0,
   controlRev: 0,
@@ -128,6 +189,26 @@ interface PendingHistory {
   resolve: (end: HistEnd) => void
   reject: (err: Error) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+/**
+ * How long a call to the box's own API waits before giving up.
+ *
+ * History's deadline, for history's reason: a four-megabyte answer is around
+ * 340 chunks, which is a real amount of time over a relay. Being quick about
+ * failing is not the point — the point is that the promise always settles.
+ */
+export const API_TIMEOUT_MS = 20_000
+
+interface PendingApi {
+  resolve: (res: ApiResponse) => void
+  reject: (err: Error) => void
+  timer: ReturnType<typeof setTimeout>
+  head: ApiHead | null
+  chunks: Uint8Array[]
+  bytes: number
+  /** Next chunk expected. A gap means frames were lost and the body is a lie. */
+  nextSeq: number
 }
 
 /** A plan is one bulk message, so this can be much tighter than history. */
@@ -238,6 +319,42 @@ export class PriceError extends Error {
   }
 }
 
+/**
+ * What the box's HTTP layer answered.
+ *
+ * A 404 or a 500 arrives here, not as a thrown error, because the handler ran
+ * and this is what it said. What a status means is the caller's question —
+ * a 404 from the members endpoint means something different than a 404 from
+ * an energy window — and this layer has no business guessing.
+ */
+export interface ApiResponse {
+  status: number
+  headers: Record<string, string>
+  body: Uint8Array
+}
+
+/**
+ * The box refused, in a way that carries a stable code.
+ *
+ * Almost always because the passthrough refused before any handler ran — the
+ * rule that tells that apart needs no body inspection: `api.head` arrived
+ * means the HTTP layer answered and the status is the answer; `error` on the
+ * same id means nothing ran. Both are message types, so this branches on type
+ * and never on content.
+ *
+ * The one exception is `E_RESPONSE_TOO_LARGE`, which this layer raises itself
+ * when an answer arrives cut off. A handler did run there, and the status was
+ * real — but half a document is not an answer, and there is no honest way to
+ * hand it up. Callers that need to know the difference have `status` on
+ * `BoxApiError`, which is null exactly when no handler ran.
+ */
+export class ApiError extends Error {
+  constructor(readonly detail: ErrorMsg) {
+    super(detail.code)
+    this.name = 'ApiError'
+  }
+}
+
 export class Session {
   #state: SessionState = EMPTY
   #carrier: Carrier | null = null
@@ -250,6 +367,7 @@ export class Session {
   #pendingHistory = new Map<number, PendingHistory>()
   #pendingPlan = new Map<number, PendingPlan>()
   #pendingPrices = new Map<number, PendingPrices>()
+  #pendingApi = new Map<number, PendingApi>()
   #pendingCmd = new Map<string, PendingCmd>()
   /** Set only while the box says it is starting. See BOOT_RETRY_MS. */
   #bootRetry: ReturnType<typeof setTimeout> | undefined
@@ -426,6 +544,54 @@ export class Session {
   }
 
   /**
+   * Call the box's own HTTP API over this session.
+   *
+   * Bulk lane, and never lane 0: the path, the query and the body all vary in
+   * length with what was asked, and lane 0's constant size is the privacy
+   * control that keeps a household's load pattern out of the relay's view.
+   *
+   * Resolves with whatever the box's handler said, status included — a 404 is
+   * an answer here, not a failure. Rejects with `ApiError` when the box sent a
+   * stable code instead, and with a plain Error when the wire went away, the
+   * deadline passed, or the answer arrived in pieces that do not fit together.
+   */
+  api(req: ApiReq): Promise<ApiResponse> {
+    if (!this.#carrier) return Promise.reject(new Error('no carrier'))
+
+    const id = this.#nextRequestId
+    this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
+
+    return new Promise<ApiResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pendingApi.delete(id)
+        reject(new Error('api request timed out'))
+      }, API_TIMEOUT_MS)
+
+      this.#pendingApi.set(id, {
+        resolve,
+        reject,
+        timer,
+        head: null,
+        chunks: [],
+        bytes: 0,
+        nextSeq: 0,
+      })
+      this.#sendBulk({
+        t: 'api.req',
+        id,
+        b: {
+          maxBytes: API_MAX_BYTES,
+          ...req,
+          // The caller encoded this with a TextEncoder, and a typed array
+          // from another realm is written as a list of numbers rather than a
+          // byte string. See wireBytes.
+          ...(req.body ? { body: wireBytes(req.body) } : {}),
+        },
+      })
+    })
+  }
+
+  /**
    * Express an intent and follow it to its outcome.
    *
    * Three separate deadlines, because they are three different events and
@@ -539,6 +705,15 @@ export class Session {
       case 'price':
         this.#settlePrices(envelope.id, envelope.b as Prices)
         break
+      case 'api.head':
+        this.#onApiHead(envelope.id, envelope.b as ApiHead)
+        break
+      case 'api.chunk':
+        this.#onApiChunk(envelope.id, envelope.b as ApiChunk)
+        break
+      case 'api.end':
+        this.#settleApi(envelope.id, envelope.b as ApiEnd)
+        break
       case 'cmd.ack':
         this.#onCmdAck(envelope.b as CmdAck)
         break
@@ -563,6 +738,19 @@ export class Session {
       proto: b.proto,
       mode: b.mode,
       caps: new Set(b.caps),
+      // Absent means a box from before roles existed, and such a box lets
+      // every paired phone do everything. Defaulting to viewer would take a
+      // household's own controls away the morning it updated its app.
+      //
+      // That default is only honest once the box has answered, which is what
+      // the flag below is for: absent from a hello is a fact about the box,
+      // and absent before one is nothing at all.
+      role: b.role ?? ROLE_OWNER,
+      // The box's own expansion, never this app's. Falling back to the role
+      // table only when the box sent no list at all, which is a box from
+      // before roles — and that box lets every paired phone do everything.
+      scopes: new Set(b.scopes ?? ROLE_SCOPES[b.role ?? ROLE_OWNER] ?? []),
+      heardFromBox: true,
       modes: b.modes ?? [],
       box: b.box,
       uptimeMs: b.clock.uptimeMs,
@@ -676,6 +864,73 @@ export class Session {
     pending.resolve(prices)
   }
 
+  #onApiHead(id: number | undefined, head: ApiHead): void {
+    const pending = this.#pendingApi.get(id ?? -1)
+    if (!pending) return
+    // A second status for one request is a box contradicting itself. The
+    // first is the one already committed to, so the later one is dropped
+    // rather than allowed to rewrite what the caller will be told.
+    if (pending.head !== null) return
+    pending.head = head
+  }
+
+  #onApiChunk(id: number | undefined, chunk: ApiChunk): void {
+    const pending = this.#pendingApi.get(id ?? -1)
+    if (!pending) return
+
+    // A body assembled out of order, or with a chunk missing, is not a short
+    // answer to parse — it is bytes that were never sent presented as the
+    // box's. JSON would usually fail to parse and occasionally would not,
+    // which is the worse half. Fail the request instead.
+    if (chunk.seq !== pending.nextSeq) {
+      this.#pendingApi.delete(id!)
+      clearTimeout(pending.timer)
+      pending.reject(new Error('api response arrived out of order'))
+      return
+    }
+    pending.nextSeq += 1
+    pending.chunks.push(chunk.data)
+    pending.bytes += chunk.data.length
+  }
+
+  /**
+   * The answer is complete — or it is not, and that is a failure.
+   *
+   * A truncated answer never resolves. Half a CSV export and half a JSON
+   * document are both wrong in a way no caller above this can see, and the
+   * one honest thing to do with them is refuse them and say the window was
+   * too wide.
+   */
+  #settleApi(id: number | undefined, end: ApiEnd): void {
+    const pending = this.#pendingApi.get(id ?? -1)
+    if (!pending) return
+    this.#pendingApi.delete(id!)
+    clearTimeout(pending.timer)
+
+    if (end.truncated) {
+      pending.reject(
+        new ApiError({ code: 'E_RESPONSE_TOO_LARGE', retryable: false, args: { bytes: end.bytes } })
+      )
+      return
+    }
+
+    // No status and no error: the box ended a request it never answered. Not
+    // a body to hand up with a made-up status on it.
+    if (pending.head === null) {
+      pending.reject(new Error('api response ended without a status'))
+      return
+    }
+
+    const body = new Uint8Array(pending.bytes)
+    let at = 0
+    for (const part of pending.chunks) {
+      body.set(part, at)
+      at += part.length
+    }
+
+    pending.resolve({ status: pending.head.status, headers: pending.head.headers, body })
+  }
+
   #onCmdAck(b: CmdAck): void {
     const pending = this.#pendingCmd.get(b.cmdId)
     if (!pending) return
@@ -726,6 +981,14 @@ export class Session {
         this.#pendingPrices.delete(id)
         clearTimeout(prices.timer)
         prices.reject(new PriceError(b))
+        return
+      }
+
+      const api = this.#pendingApi.get(id)
+      if (api) {
+        this.#pendingApi.delete(id)
+        clearTimeout(api.timer)
+        api.reject(new ApiError(b))
         return
       }
     }
@@ -779,7 +1042,12 @@ export class Session {
    * later, on its own timer, against a view that has long since moved on.
    */
   #settlePending(): void {
-    for (const map of [this.#pendingHistory, this.#pendingPlan, this.#pendingPrices]) {
+    for (const map of [
+      this.#pendingHistory,
+      this.#pendingPlan,
+      this.#pendingPrices,
+      this.#pendingApi,
+    ]) {
       for (const [id, pending] of map) {
         clearTimeout(pending.timer)
         pending.reject(new Error('carrier closed'))

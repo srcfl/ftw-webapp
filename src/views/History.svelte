@@ -14,6 +14,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
+  import Energy from '$views/Energy.svelte'
   import { axisOf, ticksOf, type Domain, type Trace } from '$lib/ui/chart'
   import { formatPower, formatScaleWatts } from '$lib/format/power'
   import { MISSING_SAMPLE } from '$lib/protocol/messages'
@@ -150,7 +151,15 @@
 </script>
 
 <section class="history">
+  <!-- What the house used, made, bought and sold, day by day. First because
+       it is the question people open this screen with; the power trace under
+       it answers a different and narrower one. -->
+  <Energy {site} />
+
+  <hr />
+
   <header>
+    <h2 class="label">Power, minute by minute</h2>
     <div class="ranges" role="group" aria-label="Time range">
       {#each RANGE_KEYS as key (key)}
         <button
@@ -196,8 +205,13 @@
         </div>
       </div>
     {:else}
+      <!-- Three states, not two. "Nothing recorded" is a fact about the
+           household's records, and only the box can state it: before the
+           first answer this chart is one nobody has filled, not a range with
+           nothing in it. The note under the chart carries the news when an
+           answer went missing. -->
       <p class="placeholder">
-        {history.loading ? 'Reading your box…' : 'Nothing recorded for this range yet.'}
+        {history.loaded ? 'Nothing recorded for this range yet.' : 'Reading your box…'}
       </p>
     {/if}
   </div>
@@ -261,7 +275,26 @@
 
   header {
     display: flex;
-    justify-content: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+
+  hr {
+    width: 100%;
+    height: 1px;
+    border: 0;
+    background: var(--line-soft);
+    margin: var(--space-2) 0 0;
   }
 
   .ranges {

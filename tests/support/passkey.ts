@@ -1,10 +1,12 @@
 /* A pretend platform authenticator.
  *
  * jsdom has no WebAuthn at all, so every test of the identity layer has to
- * bring its own. This one is deliberately faithful about the single property
+ * bring its own. This one is deliberately faithful about the two properties
  * the key hierarchy depends on: two credentials produce two different PRF
  * outputs for the same salt, which is why the device key is wrapped once per
- * credential instead of derived once.
+ * credential instead of derived once; and a credential's secrets outlive the
+ * install that made them, which is what a synced passkey does and what makes
+ * recovery on a fresh install possible at all.
  *
  * Not a test file — vitest collects `tests/ **\/*.test.ts` only.
  */
@@ -19,8 +21,30 @@ export type PrfBehaviour =
   /** No PRF at all. */
   | 'none'
 
+/**
+ * What a credential keeps when the install that created it is gone.
+ *
+ * The whole point of the escrow is that this survives and the device's storage
+ * does not: a passkey syncs through the platform's keychain, so a fresh
+ * install signed into the same account meets the same credentials and derives
+ * the same PRF output. Pass one keychain to two installs and that is exactly
+ * what the test does.
+ */
+export interface Keychain {
+  /** Credential ids in registration order, as raw bytes. */
+  credentials: Uint8Array[]
+  /** Per-credential PRF seed. Two credentials, two seeds, two derived keys. */
+  seeds: Map<string, Uint8Array>
+}
+
+export function newKeychain(): Keychain {
+  return { credentials: [], seeds: new Map() }
+}
+
 export interface MockOptions {
   prf?: PrfBehaviour
+  /** Credentials that outlive this install. Omit for an authenticator of its own. */
+  keychain?: Keychain
   /** null models a browser without `getClientCapabilities`. */
   capabilities?: Record<string, boolean> | null
   /** Reject every ceremony with this error instead of answering. */
@@ -34,24 +58,26 @@ export interface MockAuthenticator {
   getCalls: number
   /** Credential ids in registration order, as raw bytes. */
   credentials: Uint8Array[]
+  keychain: Keychain
   uninstall(): void
 }
 
 export function installMockAuthenticator(opts: MockOptions = {}): MockAuthenticator {
-  const seeds = new Map<string, Uint8Array>()
+  const chain = opts.keychain ?? newKeychain()
 
   const mock: MockAuthenticator = {
     prf: opts.prf ?? 'create',
     createCalls: 0,
     getCalls: 0,
-    credentials: [],
+    credentials: chain.credentials,
+    keychain: chain,
     uninstall() {
       restore()
     },
   }
 
   const evaluate = (rawId: Uint8Array, salt: Uint8Array): ArrayBuffer => {
-    const seed = seeds.get(key(rawId))!
+    const seed = chain.seeds.get(key(rawId))!
     const input = new Uint8Array(seed.length + salt.length)
     input.set(seed)
     input.set(salt, seed.length)
@@ -65,8 +91,8 @@ export function installMockAuthenticator(opts: MockOptions = {}): MockAuthentica
 
       const pk = options.publicKey!
       const rawId = crypto.getRandomValues(new Uint8Array(16))
-      seeds.set(key(rawId), crypto.getRandomValues(new Uint8Array(32)))
-      mock.credentials.push(rawId)
+      chain.seeds.set(key(rawId), crypto.getRandomValues(new Uint8Array(32)))
+      chain.credentials.push(rawId)
 
       const salt = asBytes(pk.extensions?.prf?.eval?.first)
       const results =
@@ -85,8 +111,8 @@ export function installMockAuthenticator(opts: MockOptions = {}): MockAuthentica
 
       const pk = options.publicKey!
       const allowed = pk.allowCredentials?.[0]?.id
-      const rawId = allowed ? asBytes(allowed)! : mock.credentials[0]
-      if (!rawId || !seeds.has(key(rawId))) {
+      const rawId = allowed ? asBytes(allowed)! : chain.credentials[0]
+      if (!rawId || !chain.seeds.has(key(rawId))) {
         throw new DOMException('no such credential', 'NotAllowedError')
       }
 

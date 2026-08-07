@@ -15,6 +15,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # contract/registry.yaml is one file that lives in two repositories, and only
+  # a job with both checked out can tell whether it still is one file. The
+  # file's own header has always said CI fails when the two drift; nothing ever
+  # compared them, and they drifted three ways under a test that only ever
+  # compared this repository against itself.
+  #
+  # Its own job rather than a step in verify, because it is the only thing here
+  # that needs a second repository — and because a suite that cannot run on a
+  # laptop should not be the reason `npm run verify` fails on one.
+  contract:
+    name: the registry has not drifted from the box
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # One file, not the box's whole history. A checkout that fails takes the
+      # job with it, and the check refuses to run without both copies — so a
+      # step deleted or a path renamed turns this red rather than green. That
+      # is the entire difference between this and what it replaces.
+      # A change that lands in both repositories at once cannot be compared
+      # against the other one's default branch: the counterpart is not there
+      # yet, and each side would wait for the other forever. A pull request
+      # that names where its pair lives is compared against that instead.
+      # Everything else — a stray edit, a rename, a copy someone forgot — still
+      # meets the default branch, which is the case this job exists for.
+      - name: Which copy of the box to compare against
+        id: pair
+        env:
+          # Read live rather than from github.event: that payload is a snapshot
+          # taken when the run was queued, so a pair declared after the last
+          # push would be invisible and the job would compare against the wrong
+          # branch while looking like it had worked.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(gh pr view "${{ github.event.pull_request.number }}" \
+                   --repo "${{ github.repository }}" --json body -q .body)
+          REF=$(printf '%s\n' "$BODY" | sed -n 's|^Contract-pair: *srcfl/ftw@||p' | head -1 | tr -d '\r')
+          echo "ref=${REF:-master}" >> "$GITHUB_OUTPUT"
+          echo "comparing against srcfl/ftw@${REF:-master}"
+
+      - name: Check out the box
+        uses: actions/checkout@v5
+        with:
+          repository: srcfl/ftw
+          ref: ${{ steps.pair.outputs.ref }}
+          path: .box
+          token: ${{ secrets.FTW_CONTRACT_TOKEN || github.token }}
+          sparse-checkout: contract/registry.yaml
+          sparse-checkout-cone-mode: false
+
+      - run: node scripts/check-contract-drift.mjs .box/contract/registry.yaml
+
   verify:
     runs-on: ubuntu-latest
 

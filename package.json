@@ -15,6 +15,7 @@
     "relay": "node relay/src/main.ts",
     "icons": "node scripts/make-icons.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:contract": "node scripts/check-contract-drift.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run check && npm run test && npm run build"
