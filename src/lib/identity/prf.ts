@@ -16,6 +16,7 @@
  * rather than pretending the two are the same.
  */
 
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { encodeBase64url, decodeBase64url } from './base64url'
 import { currentRpId, RP_NAME } from './origin'
 
@@ -29,9 +30,51 @@ import { currentRpId, RP_NAME } from './origin'
 export const PRF_SALTS = {
   /** Wraps the device key at enrollment and before a privileged command. */
   vault: 'ftw.prf.v1.vault',
+  /**
+   * Separates the two things the escrow needs from everything that stays here.
+   *
+   * Unlike `vault` this is not a second thing to ask the authenticator for. It
+   * is an HKDF salt, and the authenticator is only ever asked for the vault
+   * salt: one ceremony, one prompt, and HKDF makes the keys that cannot stand
+   * in for each other. A second PRF evaluation in the same assertion would be
+   * one more thing a platform can leave unanswered, and it would separate them
+   * no better.
+   *
+   * See $lib/identity/escrow for what comes out of it and what it costs.
+   */
+  escrow: 'ftw.prf.v1.escrow',
 } as const
 
 export type PrfPurpose = keyof typeof PRF_SALTS
+
+/**
+ * What the escrow needs, both derived from the PRF output of one ceremony.
+ *
+ * Siblings, never one derived from the other: the id Sourceful holds says
+ * nothing about the key that opens what sits under it. They are separated by
+ * their `info` strings under the shared escrow salt.
+ */
+export interface EscrowKeys {
+  /** base64url of 32 bytes. The only name the service ever learns. */
+  lookupId: string
+  /** AES-GCM 256, non-extractable. Seals the recovery blob. */
+  sealKey: CryptoKey
+  /**
+   * Ed25519 public key, 32 bytes. What proves a write is this household's.
+   *
+   * Reading the escrow is the id alone, because a fresh install has a passkey
+   * and nothing else. Writing is not: the service pins this key the first time
+   * it sees it and refuses every later write that presents another, so knowing
+   * an id no longer lets a stranger overwrite a household's spare copy.
+   */
+  writeKey: Uint8Array
+  /** Signs one write. The private half never leaves this closure. */
+  sign(message: Uint8Array): Uint8Array
+}
+
+const ESCROW_ID_INFO = 'ftw.escrow.id.v1'
+const ESCROW_KEY_INFO = 'ftw.escrow.key.v1'
+const ESCROW_WRITE_INFO = 'ftw.escrow.write.v1'
 
 /** Where a wrapping key came from. The UI states this; it never hides it. */
 export type WrappingSource = 'prf' | 'local'
@@ -42,6 +85,17 @@ export interface WrappingKey {
   source: WrappingSource
   /** AES-GCM 256, non-extractable, encrypt/decrypt only. */
   key: CryptoKey
+  /**
+   * The id and the key for a sealed copy kept off this device.
+   *
+   * Derived from the same PRF output as `key`, so every ceremony that yields
+   * one yields both and no path pays a second prompt for it. Absent on the
+   * local fallback, where there is no PRF output to derive anything from —
+   * and therefore nothing that may leave this device. That is not a gap: a
+   * copy sealed under a key sitting unwrapped in IndexedDB would be a copy
+   * anyone holding the phone could upload and later open.
+   */
+  escrow?: EscrowKeys
 }
 
 /** Whether this browser can speak WebAuthn at all. */
@@ -203,12 +257,22 @@ function toDescriptor(id: string): PublicKeyCredentialDescriptor {
   return { type: 'public-key', id: decodeBase64url(id) }
 }
 
-async function toWrappingKey(
+/**
+ * PRF output to wrapping key.
+ *
+ * Exported because a recovery runs its own assertion — it needs the escrow id
+ * and the PRF secret from one ceremony — and a second spelling of this
+ * derivation would be a vault nothing can open.
+ */
+export async function toWrappingKey(
   credentialId: string,
   prfOutput: BufferSource,
   purpose: PrfPurpose
 ): Promise<WrappingKey> {
-  const material = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveKey'])
+  const material = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, [
+    'deriveKey',
+    'deriveBits',
+  ])
   const key = await crypto.subtle.deriveKey(
     {
       name: 'HKDF',
@@ -221,5 +285,53 @@ async function toWrappingKey(
     false,
     ['encrypt', 'decrypt']
   )
-  return { credentialId, source: 'prf', key }
+  return { credentialId, source: 'prf', key, escrow: await escrowKeys(material) }
+}
+
+/**
+ * The escrow's id, sealing key and write key, from PRF output already had.
+ *
+ * All three under PRF_SALTS.escrow and told apart by their info strings, so no
+ * one of them is a function of another and none can be produced from the vault
+ * key. The id is 32 bytes, which is what makes guessing one pointless — the
+ * service has no listing and there is nothing else to go on.
+ *
+ * The write key is the third because reading and writing are not the same
+ * right. A fresh install can read with the passkey alone, which is the whole
+ * point of the escrow; writing has to prove it is the household, or anyone who
+ * learns an id can overwrite their spare copy. Deriving it here means the same
+ * one prompt yields it and it costs the household nothing.
+ */
+async function escrowKeys(material: CryptoKey): Promise<EscrowKeys> {
+  const encoder = new TextEncoder()
+  const salt = encoder.encode(PRF_SALTS.escrow)
+  const idBits = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt, info: encoder.encode(ESCROW_ID_INFO) },
+    material,
+    256
+  )
+  const sealKey = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt, info: encoder.encode(ESCROW_KEY_INFO) },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  )
+  // @noble rather than WebCrypto, and not for taste: Ed25519 in WebCrypto is
+  // recent enough that a phone in the field can be without it, and a household
+  // that cannot sign is a household that cannot save. The curve is already in
+  // the bundle for Noise.
+  const writeSeed = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt, info: encoder.encode(ESCROW_WRITE_INFO) },
+      material,
+      256
+    )
+  )
+  return {
+    lookupId: encodeBase64url(new Uint8Array(idBits)),
+    sealKey,
+    writeKey: ed25519.getPublicKey(writeSeed),
+    sign: (message: Uint8Array) => ed25519.sign(message, writeSeed),
+  }
 }

@@ -32,9 +32,21 @@ import {
   type Prices,
   type SiteMode,
   type ModeInfo,
+  type ApiReq,
+  type ApiHead,
+  type ApiChunk,
+  type ApiEnd,
+  type Role,
+  ROLE_OWNER,
+  API_CHUNK_BYTES,
+  API_MAX_BYTES,
   OP_SET_MODE,
+  OP_BATTERY_HOLD,
+  carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
+import { SimApi } from './api'
+import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
 import {
   RESOLUTIONS,
@@ -44,7 +56,14 @@ import {
   etagOf,
 } from '$lib/protocol/history'
 import type { SourceState } from '$lib/protocol/types'
-import { DEFAULT_HOUSE, sample, stepSoc, type HouseConfig, type Reading } from './energy'
+import {
+  DAY_ANCHOR_PERMILLE,
+  DEFAULT_HOUSE,
+  sample,
+  stepSoc,
+  type HouseConfig,
+  type Reading,
+} from './energy'
 // One FID table, shared with the client. The simulator briefly kept its
 // own copy, which is exactly the drift contract/registry.yaml exists to
 // prevent — field 10 landed in one and not the other.
@@ -125,13 +144,11 @@ const DAY_MS = 86_400_000
 /**
  * State of charge history is re-anchored at each UTC midnight.
  *
- * Everything else in a reading is a function of the moment alone, but state
- * of charge is an integral, and replaying two years of it to answer one query
- * is absurd. Midnight is the honest place to re-anchor: there is no sun and
- * the load sits far below the ceiling, so the battery is idle either side of
- * the seam and the re-anchor never appears in a plotted series.
+ * The constant lives in energy.ts because the daily totals served over the
+ * API passthrough re-anchor on the same value. A house that charged one
+ * amount on the chart and another in the day's figure is two houses.
  */
-const HIST_DAY_ANCHOR_PERMILLE = 620
+const HIST_DAY_ANCHOR_PERMILLE = DAY_ANCHOR_PERMILLE
 
 
 /**
@@ -207,6 +224,20 @@ const MODE_KEYS = MODE_CATALOG.map((m) => m.key)
 /** FTW's default. */
 const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
 
+/**
+ * What each operation demands, as the box's own `defaultOps()` declares it.
+ *
+ * The scope was declared there and never checked — the dispatcher validated
+ * the id, the expiry, the revision and the guards, and never once looked at
+ * what the grant carried. Checking it is what makes a viewer a viewer, and it
+ * belongs before the site's state is read, so a refused command never reaches
+ * the dispatch boundary at all.
+ */
+const OP_SCOPES: Record<string, string> = {
+  [OP_SET_MODE]: 'ftw.mode.write',
+  [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
+}
+
 const CAPS = [
   'status.core',
   'status.phases',
@@ -219,6 +250,7 @@ const CAPS = [
   'der.battery',
   'plan.dispatch',
   'price.spot',
+  'api.passthrough',
 ]
 
 /**
@@ -240,6 +272,24 @@ export interface SimBoxOptions {
   now?: () => number
   /** Ceiling the optimiser defends, in watts. */
   ceilingW?: number
+  /**
+   * The role this session's enrolment carries.
+   *
+   * Owner unless a test says otherwise, matching the box's migration rule: a
+   * row with no role recorded is an owner, because a box updating from a
+   * version that had no roles must not silently demote every paired phone.
+   */
+  role?: Role
+  /**
+   * That role expanded, as this box expands it.
+   *
+   * Defaults to this app's own reading of the registry, which is what a box
+   * running the same registry sends. Overridden by a test that needs to be a
+   * box whose table is not this app's — a newer registry, a scope moved
+   * between roles — because that is the case an app expanding the role itself
+   * gets wrong and cannot notice.
+   */
+  scopes?: string[]
 }
 
 export class SimBox {
@@ -261,6 +311,18 @@ export class SimBox {
   #lastSourcesJson = ''
   #mode: SiteMode = DEFAULT_MODE
   #planRev = 1
+  #role: Role
+  #scopes: string[] | null
+  #api: SimApi
+  /**
+   * The request the passthrough is serving, if any.
+   *
+   * Queue depth one. On the box this runs on its own goroutine per session so
+   * a fifteen-second API call cannot stall inbound frames for every phone on
+   * the connection; here it is a single slot for the same reason, so the app
+   * meets the same refusal when it asks twice at once.
+   */
+  #apiBusy = false
 
   /** cmdId -> result, kept so a retry cannot act twice. */
   #idempotency = new Map<string, { leaseId: string; expiresAtMs: number }>()
@@ -273,6 +335,34 @@ export class SimBox {
     this.#now = opts.now ?? (() => Date.now())
     this.#startedAtMs = this.#now()
     this.#ceilingW = opts.ceilingW ?? this.house.fuseA * 230 * this.house.phases * 0.9
+    this.#role = opts.role ?? ROLE_OWNER
+    this.#scopes = opts.scopes ?? null
+    this.#api = new SimApi({
+      house: this.house,
+      now: this.#now,
+      ceilingW: this.#ceilingW,
+    })
+  }
+
+  /** What this session's enrolment is allowed to do. */
+  get role(): Role {
+    return this.#role
+  }
+
+  /**
+   * Change the role mid-session, the way a role change on the box does.
+   *
+   * The session is not killed: a downgrade takes effect on the next request,
+   * which is the only thing that makes a demotion land without cutting a
+   * working connection.
+   */
+  setRole(role: Role): void {
+    this.#role = role
+  }
+
+  /** The box's own HTTP surface, for a test that wants to look at it. */
+  get api(): SimApi {
+    return this.#api
   }
 
   /** Box uptime. Every age in the protocol is measured against this, never
@@ -320,6 +410,9 @@ export class SimBox {
         break
       case 'price.get':
         this.#onPriceGet(id, b as PriceQuery)
+        break
+      case 'api.req':
+        this.#onApiReq(id, b as ApiReq)
         break
       default:
         // Unknown types are answered, never fatal — that is what lets a newer
@@ -405,6 +498,16 @@ export class SimBox {
       clock: { source: 'ntp', syncedAtMs: this.#startedAtMs, uptimeMs: this.uptimeMs },
       caps: proto === PROTO_FLOOR ? ['status.core'] : CAPS,
       capsHash: 'sim',
+      // Sent so the app knows what to draw, and for nothing else. Hiding a
+      // button is presentation; every refusal above is the box's.
+      //
+      // Both, as the box sends both. The role is what a sentence names; the
+      // scopes are what a control is checked against, and they travel so the
+      // app never expands a role through a table of its own. A simulator that
+      // sent only the role let the app's own expansion stand in for the box's
+      // and no test here could see the difference.
+      role: this.#role,
+      scopes: this.#scopes ?? [...(ROLE_SCOPES[this.#role] ?? [])],
       modes: MODE_CATALOG,
       ...(this.faults.booting
         ? { boot: { phase: 'vacuum' as const, pct: 40, etaMs: 90_000 } }
@@ -485,6 +588,19 @@ export class SimBox {
         { lane: LANE_CONTROL, flags: 0, envelope: { t: 'cmd.ack', b: { cmdId: cmd.cmdId, ...prior } } },
         this.#bucket
       )
+      return
+    }
+
+    // Before the expiry, the revision, the guards and the site's own state.
+    // A grant that does not carry the scope is not a command that failed a
+    // precondition — it is one that was never this caller's to make, and
+    // nothing downstream should get the chance to act on it.
+    const needed = OP_SCOPES[cmd.op]
+    if (needed && !roleHasScope(this.#role, needed)) {
+      this.#cmdResult(cmd.cmdId, 'rejected', {
+        code: 'E_SCOPE_DENIED',
+        args: { needScope: needed },
+      })
       return
     }
 
@@ -643,6 +759,116 @@ export class SimBox {
     this.#send(
       { lane: LANE_BULK, flags: 0, envelope: { t: 'price', id, b: prices } },
       bulkBucketFor(16000) ?? 16384
+    )
+  }
+
+  /**
+   * Serve one call against the box's own HTTP API.
+   *
+   * The status line goes out first and separately, because that is what makes
+   * the app's rule for telling the two kinds of failure apart hold with no
+   * body inspection: once `api.head` has gone out, the handler answered and
+   * the status is the answer; an `error` on this id means the passthrough
+   * refused and nothing ran. The asymmetry in the deadline below has the same
+   * cause — once a status has been reported the box is committed to it.
+   */
+  #onApiReq(id: number | undefined, req: ApiReq): void {
+    if (typeof id !== 'number') return
+
+    // No E_BOOTING here, deliberately. The box refuses a subscription and a
+    // plan while it starts, because it genuinely has neither — but the API is
+    // bound to the session a moment after the session exists, and until then
+    // every request meets a handler that answers 503. The gate still runs
+    // first: a starting box is not a box that has stopped asking who is
+    // asking. See SimApi.serve.
+
+    // One at a time. A second request while one is in flight is refused with
+    // the code that already exists for "busy, come back" rather than a new
+    // one minted for this path.
+    if (this.#apiBusy) {
+      this.#error('E_UNAVAILABLE', isRetryable('E_UNAVAILABLE'), { reason: 'busy' }, id)
+      return
+    }
+
+    this.#apiBusy = true
+    // Deferred, because on the box this is a handler running on its own
+    // goroutine rather than something answered on the reader. Anything the
+    // app does with two calls at once meets the same ordering here as there.
+    setTimeout(() => {
+      try {
+        this.#serveApi(id, req)
+      } finally {
+        this.#apiBusy = false
+      }
+    }, 0)
+  }
+
+  #serveApi(id: number, req: ApiReq): void {
+    const outcome = this.#api.serve({
+      method: req.method,
+      path: req.path,
+      query: req.query ?? {},
+      body: req.body ?? null,
+      stepUp: req.stepUp === true,
+      role: this.#role,
+      booting: this.faults.booting,
+    })
+
+    if ('code' in outcome) {
+      this.#error(outcome.code, isRetryable(outcome.code), outcome.args, id)
+      return
+    }
+
+    // Refused by class, at the status line, before a byte streams. A PWA
+    // inside a Noise session has nothing useful to do with an archive, and
+    // carrying one would promise more than this delivers.
+    if (!carriesOverSession(outcome.contentType)) {
+      this.#error('E_UNSUPPORTED_MEDIA', isRetryable('E_UNSUPPORTED_MEDIA'), {
+        contentType: outcome.contentType,
+      }, id)
+      return
+    }
+
+    const ceiling = Math.min(req.maxBytes ?? API_MAX_BYTES, API_MAX_BYTES)
+    const truncated = outcome.body.length > ceiling
+    const body = truncated ? outcome.body.slice(0, ceiling) : outcome.body
+
+    const head: ApiHead = {
+      status: outcome.status,
+      // Canonical, because that is how the box spells them. Its allowlist is
+      // three names — Content-Type, ETag, Last-Modified — copied out of Go's
+      // header map, so a caller reading this by a lower-case key finds its
+      // answer here and nothing at all against a real box. Only Content-Type
+      // has a value to carry from this simulator.
+      headers: { 'Content-Type': outcome.contentType },
+      // Null unless the handler declared a length, which in process it almost
+      // never does — the box sends what the handler set and nothing guessed,
+      // because a guessed figure is a progress bar that lies.
+      len: null,
+    }
+    this.#send(
+      { lane: LANE_BULK, flags: 0, envelope: { t: 'api.head', id, b: head } },
+      bulkBucketFor(512) ?? 1024
+    )
+
+    let seq = 0
+    for (let at = 0; at < body.length; at += API_CHUNK_BYTES) {
+      // slice, never subarray. A subarray keeps the whole body's buffer
+      // behind it, and the CBOR encoder writes the buffer — so every chunk
+      // would carry the entire answer and the first one would overrun its
+      // bucket. Found by the chunking test, which is why that test asks for a
+      // window big enough to need more than one.
+      const chunk: ApiChunk = { seq: seq++, data: body.slice(at, at + API_CHUNK_BYTES) }
+      this.#send(
+        { lane: LANE_BULK, flags: 0, envelope: { t: 'api.chunk', id, b: chunk } },
+        bulkBucketFor(chunk.data.length + 256) ?? 16384
+      )
+    }
+
+    const end: ApiEnd = { bytes: body.length, truncated }
+    this.#send(
+      { lane: LANE_BULK, flags: 0, envelope: { t: 'api.end', id, b: end } },
+      bulkBucketFor(256) ?? 1024
     )
   }
 

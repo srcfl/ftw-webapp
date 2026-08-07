@@ -30,10 +30,24 @@ export interface ConnectOptions {
   relayUrl?: string
 }
 
+/**
+ * No carrier could be built from what this phone holds.
+ *
+ * Every other failure on this path heals itself, because the carrier
+ * reconnects from the inside. These are the ones where there is nothing to
+ * reconnect, so the app has to offer a way back rather than promise it keeps
+ * trying — see the pairing screen, which is what the offer opens.
+ *
+ * `help` says what happened and stops there. It used to end "Scan its code
+ * again", which was one of three ways in and not always the one that works:
+ * a phone with no key cannot spend a typed code, and a phone whose box has
+ * simply forgotten it is not helped by a sealed copy of the key it refused.
+ * Naming the ways is the screen's job, because the screen is where they are.
+ */
 export class ConnectError extends Error {
   constructor(
     readonly code: 'not_paired' | 'not_enrolled' | 'locked' | 'stale_pairing',
-    /** What the user does now. */
+    /** What happened, in words the person holding the phone can act on. */
     readonly help: string
   ) {
     super(code)
@@ -59,12 +73,12 @@ export async function loadSite(siteId: string): Promise<StoredSite | null> {
 export async function connectToSite(siteId: string, opts: ConnectOptions = {}): Promise<Carrier> {
   const site = await loadSite(siteId)
   if (!site) {
-    throw new ConnectError('not_paired', 'This home is not paired on this device. Scan its code again.')
+    throw new ConnectError('not_paired', 'This phone has no record of that home.')
   }
 
   const vault = openVaultStore()
   if (!(await isEnrolled(vault))) {
-    throw new ConnectError('not_enrolled', 'This device has no key for that home. Scan its code again.')
+    throw new ConnectError('not_enrolled', 'This device has no key for that home.')
   }
 
   // Read from the QR, never derived. A handle derived from the box's public
@@ -75,7 +89,7 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
   if (!secret) {
     throw new ConnectError(
       'stale_pairing',
-      'This home was paired before this app could reach it privately. Scan its code again.'
+      'This home was paired before this app could reach it privately.'
     )
   }
 

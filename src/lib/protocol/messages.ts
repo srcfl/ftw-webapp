@@ -1,4 +1,4 @@
-/* The fifteen message types.
+/* The message types.
  *
  * Shapes only. Names shared with the box — capabilities, scopes, error codes,
  * field ids — come from contract/registry.yaml.
@@ -30,12 +30,49 @@ export interface Hello {
   locales: string[]
 }
 
+/**
+ * What an enrolment is allowed to do, from `roles` in contract/registry.yaml.
+ *
+ * A plain string rather than a union, for the reason SiteMode is: the box
+ * decides what roles exist, and an app that accepted only the two it was built
+ * with would refuse to draw for a role a newer box shipped. Anything this app
+ * does not recognise is treated as the narrower of the two it does.
+ */
+export type Role = string
+
+export const ROLE_OWNER: Role = 'owner'
+export const ROLE_VIEWER: Role = 'viewer'
+
 export interface HelloOk {
   /** Negotiated version. PROTO_FLOOR means the app is too old for full mode. */
   proto: number
   mode: BoxMode
   box: { id: string; build: string; tz: string }
   clock: BoxClock
+  /**
+   * What this enrolment is allowed to do.
+   *
+   * Used to decide what to DRAW and for nothing else. Hiding a button is
+   * presentation; if the app is wrong and shows one, the box refuses the
+   * request behind it. Absent means a box from before roles existed, and that
+   * box treats every enrolled phone as an owner — so the app does too, or a
+   * household would watch its own controls disappear after a box update.
+   */
+  role?: Role
+  /**
+   * That role expanded, as the box expanded it.
+   *
+   * Sent beside the role, and the redundancy is the box's own point: the role
+   * is what a sentence can name — "you have view-only access" — and this is
+   * what a control is checked against, so the app never has to expand a role
+   * through a table of its own. It held one and used it anyway for a release,
+   * which meant the app decided what a grant contained and the box decided
+   * something else.
+   *
+   * Absent from a box that predates roles, and the honest reading of that is
+   * the same as an absent role: it lets every paired phone do everything.
+   */
+  scopes?: string[]
   /** Presence, not levels. Absent means hide the feature; never crash. */
   caps: string[]
   capsHash: string
@@ -291,6 +328,143 @@ export interface Prices {
 }
 
 // --------------------------------------------------------------------------
+// The box's own HTTP API, carried inside this session
+// --------------------------------------------------------------------------
+
+/**
+ * A request against the box's own API.
+ *
+ * The box serves 132 routes on the home LAN today with no authentication
+ * at all. Reaching the same handlers through a Noise session pinned to an
+ * enrolled device is strictly stronger than that, which is why this exists:
+ * a view over a route the box already serves stops needing a new message type
+ * and a box release. A route the box has never priced still needs both — it
+ * defaults closed, which is the wrong-safe direction and still a cost.
+ *
+ * Bulk lane, never lane 0. Every field here varies in length with what was
+ * asked, and lane 0's fixed size is a privacy control rather than a budget.
+ *
+ * THERE IS NO HEADERS FIELD, and adding one would be a mistake rather than a
+ * feature. The caller's identity rides on the request context inside the box
+ * process, put there by the session that already authenticated it. With no
+ * headers there is no path at all by which a byte this app sends becomes a
+ * claim about who is asking; a headers field opens exactly that hole.
+ */
+export interface ApiReq {
+  method: ApiMethod
+  /**
+   * Must start `/api/`, with no `..`, no `//`, no `?` and no `#`.
+   *
+   * Only `/api/`: the box's static handler stays unreachable, because serving
+   * HTML through this session would make the box a second origin under
+   * another name — which docs/architecture.md rejects outright.
+   */
+  path: string
+  /**
+   * Parsed, never a raw string.
+   *
+   * Two reasons, and the first is the serious one: the box decides what a
+   * request is allowed to do from its path, and a path decided over a string
+   * that can still carry a `?` is a parser bug that becomes a privilege bug.
+   * The second is that the app then never has to think about encoding — the
+   * box rebuilds the URL itself.
+   */
+  query?: Record<string, string>
+  /** Opaque. The box sets `Content-Type: application/json` when present. */
+  body?: Uint8Array | null
+  /** The app's ceiling. The box clamps it to its own; see `ApiEnd.bytes`. */
+  maxBytes?: number
+  /**
+   * This request carried a fresh passkey ceremony.
+   *
+   * Honest about what it buys. The box cannot verify that a ceremony
+   * happened — it has no relationship with the authenticator and is
+   * deliberately never a WebAuthn relying party, because that would need an
+   * origin and the box is never an origin. What this stops is a phone left
+   * unlocked on a table being picked up and used to reconfigure the site,
+   * because this app will not send `true` without prompting. It stops nothing
+   * at all against a modified client, which could already send a command
+   * today. The box's own contribution is the part only the box can do: count
+   * these, rate-limit them, and write each one to the household's event log.
+   */
+  stepUp?: boolean
+}
+
+export type ApiMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+/**
+ * The box's HTTP layer answered, and `status` is that answer.
+ *
+ * This is the whole rule for telling the two kinds of failure apart, and it
+ * needs no inspection of any body: if `api.head` arrived, a handler ran and a
+ * 403 or a 500 is the handler's, not the passthrough's. If `error` arrived on
+ * the same request id, the passthrough refused and no handler ran. They are
+ * different message types, so the app branches on type and never on content.
+ */
+export interface ApiHead {
+  status: number
+  headers: Record<string, string>
+  /** Content-Length when the box knows it, null when the answer streams. */
+  len: number | null
+}
+
+export interface ApiChunk {
+  seq: number
+  data: Uint8Array
+}
+
+export interface ApiEnd {
+  bytes: number
+  /**
+   * The answer was cut off, either by the ceiling or by the box's own
+   * deadline after the status had already gone out.
+   *
+   * A truncated answer is a failure to this app, never a short one to parse.
+   */
+  truncated: boolean
+}
+
+/**
+ * Bytes per `api.chunk`.
+ *
+ * A fixed number rather than one found by trial. The largest bulk bucket is
+ * 16384 with six bytes of frame header plus the CBOR envelope, so 12 KiB
+ * always lands in that bucket and the box never discovers an overrun
+ * mid-stream.
+ */
+export const API_CHUNK_BYTES = 12288
+
+/**
+ * The most one answer may carry, matching the box's own APIMaxBytes.
+ *
+ * The app sends its own ceiling and learns the real figure from `api.end`,
+ * because the box's is the one that counts.
+ */
+export const API_MAX_BYTES = 8 * 1024 * 1024
+
+/**
+ * What the passthrough will carry: JSON and text, and nothing else.
+ *
+ * Refused by class rather than by a list of paths, so a route added next year
+ * that streams a ZIP meets this without anyone remembering to add it. A PWA
+ * inside a Noise session has nothing useful to do with an archive, and
+ * carrying one would be promising more than the code delivers.
+ *
+ * It is the box's last word on an answer, not its first: a route the box
+ * prices `local` — `/api/support/dump` is one — is refused before its handler
+ * runs and never reaches this at all.
+ */
+export function carriesOverSession(contentType: string | undefined): boolean {
+  if (!contentType) return false
+  const media = contentType.split(';')[0]!.trim().toLowerCase()
+  return (
+    media === 'application/json' ||
+    media.startsWith('text/') ||
+    (media.startsWith('application/') && media.endsWith('+json'))
+  )
+}
+
+// --------------------------------------------------------------------------
 // Commands
 // --------------------------------------------------------------------------
 
@@ -370,6 +544,21 @@ const RETRYABLE: Record<string, boolean> = {
   E_LAST_OWNER_PROTECTED: false,
   E_RANGE_TOO_LARGE: false,
   E_UNAVAILABLE: true,
+  // Retryable, because the identical request goes through the second time.
+  // The box refuses on the absence of the stepUp flag alone and nothing else
+  // about the request changes, which is why box-api.ts can run the ceremony
+  // and send the same call again by itself.
+  E_NEEDS_STEP_UP: true,
+  E_USE_CMD: false,
+  E_UNSUPPORTED_MEDIA: false,
+  // Both are the box's answer about the route, and asking again gets the same
+  // answer. E_LOCAL_ONLY is not a permission the owner is missing either, so
+  // no role and no ceremony changes it.
+  E_WHOLE_DOCUMENT: false,
+  E_LOCAL_ONLY: false,
+  // Not from the box. The session layer raises this one itself out of
+  // api.end{truncated: true} — see contract/registry.yaml, client_errors.
+  E_RESPONSE_TOO_LARGE: false,
 }
 
 /** Unknown codes are not retryable: guessing yes offers a button that cannot help. */
@@ -400,6 +589,9 @@ export type ServerMessage =
   | { t: 'hist.chunk'; id: number; b: HistChunk }
   | { t: 'hist.end'; id: number; b: HistEnd }
   | { t: 'price'; id: number; b: Prices }
+  | { t: 'api.head'; id: number; b: ApiHead }
+  | { t: 'api.chunk'; id: number; b: ApiChunk }
+  | { t: 'api.end'; id: number; b: ApiEnd }
   | { t: 'cmd.ack'; b: CmdAck }
   | { t: 'cmd.result'; b: CmdResult }
   | { t: 'event'; b: EventMsg }
@@ -412,4 +604,5 @@ export type ClientMessage =
   | { t: 'plan.get'; id: number }
   | { t: 'hist.query'; id: number; b: HistQuery }
   | { t: 'price.get'; id: number; b: PriceQuery }
+  | { t: 'api.req'; id: number; b: ApiReq }
   | { t: 'cmd'; b: Cmd }

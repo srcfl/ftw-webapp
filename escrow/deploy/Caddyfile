@@ -1,0 +1,80 @@
+# TLS and nothing else, and it writes nothing down.
+#
+# Caddy terminates, gets its certificate from Let's Encrypt on its own, and
+# hands the connection to the escrow. It is in front because the escrow speaks
+# plain HTTP by choice: a service whose claim is that it holds an opaque id and
+# nothing beside it is easier to believe when it is small, and certificate
+# handling is not small.
+#
+# It is also the last place the claim can quietly become false, and it was.
+# This file used to keep two logs. Both kept a household activity record:
+#
+#   the site's access log kept one line per request with a `ts`, and what the
+#     filter left behind told the three operations apart by size alone — a put
+#     read 769 bytes and answered 13, a read of a copy that was there read 63
+#     and answered 707, and one that was not read 63 and answered 2;
+#   the global log had no filter at all, so one proxy error wrote the client
+#     address, the URI and every request header beside the time.
+#
+# A filter is a list of the fields somebody thought of. What leaked was the
+# fields nobody thought of, and a byte count is not a field at all. So neither
+# log is filtered now — both are discarded, which is a shape rather than a
+# list, and there is nothing left to get wrong when a release adds a field or a
+# new logger. The wire is padded to one length for the same reason; see
+# ESCROW_REQUEST_BYTES in ../src/escrow.ts.
+#
+# What that costs, named here rather than discovered later: there is no log to
+# read when a certificate stops renewing. `curl -s https://escrow.ftw.energy/healthz`
+# from outside is the check that covers it end to end, and the certificates are
+# in the caddy-data volume under /data/caddy/certificates. README.md lists
+# every layer that could still keep a time, and the commands that check each.
+{
+	# Caddy's own diagnostics, which the site block below does not govern.
+	#
+	# Left at the default they go to stderr and Docker keeps them; pointed at a
+	# file they are still a per-request record, because a proxy error names the
+	# request URI and the client address beside the time. So: discarded.
+	log {
+		output discard
+	}
+
+	# No admin endpoint. It is on by default on 127.0.0.1:2019, and with
+	# `network_mode: host` that is the host's loopback rather than a
+	# container's. Left on, an unauthenticated GET hands over the running
+	# config and one POST replaces it — measured, with a config that logged the
+	# client address, the URI and every header. So "the proxy writes nothing"
+	# would be one request away from false with this file unchanged. Nothing
+	# here reloads: an update recreates the container.
+	admin off
+}
+
+escrow.ftw.energy {
+	reverse_proxy 127.0.0.1:8788
+	# No header_up here on purpose. The escrow does not rate-limit and has
+	# nothing to do with an address, so it is not given one — the relay needs
+	# X-Forwarded-For and this does not.
+
+	# No access log. Not a filtered one.
+	#
+	# The lookup id is never in a URL, so the path is `/e` for every household
+	# and says nothing. Everything else in a request line does: the escrow id
+	# is a stable pseudonym by construction, so an address beside a time is
+	# what ties it to a person, and "somebody at this address wrote their copy
+	# at 20:14" is precisely the household activity record the schema refuses a
+	# column for.
+	log {
+		output discard
+	}
+
+	# Nothing here compresses, and nothing here should. `encode` would undo the
+	# padding the wire is built around — every request body is one length and
+	# every answer past the length gate is one length, so that a save, a read
+	# and a miss are the same size to anything that counts bytes. Compression
+	# makes them different sizes again, because they are different bytes.
+
+	header {
+		# Nothing here is a web page and nothing should embed it.
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}

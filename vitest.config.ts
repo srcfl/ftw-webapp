@@ -40,7 +40,12 @@ export default mergeConfig(
             name: 'unit',
             environment: 'jsdom',
             env: { TZ },
-            include: ['tests/**/*.test.ts', 'src/**/*.test.ts', 'relay/**/*.test.ts'],
+            include: [
+              'tests/**/*.test.ts',
+              'src/**/*.test.ts',
+              'relay/**/*.test.ts',
+              'escrow/**/*.test.ts',
+            ],
             exclude: ['**/node_modules/**', '**/*.svelte.test.ts'],
             globals: false,
           },

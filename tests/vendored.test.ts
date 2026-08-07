@@ -25,7 +25,7 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // From the project root, which is where vitest runs. import.meta.url is not
 // a file URL here — the test is transformed and served like any other module.
@@ -35,7 +35,15 @@ const RECORD = join(DIR, 'digests.json')
 /** Lines of provenance every vendored file opens with. Not part of the copy. */
 const HEADER_LINES = 3
 
-const PROVENANCE = /^\/\/ Vendored from srcfl\/ftw web\/components\/(.+) at (.+)\.$/
+/* The upstream path, whatever directory it sits in.
+ *
+ * It was `web/components/` alone until the QR encoder came over, which lives
+ * in `web/vendor/` because the box vendors it too — from qrcode-generator,
+ * MIT. What is being checked is that a file names its own upstream, so the
+ * directory is captured rather than dictated and the basename is what has to
+ * agree.
+ */
+const PROVENANCE = /^\/\/ Vendored from srcfl\/ftw (\S+) at (.+)\.$/
 
 /** The `.js` files are the box's. The `.d.ts` beside them are this app's. */
 function vendored(): string[] {
@@ -75,7 +83,7 @@ describe('the vendored components', () => {
       expect(cites, `${name} has no provenance line`).not.toBeNull()
       // A file that cites another file's name is a copy that was pasted over
       // the wrong one, and the digest below would not notice.
-      expect(cites![1], `${name} cites ${cites![1]} upstream`).toBe(name)
+      expect(basename(cites![1]!), `${name} cites ${cites![1]} upstream`).toBe(name)
       expect(rest.slice(0, HEADER_LINES - 1).join(' ')).toMatch(/do not edit here/i)
     }
   })

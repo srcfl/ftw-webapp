@@ -58,6 +58,18 @@ export interface StoredSite {
    * instead, so a copy left here cannot pair anything a second time.
    */
   pairingCode?: Uint8Array
+  /**
+   * Whether this household asked Sourceful to hold a sealed copy of it.
+   *
+   * Per household and absent by default, which is what makes the offer an
+   * offer. Only homes marked here go into the sealed blob, so a phone holding
+   * two homes escrows the one that was asked for and not the other — the
+   * claim on the opt-in screen is about a household, and a blob carrying a
+   * home nobody offered up would make it false.
+   *
+   * See $lib/identity/escrow.
+   */
+  escrow?: boolean
   addedAtMs: number
   lastSeenAtMs: number
 }

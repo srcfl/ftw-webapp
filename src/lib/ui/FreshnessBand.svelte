@@ -26,12 +26,25 @@
     /** Age of the oldest reading on screen, in ms. */
     ageMs: number
     phase: SessionPhase
+    /**
+     * No carrier could be built at all, so nothing is in flight to wait for.
+     *
+     * Not derivable from the two facts above. A session with no carrier and a
+     * session one await away from having one are the same `idle` phase and
+     * the same `none` carrier, and the difference is the whole question this
+     * band answers: the first is a phone that will never reach its box on its
+     * own, and the second is the first second of every launch. Only the shell
+     * knows which, because only the shell saw the attempt fail.
+     */
+    noCarrier?: boolean
   }
 
-  let { carrier, srcState, ageMs, phase }: Props = $props()
+  let { carrier, srcState, ageMs, phase, noCarrier = false }: Props = $props()
 
   /** Still trying, and has not yet failed. */
-  const reaching = $derived(phase === 'idle' || phase === 'handshaking' || phase === 'subscribing')
+  const reaching = $derived(
+    !noCarrier && (phase === 'idle' || phase === 'handshaking' || phase === 'subscribing')
+  )
 
   const tone = $derived.by(() => {
     if (carrier === 'relay' || carrier === 'webrtc') {

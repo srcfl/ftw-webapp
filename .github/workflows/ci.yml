@@ -15,6 +15,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # contract/registry.yaml is one file that lives in two repositories, and only
+  # a job with both checked out can tell whether it still is one file. The
+  # file's own header has always said CI fails when the two drift; nothing ever
+  # compared them, and they drifted three ways under a test that only ever
+  # compared this repository against itself.
+  #
+  # Its own job rather than a step in verify, because it is the only thing here
+  # that needs a second repository — and because a suite that cannot run on a
+  # laptop should not be the reason `npm run verify` fails on one.
+  contract:
+    name: the registry has not drifted from the box
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # One file, not the box's whole history. A checkout that fails takes the
+      # job with it, and the check refuses to run without both copies — so a
+      # step deleted or a path renamed turns this red rather than green. That
+      # is the entire difference between this and what it replaces.
+      - name: Check out the box
+        uses: actions/checkout@v5
+        with:
+          repository: srcfl/ftw
+          ref: master
+          path: .box
+          token: ${{ secrets.FTW_CONTRACT_TOKEN || github.token }}
+          sparse-checkout: contract/registry.yaml
+          sparse-checkout-cone-mode: false
+
+      - run: node scripts/check-contract-drift.mjs .box/contract/registry.yaml
+
   verify:
     runs-on: ubuntu-latest
 

@@ -1,6 +1,6 @@
 /* The key hierarchy.
  *
- * Three keys, and the difference between them is most of the architecture:
+ * Four keys, and the difference between them is most of the architecture:
  *
  *   device key    X25519 static for Noise. Stored AES-GCM wrapped, once per
  *                 registered credential. An Apple passkey and an Android
@@ -10,7 +10,20 @@
  *                 across two platforms.
  *   wrapping key  derived from WebAuthn PRF at enrollment and before a
  *                 privileged command. Never stored, never at rest.
+ *   escrow keys   an id and a sealing key, from the same PRF output as the
+ *                 wrapping key and held apart from it by an HKDF salt. They
+ *                 exist only where PRF does, because they are what lets a copy
+ *                 leave this device. Both derivations live in ./prf.
  *   cache key     AES-GCM, non-extractable, sitting in IndexedDB unwrapped.
+ *
+ * A copy of the device key can leave this device, and only if the household
+ * asks for it. exportDeviceSecret below hands the raw scalar to
+ * $lib/identity/escrow, which seals it and gives it to Sourceful to hold. That
+ * is what lets a home-screen install, whose storage starts empty, come back
+ * without a pairing code, and it is why the passkey's own vendor now sits
+ * inside the trust boundary for the households that opt in. The trade was
+ * weighed and taken; docs/architecture.md, "The escrow, and the boundary it
+ * moves", is where it is written down.
  *
  * The cache key is deliberately not PRF-wrapped. A cold start must paint the
  * last readings before any Face ID prompt — that is the point of the app — and
@@ -44,6 +57,7 @@ export type VaultErrorCode =
   | 'E_VAULT_LOCKED'
   | 'E_VAULT_NO_COPY'
   | 'E_VAULT_LAST_COPY'
+  | 'E_VAULT_OTHER_KEY'
 
 export class VaultError extends Error {
   constructor(
@@ -166,6 +180,19 @@ export async function enrolledCredentialIds(store: VaultStore): Promise<string[]
 }
 
 /**
+ * Only the copies a passkey stands behind.
+ *
+ * The local copy is deliberately not one: it exists so that reading never
+ * costs a prompt, and asking an authenticator for a credential id that is not
+ * an authenticator's would either fail or, worse, silently succeed with no
+ * ceremony. See stepup.ts.
+ */
+export async function passkeyCredentialIds(store: VaultStore): Promise<string[]> {
+  const record = await readVault(store)
+  return record?.copies.filter((c) => c.source === 'prf').map((c) => c.credentialId) ?? []
+}
+
+/**
  * The name this device answers to on the box's list of paired phones.
  *
  * The box names a row by the first eight characters of the base64url of the
@@ -197,17 +224,83 @@ export async function deviceKey(store: VaultStore, wrapping: WrappingKey): Promi
   if (!record) return createDeviceKey(store, wrapping)
 
   const copy = record.copies.find((c) => c.credentialId === wrapping.credentialId)
-  if (!copy) {
-    throw new VaultError(
-      `no wrapped copy for credential ${wrapping.credentialId}`,
-      'E_VAULT_NO_COPY',
-      'This passkey has not been given access yet. Unlock with the one you set up first.'
-    )
-  }
+  if (!copy) throw noCopy(wrapping.credentialId)
 
   const pkcs8 = await unseal(wrapping.key, copy)
   try {
     return await importDeviceKey(pkcs8, record.publicKey)
+  } finally {
+    pkcs8.fill(0)
+  }
+}
+
+/**
+ * The Noise static as raw bytes, for the one caller allowed to copy it off
+ * this device.
+ *
+ * Everything else in this file hands out a DeviceKey, which can do a Diffie-
+ * Hellman and nothing else, precisely so no layer above can read the scalar by
+ * accident. This is the deliberate hole in that: a recovery copy has to carry
+ * the key itself, because a key the box already trusts is what lets a fresh
+ * install come back without a pairing code.
+ *
+ * The caller zeroes what it gets. See $lib/identity/escrow for what is done
+ * with it and what that costs.
+ */
+export async function exportDeviceSecret(
+  store: VaultStore,
+  wrapping: WrappingKey
+): Promise<Uint8Array<ArrayBuffer>> {
+  const record = await readVault(store)
+  if (!record) throw emptyVault()
+
+  const copy = record.copies.find((c) => c.credentialId === wrapping.credentialId)
+  if (!copy) throw noCopy(wrapping.credentialId)
+
+  const pkcs8 = await unseal(wrapping.key, copy)
+  try {
+    return pkcs8.slice(PKCS8_X25519_PREFIX.length)
+  } finally {
+    pkcs8.fill(0)
+  }
+}
+
+/**
+ * Put back a device key that came from outside this install.
+ *
+ * Every other path in here mints a key; this one is handed the scalar a sealed
+ * copy was carrying, and writing it rather than generating a new one is the
+ * point — it is the Noise static the box already trusts, so the phone is
+ * paired again without a code the box would refuse.
+ *
+ * It refuses to sit on top of a different identity. An install that already
+ * has a device key is not the install this is for, and overwriting one would
+ * orphan whatever it is paired to.
+ */
+export async function restoreDeviceKey(
+  store: VaultStore,
+  wrapping: WrappingKey,
+  scalar: Uint8Array
+): Promise<DeviceKey> {
+  const publicKey = x25519.getPublicKey(scalar)
+  const existing = await readVault(store)
+  if (existing && !sameBytes(existing.publicKey, publicKey)) {
+    throw new VaultError(
+      'a different device key is already stored',
+      'E_VAULT_OTHER_KEY',
+      'This phone is already set up for a home. Sign out of it first.'
+    )
+  }
+
+  const pkcs8 = new Uint8Array(PKCS8_X25519_PREFIX.length + 32)
+  pkcs8.set(PKCS8_X25519_PREFIX)
+  pkcs8.set(scalar, PKCS8_X25519_PREFIX.length)
+  try {
+    const sealed = await seal(wrapping.key, pkcs8)
+    const copies = (existing?.copies ?? []).filter((c) => c.credentialId !== wrapping.credentialId)
+    copies.push({ credentialId: wrapping.credentialId, source: wrapping.source, ...sealed })
+    await store.put(K_VAULT, { publicKey, copies } satisfies VaultRecord)
+    return await importDeviceKey(pkcs8, publicKey)
   } finally {
     pkcs8.fill(0)
   }
@@ -228,13 +321,7 @@ export async function addCredential(
   if (!record) throw emptyVault()
 
   const copy = record.copies.find((c) => c.credentialId === current.credentialId)
-  if (!copy) {
-    throw new VaultError(
-      `no wrapped copy for credential ${current.credentialId}`,
-      'E_VAULT_NO_COPY',
-      'This passkey has not been given access yet. Unlock with the one you set up first.'
-    )
-  }
+  if (!copy) throw noCopy(current.credentialId)
 
   const pkcs8 = await unseal(current.key, copy)
   try {
@@ -449,6 +536,18 @@ async function userHandle(store: VaultStore): Promise<Uint8Array<ArrayBuffer>> {
   const handle = crypto.getRandomValues(new Uint8Array(16))
   await store.put(K_USER_HANDLE, handle)
   return handle
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i])
+}
+
+function noCopy(credentialId: string): VaultError {
+  return new VaultError(
+    `no wrapped copy for credential ${credentialId}`,
+    'E_VAULT_NO_COPY',
+    'This passkey has not been given access yet. Unlock with the one you set up first.'
+  )
 }
 
 function emptyVault(): VaultError {

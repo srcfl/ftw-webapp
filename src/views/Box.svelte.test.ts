@@ -4,8 +4,14 @@ import { render, screen } from '@testing-library/svelte'
 import Box from './Box.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { db, type StoredSite } from '$lib/store/db'
-import { deviceKey, localWrappingKey, openVaultStore } from '$lib/identity/vault'
+import {
+  deviceKey,
+  enrollWrappingKey,
+  localWrappingKey,
+  openVaultStore,
+} from '$lib/identity/vault'
 import { leaveHome } from '$lib/state/leave'
+import { installMockAuthenticator, type MockAuthenticator } from '../../tests/support/passkey'
 
 /* Signing out is destructive on this device and needs the physical QR code to
  * undo. So it asks first — and asking is not decoration: a single stray tap
@@ -179,5 +185,164 @@ describe('leaving, from the phone', () => {
     expect(left).toHaveBeenCalled()
     const stillThere = await database.get('sites', SITE_ID)
     expect(stillThere, 'the home this screen says is still here').toBeTruthy()
+  })
+})
+
+/* The spare key, and what it costs.
+ *
+ * This is the one thing on this screen that can be turned on, so the two
+ * things worth pinning are that it says what it is in the words Sourceful is
+ * held to, and that it does nothing whatever until someone asks. A screen that
+ * quietly uploads a sealed copy is the same defect as a link that quietly
+ * pairs, and it is harder to notice.
+ */
+describe('the sealed copy Sourceful can hold', () => {
+  let mock: MockAuthenticator | null = null
+  let calls: string[]
+  let sent: unknown[]
+
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+    await pairedRow()
+    calls = []
+    sent = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: RequestInit) => {
+        calls.push('fetch')
+        sent.push(JSON.parse(String(init.body)))
+        // Nothing held. Enough for both "write the first copy" and "there is
+        // nothing to empty"; what the service does with it is proved in
+        // escrow/src/escrow.test.ts.
+        return new Response(JSON.stringify({}), { status: 404 })
+      })
+    )
+  })
+
+  afterEach(() => {
+    mock?.uninstall()
+    mock = null
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  async function enrolledWithPasskey(): Promise<void> {
+    mock = installMockAuthenticator()
+    const vault = openVaultStore()
+    await deviceKey(vault, await enrollWrappingKey(vault))
+  }
+
+  it('says what Sourceful would hold, in the words it is held to', async () => {
+    await enrolledWithPasskey()
+    mounted()
+
+    const said = (document.body.textContent ?? '').replace(/\s+/g, ' ')
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: /keep a sealed copy/i })).toBeTruthy()
+    )
+    // The product's sentence, word for word.
+    expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toContain(
+      'sealed copy it cannot open, with an opaque id and nothing beside it'
+    )
+    // And what it costs, on the same screen and before the button — the trade
+    // is the passkey becoming enough on its own, and a screen that names only
+    // the benefit is the defect this project makes most often.
+    expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
+      /your passkey is then enough to open this home/i
+    )
+    expect(said).not.toMatch(/we cannot ever/i)
+  })
+
+  it('holds nothing, and asks nothing, until someone taps', async () => {
+    await enrolledWithPasskey()
+    const before = mock!.getCalls
+    mounted()
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: /keep a sealed copy/i })).toBeTruthy()
+    )
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(calls, 'the screen uploaded a copy nobody asked for').toEqual([])
+    expect(mock!.getCalls, 'the screen opened a passkey sheet on its own').toBe(before)
+    const database = await db()
+    expect((await database.get('sites', SITE_ID))?.escrow).toBeUndefined()
+  })
+
+  it('signs out with no prompt and no request when nobody asked for a copy', async () => {
+    // The whole cost of never opting in, on the screen where it would show.
+    await enrolledWithPasskey()
+    const { left } = mounted()
+    const before = mock!.getCalls
+
+    ;(await screen.findByRole('button', { name: /^sign out$/i })).click()
+    await new Promise((r) => setTimeout(r, 20))
+    screen.getAllByRole('button', { name: /^sign out$/i }).at(-1)!.click()
+    await vi.waitFor(() => expect(left).toHaveBeenCalled())
+
+    expect(mock!.getCalls, 'signing out asked for a passkey it did not need').toBe(before)
+    expect(calls, 'signing out reached for a copy that was never made').toEqual([])
+  })
+
+  it('empties the copy before it lets go of the home', async () => {
+    // Order, not merely both. Once the phone is signed out this screen is
+    // gone, so a copy left behind could never be reported to anyone — it would
+    // simply hand the home back on the next launch.
+    await enrolledWithPasskey()
+    const database = await db()
+    const row = (await database.get('sites', SITE_ID)) as StoredSite
+    await database.put('sites', { ...row, escrow: true })
+
+    const site = new SiteStore('test')
+    void site.start(SITE_ID)
+    const left = vi.fn(async () => {
+      calls.push('leave')
+      await leaveHome({ home: site })
+    })
+    render(Box, { props: { site, leave: left } })
+
+    ;(await screen.findByRole('button', { name: /^sign out$/i })).click()
+    await new Promise((r) => setTimeout(r, 20))
+    expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
+      /sealed copy Sourceful holds is emptied first/i
+    )
+    screen.getAllByRole('button', { name: /^sign out$/i }).at(-1)!.click()
+    await vi.waitFor(() => expect(left).toHaveBeenCalled())
+
+    expect(calls[0], 'the home was let go of before the copy was reached for').toBe('fetch')
+    expect(calls).toContain('leave')
+  })
+
+  it('says the copy is still out there rather than signing out quietly', async () => {
+    await enrolledWithPasskey()
+    const database = await db()
+    const row = (await database.get('sites', SITE_ID)) as StoredSite
+    await database.put('sites', { ...row, escrow: true })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('offline')
+      })
+    )
+    const { left } = mounted()
+
+    ;(await screen.findByRole('button', { name: /^sign out$/i })).click()
+    await new Promise((r) => setTimeout(r, 20))
+    screen.getAllByRole('button', { name: /^sign out$/i }).at(-1)!.click()
+
+    await vi.waitFor(() =>
+      expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
+        /sealed copy is still there/i
+      )
+    )
+    expect(left, 'signed out while a copy of the home was still out there').not.toHaveBeenCalled()
+    expect(await database.get('sites', SITE_ID), 'cleared the home anyway').toBeTruthy()
+    // And a way past it, because a phone that cannot be signed out is worse
+    // than a copy the screen has named.
+    expect(screen.getByRole('button', { name: /sign out anyway/i })).toBeTruthy()
   })
 })

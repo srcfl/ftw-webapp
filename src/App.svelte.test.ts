@@ -20,7 +20,15 @@ import 'fake-indexeddb/auto'
 import { render, screen, cleanup } from '@testing-library/svelte'
 import App from './App.svelte'
 import { db, type StoredSite } from '$lib/store/db'
-import { deviceKey, isEnrolled, localWrappingKey, openVaultStore } from '$lib/identity/vault'
+import {
+  deviceKey,
+  isEnrolled,
+  localWrappingKey,
+  openVaultStore,
+  resetIdentity,
+} from '$lib/identity/vault'
+import { CarrierBase, type Carrier, type CarrierStatus } from '$lib/carrier/carrier'
+import { encodeFrame, LANE_CONTROL } from '$lib/protocol/frame'
 
 /* The relay, stubbed at the one seam the shell reaches it through.
  *
@@ -31,10 +39,26 @@ import { deviceKey, isEnrolled, localWrappingKey, openVaultStore } from '$lib/id
  *
  * The sign-out tests never reach this. They run on the simulator's reserved
  * id, which the shell feeds directly and never connects.
+ *
+ * `openCarrier` is how a test says something else happened. The floor tests
+ * below hand it the real connectToSite, because what they are about is what
+ * the disk holds — no key, no rendezvous secret — and the refusals that come
+ * of it belong to that file rather than to a stub of it.
  */
-vi.mock('$lib/state/connect', () => ({
-  connectToSite: () => Promise.reject(new Error('nothing answered')),
+const seam = vi.hoisted(() => ({
+  openCarrier: null as null | ((siteId: string) => Promise<Carrier>),
 }))
+
+vi.mock('$lib/state/connect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/state/connect')>()
+  return {
+    ...actual,
+    connectToSite: (siteId: string) =>
+      seam.openCarrier
+        ? seam.openCarrier(siteId)
+        : Promise.reject(new Error('nothing answered')),
+  }
+})
 
 const SITE_ID = 'sim-0001'
 
@@ -248,5 +272,268 @@ describe('a paired phone that cannot reach its box', () => {
     await vi.waitFor(() => expect(said()).toMatch(/Nothing from your box yet/i), { timeout: 4_000 })
     expect(said()).toMatch(/keeps trying on its own/i)
     expect(screen.queryByText(/Live via encrypted relay/i)).toBeNull()
+  })
+})
+
+/* The floor, and reaching it from the states it is the floor for.
+ *
+ * Everything a person waits on in this app heals itself — a dropped carrier
+ * reconnects, a failed ask is asked again, and the only sign is a freshness
+ * stamp falling behind. See $lib/state/ask. These are the states where waiting
+ * heals nothing, because there is no session to come back: no key for the
+ * home, a key the box has stopped taking, a row pointing at a box that no
+ * longer knows this phone. The screen that fixes all three is the pairing
+ * screen — and it was mounted on one condition, "this phone has no home at
+ * all", which is false for every phone in those states. The phone the floor
+ * was built for was the one phone that could not stand on it.
+ *
+ * Each of these asserts two things: that the way back is on the screen the
+ * person is looking at, and that what it leads to offers only the ways in that
+ * can actually work from there. An offer with no end is what this app calls a
+ * dead end with a button on it.
+ */
+describe('the way back, for a phone that cannot get in', () => {
+  const HOME_ID = 'box-stranded'
+
+  /** A carrier that opens and says nothing: a box that will not have us. */
+  class SilentCarrier extends CarrierBase implements Carrier {
+    readonly kind = 'relay' as const
+    readonly rttMs = null
+    readonly status: CarrierStatus = { phase: 'connecting' }
+    send(): void {}
+    close(): void {}
+
+    /**
+     * Whether the session is listening yet.
+     *
+     * The shell reaches a carrier one await after the first paint, so a frame
+     * sent on the strength of what is on screen is a frame sent to nobody.
+     */
+    attached = false
+
+    override onFrame(handler: (frame: Uint8Array) => void): () => void {
+      this.attached = true
+      return super.onFrame(handler)
+    }
+
+    /** The one refusal a box says out loud, rather than by going quiet. */
+    revoke(): void {
+      this.emitFrame(
+        encodeFrame(
+          {
+            lane: LANE_CONTROL,
+            flags: 0,
+            envelope: { t: 'session.terminate', b: { reason: 'revoked' } },
+          },
+          1024
+        )
+      )
+    }
+  }
+
+  const said = () => (document.body.textContent ?? '').replace(/\s+/g, ' ')
+
+  function buttonSaying(pattern: RegExp): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll('button')].find((b) =>
+      pattern.test((b.textContent ?? '').replace(/\s+/g, ' '))
+    ) as HTMLButtonElement | undefined
+  }
+
+  /** The way back, as a person finds it: a button, on the screen they are on. */
+  async function takeTheWayBack(pattern: RegExp): Promise<void> {
+    const button = await vi.waitFor(
+      () => {
+        const found = buttonSaying(pattern)
+        expect(found, 'no way back was offered at all').toBeDefined()
+        return found!
+      },
+      { timeout: 4_000 }
+    )
+    button.click()
+  }
+
+  /** A home on the disk, with whatever this phone is missing left out. */
+  async function homeOnDisk(opts: { key?: boolean; rendezvous?: boolean } = {}) {
+    const database = await db()
+    const row: StoredSite = {
+      siteId: HOME_ID,
+      label: 'Home',
+      boxStaticKey: new Uint8Array(32).fill(7),
+      ...(opts.rendezvous === false ? {} : { rendezvousSecret: new Uint8Array(32).fill(9) }),
+      addedAtMs: Date.UTC(2026, 6, 1),
+      lastSeenAtMs: Date.now(),
+    }
+    await database.put('sites', row)
+    if (opts.key !== false) {
+      const vault = openVaultStore()
+      await deviceKey(vault, await localWrappingKey(vault))
+    }
+    localStorage.setItem('ftw.site', HOME_ID)
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    // A launch, not the tab a test left open: the hash outlives a render, and
+    // a Now view left hidden behind #/box is invisible to a role query for
+    // reasons that have nothing to do with what is being measured.
+    location.hash = ''
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+    // The device key lives in its own database, `ftw-identity`, which the
+    // clear above does not touch — so without this a phone meant to have no
+    // key inherits one from the test before and opens a real relay socket.
+    await resetIdentity(openVaultStore())
+    // A phone has a camera. Without one the scan offer is correctly absent,
+    // and these tests would be measuring jsdom rather than the screen.
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: async () => ({}) },
+      configurable: true,
+    })
+    // The real one. What is under test is what this app does with a disk in
+    // these states, and the refusals are part of that.
+    const { connectToSite } = await vi.importActual<typeof import('$lib/state/connect')>(
+      '$lib/state/connect'
+    )
+    seam.openCarrier = (siteId) => connectToSite(siteId)
+  })
+
+  afterEach(() => {
+    seam.openCarrier = null
+    globalThis.ftwSim?.stop()
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('reaches the pairing screen from a home this device has no key for', async () => {
+    // The measured state: the identity database was evicted and the site row
+    // was not. Every launch since has pointed at a home this phone cannot open.
+    await homeOnDisk({ key: false })
+    render(App)
+
+    // The shell believes this phone has a home — that is the whole bug — and
+    // the screen it shows says why it cannot open it.
+    await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
+
+    await takeTheWayBack(/get this phone back in/i)
+
+    // The two ways in that work with no key: the code on the box, and the
+    // sealed copy a passkey opens.
+    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+    expect(buttonSaying(/set this up before/i), 'the sealed copy was not offered').toBeDefined()
+  })
+
+  it('does not say it is reaching a box it can never reach', async () => {
+    // "Reaching your box" is true for the first second of every launch, which
+    // is why it is the opening line. It is not true when no carrier could be
+    // built at all: nothing is in flight, nothing is retrying, and the screen
+    // under the band says as much. Two sentences, one screen, one of them a
+    // lie is the fault this whole block is about, one element higher.
+    await homeOnDisk({ key: false })
+    render(App)
+    await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
+
+    const band = await screen.findByRole('status')
+    await vi.waitFor(() => expect(band.textContent).toMatch(/Can't reach your box/i), {
+      timeout: 4_000,
+    })
+    expect(band.textContent, 'the band claimed to be reaching a box it has no key for').not.toMatch(
+      /Reaching your box/i
+    )
+  })
+
+  it('offers no typed code to a phone with no key to let in', async () => {
+    // Eight characters carry no box key and no device key. Typed by a phone
+    // whose vault is empty they write a code no handshake can ever spend —
+    // a path with no end, which is what the box's own page refuses to offer.
+    await homeOnDisk({ key: false })
+    render(App)
+    await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
+    await takeTheWayBack(/get this phone back in/i)
+    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+
+    expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
+    expect(buttonSaying(/^\s*Open Home\s*$/), 'offered to open a home it holds no key for').toBeUndefined()
+  })
+
+  it('reaches it from a box that has stopped taking this key, while still trying', async () => {
+    // A revoked phone, or a box that was reset and no longer knows this one.
+    // It answers a refused handshake with silence, on purpose, so this is what
+    // a phone in that state sees: nothing, for as long as it is left there.
+    await homeOnDisk()
+    seam.openCarrier = async () => new SilentCarrier()
+    render(App)
+
+    await vi.waitFor(() => expect(said()).toMatch(/Nothing from your box yet/i), { timeout: 4_000 })
+    // The offer does not replace the healing. The app keeps trying; the person
+    // is simply no longer the only one of the two who cannot act.
+    expect(said()).toMatch(/keeps trying on its own/i)
+
+    await takeTheWayBack(/won't let this phone in/i)
+    await screen.findByText(/Welcome back/i, undefined, { timeout: 4_000 })
+
+    // Not the sealed copy: it puts back the same device key, which is the key
+    // this box has just refused. What works is the eight characters the box
+    // will read out to whoever is standing at it.
+    expect(buttonSaying(/set this up before/i), 'offered a copy of the key it was refused for').toBeUndefined()
+    buttonSaying(/won't let this phone in/i)!.click()
+    await screen.findByText(/Type the code from your box/i, undefined, { timeout: 4_000 })
+  })
+
+  it('reaches it from a box that has withdrawn this phone out loud', async () => {
+    // The one refusal that is not silence. The session ends where it stands
+    // and nothing reconnects it, so this screen is where a revoked phone sits
+    // until somebody at the box shows it a code.
+    await homeOnDisk()
+    const box = new SilentCarrier()
+    seam.openCarrier = async () => box
+    render(App)
+    await vi.waitFor(() => expect(said()).toMatch(/Nothing from your box yet/i), { timeout: 4_000 })
+    await vi.waitFor(() => expect(box.attached).toBe(true), { timeout: 4_000 })
+
+    box.revoke()
+    // The band says it too, from the same state. The heading is this screen's.
+    await screen.findByRole('heading', { name: /Access ended/i }, { timeout: 4_000 })
+
+    await takeTheWayBack(/won't let this phone in/i)
+    await screen.findByText(/Welcome back/i, undefined, { timeout: 4_000 })
+  })
+
+  it('reaches it from a row that cannot find its box at all', async () => {
+    // Paired before the rendezvous secret existed, so this phone cannot derive
+    // a handle and there is nothing to connect to. Only a fresh scan or the
+    // sealed copy carries the missing bytes.
+    await homeOnDisk({ rendezvous: false })
+    render(App)
+
+    await vi.waitFor(() => expect(said()).toMatch(/before this app could reach it privately/i), {
+      timeout: 4_000,
+    })
+    await takeTheWayBack(/get this phone back in/i)
+    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+
+    expect(
+      buttonSaying(/^\s*Open Home\s*$/),
+      'offered to open a home it cannot reach, which lands straight back here'
+    ).toBeUndefined()
+    expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
+    expect(buttonSaying(/set this up before/i)).toBeDefined()
+  })
+
+  it('is a way back and not another dead end', async () => {
+    // Somebody who opens it and changes their mind gets their home back —
+    // cached readings, tab bar and all. A screen with no way out of it is the
+    // fault this whole block is about, one screen further along.
+    await homeOnDisk({ key: false })
+    render(App)
+    await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
+    await takeTheWayBack(/get this phone back in/i)
+    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+
+    buttonSaying(/^\s*Not now\s*$/)!.click()
+    await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    expect(said()).toMatch(/no key for that home/i)
   })
 })

@@ -56,7 +56,10 @@ These exist because breaking one of them breaks a promise made to users.
   The honest claim is that the cache resists offline disk reads and other
   origins, not that it resists an attacker with the unlocked device.
 - **Never hand-write a name shared with the box.** Scopes, capabilities,
-  error codes and field ids come from `contract/registry.yaml`.
+  error codes and field ids come from `contract/registry.yaml`. That file is
+  the same file in [srcfl/ftw](https://github.com/srcfl/ftw), byte for byte —
+  change one copy and change the other in the same pair of pull requests. CI
+  on both sides compares them and neither side passes with the other absent.
 
 ## Conventions
 
@@ -78,6 +81,10 @@ npm run dev       # dev server
 npm test          # unit and contract tests
 npm run check     # types
 npm run verify    # all of the above plus a production build
+
+# The registry against the box's copy. Needs a checkout of srcfl/ftw, which
+# is why it is not part of verify — CI runs it on every push and pull request.
+npm run check:contract ../ftw/contract/registry.yaml
 ```
 
 Run the narrow test while iterating, `npm run verify` before handoff.

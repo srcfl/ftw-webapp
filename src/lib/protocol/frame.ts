@@ -68,6 +68,22 @@ export class FrameError extends Error {
   }
 }
 
+/**
+ * Bytes ready to be put in an envelope.
+ *
+ * A `Uint8Array` from another realm is not this realm's `Uint8Array`, and the
+ * CBOR encoder tests for exactly that: an array it does not recognise is
+ * written as a list of numbers instead of a byte string, which is seven times
+ * the size and silently overruns whatever bucket was chosen for it. jsdom's
+ * `TextEncoder` produces one, which is how this was found — but so does any
+ * iframe, worker boundary or `structuredClone` on a browser, so this is not a
+ * test-environment nicety. Same array back when it is already ours; a copy
+ * when it is not.
+ */
+export function wireBytes(bytes: Uint8Array): Uint8Array {
+  return bytes.constructor === Uint8Array ? bytes : new Uint8Array(bytes)
+}
+
 /** Smallest bulk bucket that fits, or null when the payload is too large. */
 export function bulkBucketFor(payloadBytes: number): BulkBucket | null {
   const needed = payloadBytes + HEADER_BYTES

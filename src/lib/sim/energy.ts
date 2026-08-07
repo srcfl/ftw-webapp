@@ -16,6 +16,22 @@
  * above the driver boundary it is already negative.
  */
 
+/**
+ * Where a replayed day starts its state of charge.
+ *
+ * Everything else in a reading is a function of the moment alone, but state of
+ * charge is an integral, and replaying two years of it to answer one question
+ * is absurd. Midnight is the honest place to re-anchor: there is no sun and
+ * the load sits far below the ceiling, so the battery is idle either side of
+ * the seam and the re-anchor never shows up in what is drawn.
+ *
+ * Shared by the history tiles and the daily totals, because a house that
+ * charged one amount on the chart and another in the day's figure is two
+ * houses, and the first person to notice would be someone comparing two
+ * screens of their own home.
+ */
+export const DAY_ANCHOR_PERMILLE = 620
+
 /** Small, fast, well-distributed. Enough for shaping noise. */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0

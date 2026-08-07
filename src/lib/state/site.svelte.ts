@@ -11,9 +11,10 @@
  * can never paint grid power from one second beside solar from the next.
  */
 
-import { Session, type SessionState } from '$lib/protocol/session'
+import { Session, type SessionState, type ApiResponse } from '$lib/protocol/session'
 import type { Fid } from '$lib/protocol/types'
-import type { Plan, PriceQuery, Prices, CmdResult, Guard } from '$lib/protocol/messages'
+import type { Plan, PriceQuery, Prices, CmdResult, Guard, ApiReq, Role } from '$lib/protocol/messages'
+import { ROLE_OWNER } from '$lib/protocol/messages'
 import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
@@ -174,6 +175,48 @@ export class SiteStore {
   /** What electricity costs across a window. */
   prices(query: PriceQuery): Promise<Prices> {
     return this.#session.prices(query)
+  }
+
+  /**
+   * Call the box's own API over this session.
+   *
+   * Delegated rather than exposing the session, so the rule above still
+   * holds: nothing over this layer touches a frame. Views go through
+   * `$lib/state/box-api`, which adds the JSON and the sentences; this is the
+   * seam between them and the wire.
+   */
+  api(req: ApiReq): Promise<ApiResponse> {
+    return this.#session.api(req)
+  }
+
+  /**
+   * What this enrolment may do, as the box named it at handshake.
+   *
+   * Used to decide what to draw and nothing else. Hiding a control is
+   * presentation; if this is wrong and a control is shown, the box refuses
+   * what is behind it — which is why a viewer's app is honest even before it
+   * has heard from the box.
+   */
+  get role(): Role {
+    return this.session.role
+  }
+
+  /** Whether to draw the controls at all. See `role`. */
+  get canConfigure(): boolean {
+    return this.session.role === ROLE_OWNER
+  }
+
+  /**
+   * Whether the box has answered a hello yet.
+   *
+   * What `role` and `canConfigure` mean before it has is "this app has not
+   * been told", and a screen that SAYS something — this box is too old to
+   * share, this phone is view-only — has to check here first. Drawing nothing
+   * on the strength of an assumption is presentation; writing a sentence about
+   * the box on the strength of one is inventing a fact.
+   */
+  get heardFromBox(): boolean {
+    return this.session.heardFromBox
   }
 
   /**

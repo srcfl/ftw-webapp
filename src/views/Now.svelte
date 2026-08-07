@@ -34,9 +34,19 @@
      * happening at all.
      */
     connectHelp?: string | null
+    /**
+     * Open the pairing screen from a phone that already has a home.
+     *
+     * The one screen that can put back a missing key, spend a code the box
+     * read out, or open the sealed copy — and until this existed it was
+     * mounted only for a phone pointed at no home at all. Every state below
+     * that offers it is a state where waiting heals nothing, which is what
+     * makes an offer the honest thing and a promise to keep trying a lie.
+     */
+    wayBack?: (() => void) | null
   }
 
-  let { site, hasHome, connectHelp = null }: Props = $props()
+  let { site, hasHome, connectHelp = null, wayBack = null }: Props = $props()
 
   const live = $derived(site.session.phase === 'streaming' && site.carrier !== 'cache')
 
@@ -79,6 +89,14 @@
         ? 'Your access to this home was withdrawn by its owner.'
         : 'This session ended.'}
     </p>
+    <!-- The box stopped taking this key and said so, which is the one case
+         where it does say so. Whoever is standing at it can let this phone
+         back in with a code from its screen, so the floor is offered here as
+         well — quietly, because being let back in is the owner's decision and
+         not this phone's. -->
+    {#if wayBack && site.session.terminated?.reason === 'revoked'}
+      <button class="quiet" onclick={wayBack}>Your box won't let this phone in?</button>
+    {/if}
   </section>
 {:else if site.session.fields.size === 0}
   <!-- Paired, and not one reading has ever arrived — from the box or off the
@@ -96,8 +114,37 @@
         appears here as soon as the box answers.
       {/if}
     </p>
+    {#if wayBack}
+      {#if connectHelp}
+        <!-- No carrier was built at all, so nothing is being retried and no
+             amount of waiting changes that. This is the only screen in the
+             app where the person has to act, and it is the only one with a
+             button on it. -->
+        <button class="primary" onclick={wayBack}>Get this phone back in</button>
+      {:else}
+        <!-- The box is quiet, and quiet is what a refused handshake sounds
+             like — the box answers one with silence on purpose. So this asks
+             rather than diagnoses: it is equally true of a box that is off,
+             and the app goes on trying either way. -->
+        <button class="quiet" onclick={wayBack}>Your box won't let this phone in?</button>
+      {/if}
+    {/if}
   </section>
 {:else}
+  <!-- Cached readings, and no carrier to replace them with fresher ones. The
+       band above dates what is on screen honestly, but a house that can never
+       move again is not a freshness problem — and this branch used to be the
+       one place the sentence never appeared, so a phone with a cache and no
+       key showed a still house and no way in at all. -->
+  {#if connectHelp}
+    <div class="banner">
+      <p>{connectHelp}</p>
+      {#if wayBack}
+        <button class="quiet" onclick={wayBack}>Get this phone back in</button>
+      {/if}
+    </div>
+  {/if}
+
   {#if site.session.needsUpdate}
     <div class="banner">
       This app is older than your box. Some things are hidden until it updates.
@@ -145,6 +192,10 @@
   }
 
   .banner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
     margin: var(--space-3) var(--space-4) 0;
     padding: var(--space-3);
     border: 1px solid var(--line);
@@ -170,6 +221,21 @@
   .primary:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  /* The same pair of weights the pairing screen uses, because they lead to the
+     same screen: the primary is for a phone that cannot get in at all, and the
+     quiet one is a question asked while the app is still trying. */
+  .quiet {
+    color: var(--fg-dim);
+    font-size: 14px;
+    text-align: left;
+  }
+
+  .banner .quiet {
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   .explanation {

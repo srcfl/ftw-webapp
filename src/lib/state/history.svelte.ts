@@ -68,6 +68,15 @@ export class HistoryStore {
   /** True only while waiting for the box; the chart is drawn either way. */
   loading = $state(false)
 
+  /**
+   * Whether the box has ever answered a window.
+   *
+   * The third state the placeholder needs. An empty chart before the first
+   * answer is a chart nobody has filled, not a range with nothing in it, and
+   * only the box can tell those apart.
+   */
+  loaded = $state(false)
+
   /** Prose, not a code. Null when there is nothing to say. */
   error = $state<string | null>(null)
 
@@ -163,6 +172,7 @@ export class HistoryStore {
 
       this.resActual = end.resActual
       this.gaps = end.gaps
+      this.loaded = true
       show()
 
       if (siteId) void pruneTiles(siteId, toMs - RESOLUTIONS[end.resActual].retentionMs)
@@ -171,7 +181,16 @@ export class HistoryStore {
       // range's news, and it is not a reason to ask for this one again.
       if (token !== this.#token) return
       // What happens now, not what broke inside. The cached chart stays up.
-      this.error = tiles.size > 0 ? 'Not up to date — your box is out of reach' : 'No history yet'
+      //
+      // Both sentences are about the WIRE. "No history yet" was about the
+      // house, and the app has no grounds for that: an answer that never
+      // arrived says nothing whatever about what the box has recorded, and a
+      // household with ten years on its box read it every time a window was
+      // lost. Same rule as never drawing a reading this app does not have.
+      this.error =
+        tiles.size > 0
+          ? 'Not up to date — your box is out of reach'
+          : 'Nothing through yet — your box is out of reach'
       throw err
     } finally {
       if (token === this.#token) {

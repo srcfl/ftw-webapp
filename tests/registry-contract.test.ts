@@ -1,0 +1,219 @@
+/* The registry is the source for every name shared with the box, and this is
+ * what keeps that true on this side.
+ *
+ * The generator lives in the box; there is none here, so the check is this
+ * file. Without it the tables in src/lib/protocol are three hand-written
+ * copies of the registry that nothing compares against it — and the registry's
+ * own header says it exists because three separate authorisation namespaces
+ * once grew up in this codebase.
+ *
+ * This is half the discipline. It checks this repository's copy of the
+ * registry against this repository's code. That the box's copy is the same
+ * file is the other half, and it cannot be checked from inside one clone —
+ * scripts/check-contract-drift.mjs does it in CI with both checked out.
+ *
+ * Deliberately not a YAML parser. Adding one to read five blocks out of one
+ * file would be a dependency in the shipping tree for a test, and the blocks
+ * are flat lists whose shape is itself part of what is being pinned.
+ */
+
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { isRetryable } from '$lib/protocol/messages'
+import { SCOPES, ROLE_SCOPES, ROLE_LABELS } from '$lib/protocol/contract'
+
+/** From the project root, which is where vitest runs. */
+const root = (p: string) => join(process.cwd(), p)
+
+const registry = readFileSync(root('contract/registry.yaml'), 'utf8')
+
+/** Lines of one top-level block, comments and blanks dropped. */
+function block(name: string): string[] {
+  const lines = registry.split('\n')
+  const start = lines.findIndex((l) => l === `${name}:`)
+  expect(start, `contract/registry.yaml has no ${name}: block`).toBeGreaterThan(-1)
+
+  const out: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    if (!line.startsWith(' ')) break
+    out.push(line)
+  }
+  return out
+}
+
+/**
+ * One of the two error blocks.
+ *
+ * `errors` is what the box sends. `client_errors` is what this app raises for
+ * itself and the box never sends — E_RESPONSE_TOO_LARGE, which the session
+ * layer makes out of `api.end{truncated: true}`. Both are checked here,
+ * because a code exempt from the check is a code that can drift.
+ */
+function registryErrors(name: 'errors' | 'client_errors' = 'errors'): {
+  code: string
+  retryable: boolean
+}[] {
+  return block(name).map((line) => {
+    const m = /code:\s*(\S+?),\s*retryable:\s*(true|false)/.exec(line)
+    expect(m, `unreadable error line: ${line}`).not.toBeNull()
+    return { code: m![1]!, retryable: m![2] === 'true' }
+  })
+}
+
+/** Every code the registry declares, in either block. */
+function everyRegistryError(): { code: string; retryable: boolean }[] {
+  return [...registryErrors('errors'), ...registryErrors('client_errors')]
+}
+
+/**
+ * The app's own table, read out of the source it is written in.
+ *
+ * The table is what `isRetryable` answers from and what the simulator stamps
+ * on every error frame it sends, so its keys are the set of codes this app
+ * has heard of at all.
+ */
+function appErrorTable(): string[] {
+  const source = readFileSync(root('src/lib/protocol/messages.ts'), 'utf8')
+  const table = source.slice(source.indexOf('const RETRYABLE'), source.indexOf('/** Unknown codes'))
+  return [...table.matchAll(/^\s*(E_[A-Z_]+):/gm)].map(([, code]) => code!)
+}
+
+function registryScopes(): string[] {
+  return block('scopes').map((line) => {
+    const m = /name:\s*(\S+?),/.exec(line)
+    expect(m, `unreadable scope line: ${line}`).not.toBeNull()
+    return m![1]!
+  })
+}
+
+function registryCapabilities(): string[] {
+  return block('capabilities').map((line) => line.trim().replace(/^-\s*/, ''))
+}
+
+/** roles is nested, so it is read as one indented sub-block per role. */
+function registryRoles(): Record<string, { label: string; scopes: string[] }> {
+  const out: Record<string, { label: string; scopes: string[] }> = {}
+  let current: string | null = null
+
+  for (const line of block('roles')) {
+    const role = /^ {2}(\w+):\s*$/.exec(line)
+    if (role) {
+      current = role[1]!
+      out[current] = { label: '', scopes: [] }
+      continue
+    }
+    if (!current) continue
+
+    const label = /^ {4}label:\s*(.+)$/.exec(line)
+    if (label) out[current]!.label = label[1]!.trim()
+
+    const scopes = /^ {4}scopes:\s*\[(.*)\]$/.exec(line)
+    if (scopes) {
+      out[current]!.scopes = scopes[1]!
+        .split(',')
+        .map((s) => s.trim().replace(/^'|'$/g, ''))
+        .filter(Boolean)
+    }
+  }
+  return out
+}
+
+describe('the error catalogue', () => {
+  /**
+   * Set equality, not containment in one direction.
+   *
+   * Containment was what this checked before, and it could not see a code the
+   * box sends that the app has never heard of: `isRetryable` answers false for
+   * an unknown code, so a missing entry whose registry flag is false agreed
+   * with the registry by accident. That is exactly how E_WHOLE_DOCUMENT — a
+   * refusal the box sends today, for a route that would overwrite a whole
+   * document — reached a reviewer as the app's shrug of a default sentence.
+   */
+  it('is the registry’s catalogue exactly, in both directions', () => {
+    const declared = everyRegistryError()
+      .map((e) => e.code)
+      .sort()
+    expect([...appErrorTable()].sort()).toEqual(declared)
+  })
+
+  it('answers the registry’s retryable for every code', () => {
+    // The flag decides whether the app offers a retry at all, and it is what
+    // the simulator puts on the wire — so a disagreement here is a simulator
+    // that refuses differently than the box a phone will actually meet. The Go
+    // cross-check already caught one: the simulator said E_UNAVAILABLE was not
+    // retryable while the registry and the box both said it was.
+    for (const { code, retryable } of everyRegistryError()) {
+      expect(isRetryable(code), `${code} disagrees with the registry`).toBe(retryable)
+    }
+  })
+
+  it('keeps what the box sends and what this app raises apart', () => {
+    // The box generates its constants from the `errors` block alone. A code in
+    // both blocks would be one the box could send and the app could invent,
+    // and no reader could tell which had happened.
+    const wire = new Set(registryErrors('errors').map((e) => e.code))
+    for (const { code } of registryErrors('client_errors')) {
+      expect(wire.has(code), `${code} is declared as both a wire and a client code`).toBe(false)
+    }
+  })
+})
+
+describe('scopes and roles', () => {
+  it('are the registry’s, in the registry’s order', () => {
+    expect([...SCOPES]).toEqual(registryScopes())
+  })
+
+  it('expand a role the way the registry writes it, with * meaning all', () => {
+    const roles = registryRoles()
+    expect(Object.keys(ROLE_SCOPES).sort()).toEqual(Object.keys(roles).sort())
+
+    for (const [role, spec] of Object.entries(roles)) {
+      const want = spec.scopes.includes('*') ? registryScopes() : spec.scopes
+      expect([...(ROLE_SCOPES[role] ?? [])], `${role} carries the wrong scopes`).toEqual(want)
+      expect(ROLE_LABELS[role], `${role} is labelled differently`).toBe(spec.label)
+    }
+  })
+})
+
+describe('capabilities the app gates on', () => {
+  /**
+   * Every view that gates on a capability names it in one `CAP_` constant
+   * beside a comment pointing at the registry. That convention is what makes
+   * this checkable at all — a bare string inside a `caps.has(...)` call is
+   * invisible here, and a capability the registry has never heard of is a
+   * view that silently never appears, which is also exactly what a box that
+   * legitimately lacks it looks like.
+   */
+  it('all exist in the registry, so nothing hides a feature over a typo', () => {
+    const declared = new Set(registryCapabilities())
+    const views = ['src/views/Plan.svelte', 'src/views/Energy.svelte', 'src/views/Access.svelte']
+
+    let checked = 0
+    for (const file of views) {
+      for (const [, cap] of readFileSync(root(file), 'utf8').matchAll(
+        /const CAP_[A-Z_]+ = '([^']+)'/g
+      )) {
+        checked += 1
+        expect(declared.has(cap!), `${cap} in ${file} is not in contract/registry.yaml`).toBe(true)
+      }
+    }
+    expect(checked, 'no capability names were found to check').toBeGreaterThan(0)
+  })
+
+  it('are all things the simulator could actually claim', () => {
+    // The simulator's list is what every test in this tree meets as "a box".
+    // One name in it the registry does not declare is an app built against a
+    // capability no real box will ever send.
+    const declared = new Set(registryCapabilities())
+    const source = readFileSync(root('src/lib/sim/box.ts'), 'utf8')
+    const list = source.slice(source.indexOf('const CAPS = ['), source.indexOf(']', source.indexOf('const CAPS = [')))
+
+    for (const [, cap] of list.matchAll(/'([^']+)'/g)) {
+      expect(declared.has(cap!), `the simulator claims ${cap}, which is not in the registry`).toBe(
+        true
+      )
+    }
+  })
+})

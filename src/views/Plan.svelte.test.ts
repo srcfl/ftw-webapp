@@ -15,7 +15,7 @@ import Plan from './Plan.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import type { Prices } from '$lib/protocol/messages'
+import { ROLE_VIEWER, type Prices } from '$lib/protocol/messages'
 import type { FtwPriceChartElement } from '$vendor/ftw/ftw-price-chart.js'
 
 const HOUR_MS = 3_600_000
@@ -150,6 +150,98 @@ describe('the Plan view, against the simulator', () => {
  * five-minute poll that used to re-render it, so a marker frozen at nine in
  * the morning looks exactly like a marker.
  */
+describe('a viewer on the Plan screen', () => {
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(MORNING)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+  })
+
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+  })
+
+  it('cannot press a mode, and is told why in the right words', async () => {
+    // Not hidden: which mode the house runs in is a reading, and a viewer is
+    // entitled to it. What must not happen is a live button the box will
+    // refuse — they tap it, watch it fail, and learn that the app lies. And
+    // the sentence has to be about this phone rather than about the box,
+    // which supports the change perfectly well.
+    const site = new SiteStore('test')
+    site.connect(
+      new LoopbackCarrier(new SimBox({ now: () => MORNING, role: ROLE_VIEWER }), { latencyMs: 0 })
+    )
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(document.querySelector('[role="radio"]')).not.toBeNull(), {
+      timeout: 2_000,
+    })
+
+    const modes = [...document.querySelectorAll('[role="radio"]')] as HTMLButtonElement[]
+    expect(modes.length).toBeGreaterThan(0)
+    expect(
+      modes.every((b) => b.disabled),
+      'a viewer was offered a mode the box would refuse'
+    ).toBe(true)
+
+    expect(document.body.textContent).toMatch(/view-only access/i)
+    expect(document.body.textContent).not.toMatch(/box doesn't support/i)
+  })
+
+  it('believes the grant the box sent, not its own expansion of the role', async () => {
+    // `hello_ok` carries the role AND that role expanded, and the box sends
+    // both on purpose: the role is what a sentence names, the scopes are what
+    // a control is checked against. This app expanded the role itself through
+    // a copy of the registry's table, so a box whose table has moved on — a
+    // newer registry, a scope taken out of a role — had its answer overruled
+    // by the app's, and the app drew buttons the box would refuse.
+    //
+    // Named owner, and the grant does not carry the mode scope. The box is
+    // the authority on that and this screen has to obey it.
+    const site = new SiteStore('test')
+    site.connect(
+      new LoopbackCarrier(
+        new SimBox({ now: () => MORNING, scopes: ['ftw.live.read', 'ftw.plan.read'] }),
+        { latencyMs: 0 }
+      )
+    )
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(document.querySelector('[role="radio"]')).not.toBeNull(), {
+      timeout: 2_000,
+    })
+
+    const modes = [...document.querySelectorAll('[role="radio"]')] as HTMLButtonElement[]
+    expect(modes.length).toBeGreaterThan(0)
+    expect(
+      modes.every((b) => b.disabled),
+      'a control was offered that the grant does not carry'
+    ).toBe(true)
+  })
+})
+
+describe('the Plan screen before the box has answered', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+  })
+
+  it('says nothing about what the box supports', async () => {
+    // A cold start paints from cache with no carrier yet: `caps` is empty
+    // because nobody has asked, not because the box said so. Both sentences
+    // under the modes are facts about the box, and neither is known here.
+    //
+    // This is the bug the sharing screen already had and fixed. The same
+    // empty set read as an answer put "this box doesn't support changing how
+    // it runs" under every launch, about boxes that run the change perfectly
+    // well and had simply not spoken yet.
+    const site = new SiteStore('test')
+    render(Plan, { props: { site } })
+    await Promise.resolve()
+
+    expect(document.body.textContent).not.toMatch(/box doesn't support/i)
+    expect(document.body.textContent).not.toMatch(/view-only access/i)
+  })
+})
+
 describe('a price window as the day moves under it', () => {
   afterEach(() => {
     document.body.replaceChildren()

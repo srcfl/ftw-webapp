@@ -42,6 +42,13 @@ knows which opaque handle is online. It cannot read a watt, a device name or
 a command. This is enforced by the protocol, and a CI test dumps the relay's
 database and fails if anything recognisable is in it.
 
+If a household asks, the cloud will also hold one sealed copy of its home, so a
+new phone gets back in with a passkey instead of a trip to the box. Sourceful
+holds a sealed copy it cannot open, with an opaque id and nothing beside it —
+[`escrow/README.md`](escrow/README.md) is the claim, the file of fixed slots it
+is stored in, and the tests. It is off until someone turns it on, and losing the
+whole database costs a QR scan.
+
 ## Status
 
 Early. The architecture is decided and the protocol is specified; the client
@@ -50,8 +57,8 @@ for what was decided and what was rejected, and [docs/protocol.md](docs/protocol
 for the wire contract.
 
 Not yet built: push notifications, the LAN carrier, sharing beyond two roles,
-multi-site, recovery by escrow. Each is listed with its reason in the
-architecture doc rather than left implied.
+multi-site. Each is listed with its reason in the architecture doc rather than
+left implied.
 
 ## Running it
 
@@ -83,6 +90,7 @@ Runs type checks, tests and a production build. Green before every handoff.
 | `src/views` | Screens |
 | `contract/` | The shared registry: scopes, capabilities, error codes, field ids |
 | `relay/` | The blind relay itself — the server this app's frames pass through |
+| `escrow/` | The sealed escrow — one slot per household, and it cannot open any of them |
 
 `contract/registry.yaml` is the single source for every name shared with the
 box. It generates TypeScript here and Go constants in the FTW repo, and CI

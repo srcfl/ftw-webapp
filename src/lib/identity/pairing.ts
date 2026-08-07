@@ -18,6 +18,11 @@
  */
 
 import { parseEnrollmentUrl, parseEnrollmentFragment, EnrollmentError, type Enrollment } from './enrollment'
+// Plain, not deferred. The pairing screen is on the launch path by design —
+// a phone with nothing paired has no other screen — and it reads the same
+// module on every keystroke of a typed code. A dynamic import here bought
+// nothing but a build warning saying so.
+import { decodeBoxCode, BoxCodeError } from './boxcode'
 import {
   openVaultStore,
   enrollWrappingKey,
@@ -148,6 +153,41 @@ async function storeSite(site: PairedSite): Promise<void> {
   }
   await database.put('sites', row)
 
+}
+
+/**
+ * Take a code read off the box's screen and arm the next handshake with it.
+ *
+ * The box mints eight characters, shows them on its own page and tells the
+ * household to read them out. They decode to the same five bytes a scanned
+ * code's payload carries, and they are spent in the same place — message 1 of
+ * the Noise handshake — so this writes them where `connectToSite` already
+ * looks and there is no second path to the box.
+ *
+ * It is for a phone that has been here before. A box code carries no box key
+ * and no rendezvous secret, so a phone with no row for this home could not
+ * find the box or be sure of the one that answered; that phone scans. The
+ * caller is what enforces this — an unknown site is refused here rather than
+ * quietly writing a row that could never connect.
+ *
+ * The decode happens before the disk is touched, so a mistyped code costs
+ * nothing at all. The box burns a code after five wrong tries, which is what
+ * makes forty spoken bits safe, and it is also why the app must never spend
+ * one of those tries on something it could read correctly itself.
+ */
+export async function redeemBoxCode(siteId: string, typed: string): Promise<void> {
+  const pairingCode = decodeBoxCode(typed)
+
+  const database = await db()
+  const row = await database.get('sites', siteId)
+  if (!row) {
+    throw new BoxCodeError(
+      `no site ${siteId}`,
+      'This phone has no record of that home. Scan the code on your box instead.'
+    )
+  }
+
+  await database.put('sites', { ...row, pairingCode })
 }
 
 /**
