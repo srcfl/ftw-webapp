@@ -26,7 +26,12 @@ export interface WireLoadpoint {
   manual_active?: unknown
   surplus_only?: unknown
   battery_boost?: { state?: unknown; active?: unknown }
-  schedule?: { soc_pct?: unknown; time_of_day_min_utc?: unknown; recurring?: unknown } | null
+  schedule?: {
+    soc_pct?: unknown
+    time_of_day_min_utc?: unknown
+    recurring?: unknown
+    days?: unknown
+  } | null
 }
 
 export interface Loadpoint {
@@ -43,7 +48,13 @@ export interface Loadpoint {
   manualActive: boolean
   surplusOnly: boolean
   boostActive: boolean
-  schedule: { socPct: number | null; timeOfDayMinUtc: number; recurring: boolean } | null
+  schedule: {
+    socPct: number | null
+    timeOfDayMinUtc: number
+    recurring: boolean
+    /** 7-bit weekday mask, bit 0 = Monday. Zero means every day. */
+    days: number
+  } | null
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -69,6 +80,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
             socPct: num(sched!.soc_pct),
             timeOfDayMinUtc: schedMin,
             recurring: sched!.recurring === true,
+            days: (num(sched!.days) ?? 0) & 0x7f,
           },
   }
 }
@@ -78,6 +90,51 @@ export function localClock(minUtc: number, at: Date = new Date()): string {
   const d = new Date(at)
   d.setUTCHours(Math.floor(minUtc / 60), minUtc % 60, 0, 0)
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+/** The same conversion, for an <input type="time"> value: "HH:MM" local. */
+export function utcMinutesToLocalInput(minUtc: number, at: Date = new Date()): string {
+  const d = new Date(at)
+  d.setUTCHours(Math.floor(minUtc / 60), minUtc % 60, 0, 0)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/**
+ * A local "HH:MM" back to the wire's UTC minutes-of-day.
+ *
+ * Anchored on `at`, so it is exact for today's offset — the same rule the
+ * box's own page uses when it saves. The stored minute is fixed; a DST
+ * change shifts the local deadline an hour until re-saved, a known drift
+ * the box documents where it computes the deadline.
+ */
+export function localInputToUtcMinutes(hhmm: string, at: Date = new Date()): number | null {
+  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2])
+  // setHours would roll "25:99" into tomorrow rather than refuse it.
+  if (h > 23 || min > 59) return null
+  const d = new Date(at)
+  d.setHours(h, min, 0, 0)
+  return d.getUTCHours() * 60 + d.getUTCMinutes()
+}
+
+/** ISO order, matching the wire mask: bit 0 = Monday. */
+export const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+/**
+ * The weekday mask as a person says it.
+ *
+ * Whole-week, weekday and weekend masks get their own words; anything
+ * else is the short names in week order. Zero is every day — the wire's
+ * meaning for a schedule saved before masks existed.
+ */
+export function daysWord(mask: number): string {
+  const m = mask & 0x7f
+  if (m === 0 || m === 0x7f) return 'every day'
+  if (m === 0b0011111) return 'weekdays'
+  if (m === 0b1100000) return 'weekends'
+  return DAY_LABELS.filter((_, i) => m & (1 << i)).join(', ')
 }
 
 /**
@@ -99,7 +156,7 @@ export function evStatusSentence(lp: Loadpoint): string {
 /**
  * The schedule, as one sentence.
  *
- * "Ready by 07:00 · every day", with the target charge in front when the
+ * "Ready by 07:00 · weekdays", with the target charge in front when the
  * charger can measure it. A schedule the box does not have is null here and
  * no sentence at all — the panel says nothing rather than "no schedule",
  * because an app that cannot read one cannot claim its absence.
@@ -108,7 +165,7 @@ export function evScheduleSentence(lp: Loadpoint, at: Date = new Date()): string
   const s = lp.schedule
   if (!s) return null
   const when = localClock(s.timeOfDayMinUtc, at)
-  const cadence = s.recurring ? 'every day' : 'once'
+  const cadence = s.recurring ? daysWord(s.days) : 'once'
   const target = s.socPct !== null && lp.socPct !== null ? `${Math.round(s.socPct)} % ` : ''
   return `${target}Ready by ${when} · ${cadence}`
 }

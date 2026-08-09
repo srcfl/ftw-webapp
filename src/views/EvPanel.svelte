@@ -11,7 +11,16 @@
   import { untrack } from 'svelte'
   import { LoadpointsStore } from '$lib/state/loadpoints.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
-  import { evStatusSentence, evScheduleSentence, evSessionSentence } from '$lib/format/ev'
+  import { callBox, BoxApiError } from '$lib/state/box-api'
+  import {
+    evStatusSentence,
+    evScheduleSentence,
+    evSessionSentence,
+    utcMinutesToLocalInput,
+    localInputToUtcMinutes,
+    DAY_LABELS,
+    type Loadpoint,
+  } from '$lib/format/ev'
   import { formatPower } from '$lib/format/power'
   import type { SiteStore } from '$lib/state/site.svelte'
 
@@ -50,6 +59,88 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
   }
+
+  /**
+   * The schedule under edit, or null while the panel only reads.
+   *
+   * One draft, saved in one PUT: every field rides together, so a save
+   * costs exactly one passkey ceremony rather than one per field. Nothing
+   * is applied optimistically — the box's answer repaints the panel, and
+   * until it does the old schedule stands on screen as the truth it is.
+   */
+  let draft = $state<{ lpId: string; time: string; days: number; socPct: number } | null>(null)
+  let saving = $state(false)
+  let saveError = $state<string | null>(null)
+
+  function beginEdit(lp: Loadpoint): void {
+    saveError = null
+    // The wire's zero means every day; the draft holds all seven bits
+    // instead, so tapping Saturday off an every-day schedule means "not
+    // Saturday" — with a raw zero it would have meant "only Saturday",
+    // the exact opposite of the thumb's intent.
+    const wireDays = lp.schedule?.days ?? 0
+    draft = {
+      lpId: lp.id,
+      time: utcMinutesToLocalInput(lp.schedule?.timeOfDayMinUtc ?? 6 * 60),
+      days: wireDays === 0 ? 0x7f : wireDays & 0x7f,
+      socPct: Math.round(lp.schedule?.socPct ?? lp.targetSocPct ?? 80),
+    }
+  }
+
+  function toggleDay(bit: number): void {
+    if (draft) draft.days ^= 1 << bit
+  }
+
+  async function saveDraft(): Promise<void> {
+    if (!draft) return
+    const minUtc = localInputToUtcMinutes(draft.time)
+    if (minUtc === null) {
+      saveError = 'That is not a time this app understands.'
+      return
+    }
+    saving = true
+    saveError = null
+    try {
+      await callBox(untrack(() => site), {
+        method: 'PUT',
+        path: `/api/loadpoints/${draft.lpId}/schedule`,
+        body: {
+          soc_pct: draft.socPct,
+          time_of_day_min_utc: minUtc,
+          recurring: true,
+          // All seven days is the wire's zero — the canonical spelling of
+          // "every day", and what every schedule saved before masks
+          // existed already carries.
+          days: draft.days === 0x7f ? 0 : draft.days & 0x7f,
+        },
+      })
+      draft = null
+      await store.load()
+    } catch (err) {
+      saveError =
+        err instanceof BoxApiError ? err.help : "Your box didn't answer. Nothing was changed."
+    } finally {
+      saving = false
+    }
+  }
+
+  async function removeSchedule(lpId: string): Promise<void> {
+    saving = true
+    saveError = null
+    try {
+      await callBox(untrack(() => site), {
+        method: 'DELETE',
+        path: `/api/loadpoints/${lpId}/schedule`,
+      })
+      draft = null
+      await store.load()
+    } catch (err) {
+      saveError =
+        err instanceof BoxApiError ? err.help : "Your box didn't answer. Nothing was changed."
+    } finally {
+      saving = false
+    }
+  }
 </script>
 
 <svelte:window {onkeydown} />
@@ -58,7 +149,7 @@
      is a dialog, so what is behind it is inert to a screen reader. -->
 <div class="backdrop" onclick={onclose} aria-hidden="true"></div>
 
-<section class="sheet" role="dialog" aria-modal="true" aria-label="EV charger">
+<div class="sheet" role="dialog" aria-modal="true" aria-label="EV charger">
   <header>
     <h2>EV charger</h2>
     <button class="close" onclick={onclose} aria-label="Close">Close</button>
@@ -83,11 +174,85 @@
           <p class="badge">Battery boost is on — the house battery is helping the car.</p>
         {/if}
 
-        {#if evScheduleSentence(lp)}
-          <div class="row">
-            <span class="label">Schedule</span>
-            <span>{evScheduleSentence(lp)}</span>
+        {#if draft?.lpId === lp.id}
+          <!-- One draft, one save, one ceremony. The box revalidates and
+               answers; what it stores is what the panel then rereads. -->
+          <div class="editor">
+            <div class="row">
+              <span class="label">Ready by</span>
+              <input type="time" bind:value={draft.time} disabled={saving} />
+            </div>
+            <div class="chips" role="group" aria-label="Days">
+              {#each DAY_LABELS as day, bit (day)}
+                <button
+                  class="chip"
+                  aria-pressed={(draft.days & (1 << bit)) !== 0}
+                  disabled={saving}
+                  onclick={() => toggleDay(bit)}
+                >
+                  {day}
+                </button>
+              {/each}
+            </div>
+            <div class="row">
+              <span class="label">Charge to</span>
+              <input
+                type="number"
+                min="10"
+                max="100"
+                step="5"
+                bind:value={draft.socPct}
+                disabled={saving}
+              />
+              <span>%</span>
+            </div>
+            <div class="actions">
+              <!-- Every day off is not a schedule — the wire has no way to
+                   say it, and zero would silently mean the opposite. -->
+              <button
+                class="primary"
+                disabled={saving || draft.days === 0}
+                onclick={() => void saveDraft()}
+              >
+                {saving ? 'Saving…' : 'Save schedule'}
+              </button>
+              <button class="quiet" disabled={saving} onclick={() => (draft = null)}>
+                Cancel
+              </button>
+              {#if lp.schedule}
+                <button
+                  class="quiet"
+                  disabled={saving}
+                  onclick={() => void removeSchedule(lp.id)}
+                >
+                  Remove
+                </button>
+              {/if}
+            </div>
+            {#if saveError}
+              <p class="hint">{saveError}</p>
+            {/if}
           </div>
+        {:else}
+          {#if evScheduleSentence(lp)}
+            <div class="row">
+              <span class="label">Schedule</span>
+              <span>{evScheduleSentence(lp)}</span>
+              {#if site.canConfigure}
+                <button class="quiet edit" onclick={() => beginEdit(lp)}>Change</button>
+              {/if}
+            </div>
+          {:else if store.loaded && site.canConfigure}
+            <div class="row">
+              <span class="label">Schedule</span>
+              <button class="quiet edit" onclick={() => beginEdit(lp)}>
+                Set a charging schedule
+              </button>
+            </div>
+          {/if}
+          {#if saveError}
+            <p class="hint">{saveError}</p>
+          {/if}
         {/if}
         {#if lp.surplusOnly}
           <p class="hint">Charges from spare solar only.</p>
@@ -120,7 +285,7 @@
       <p class="note">Your box no longer reports a charger.</p>
     {/each}
   {/if}
-</section>
+</div>
 
 <style>
   .backdrop {
@@ -242,5 +407,76 @@
   .note {
     color: var(--fg-dim);
     font-size: 14px;
+  }
+
+  .editor {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    border-left: 2px solid var(--accent);
+    padding-left: var(--space-3);
+  }
+
+  .editor input {
+    background: var(--surface-sunken);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-xs);
+    color: var(--fg);
+    font-family: var(--num);
+    font-size: 14px;
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .editor input[type='number'] {
+    /* Three digits plus the browser's own spinner, or "84" clips to "8". */
+    width: 8ch;
+  }
+
+  .chips {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+
+  /* The same honest pattern as every exclusive-ish choice in the app:
+     buttons that say whether they are pressed, no radio ceremony. A zero
+     mask means every day, so with nothing chosen every chip reads on. */
+  .chip {
+    font-size: 12px;
+    font-family: var(--mono);
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-xs);
+    color: var(--fg-dim);
+  }
+
+  .chip[aria-pressed='true'] {
+    background: var(--surface-elevated);
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+
+  .actions {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-4);
+    font-weight: 500;
+  }
+
+  .quiet {
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+
+  .edit {
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 </style>

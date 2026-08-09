@@ -99,11 +99,14 @@ const ROUTES: Record<string, RouteFacts> = {
   'DELETE /api/battery/manual_hold': { tier: 'actuate' },
 
   // The charger. Reads are reads; everything that starts, stops or redirects
-  // charging is actuation, priced exactly as the box prices it — including
-  // the schedule, which today rides the target route and is therefore out of
-  // reach from here. That refusal is a fact the app must meet in tests, not
-  // a gap this simulator smooths over.
+  // charging is actuation, priced exactly as the box prices it. The schedule
+  // alone is configuration — a standing instruction about future days, with
+  // its own route since srcfl/ftw#869 — while the target route it once rode
+  // stays actuation, because target also carries one-shot fields that move
+  // energy now.
   'GET /api/loadpoints': { tier: 'read' },
+  'PUT /api/loadpoints/{id}/schedule': { tier: 'configure' },
+  'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure' },
   'GET /api/mpc/plan': { tier: 'read' },
   'GET /api/loadpoints/{id}/manual_hold': { tier: 'read' },
   'GET /api/loadpoints/{id}/battery_boost': { tier: 'read' },
@@ -226,6 +229,16 @@ export class SimApi {
   #opts: SimApiOptions
   #devices: SimDevice[]
   #pairing: { code: string; role: Role; expiresAtMs: number } | null = null
+  /**
+   * The charger's standing instruction, mutable the way the box's is.
+   * Null after a DELETE — the box serves no schedule field then, and the
+   * app must meet that as an absence rather than an empty object.
+   */
+  #schedule: Record<string, unknown> | null = {
+    soc_pct: 84,
+    time_of_day_min_utc: 360,
+    recurring: true,
+  }
 
   constructor(opts: SimApiOptions) {
     this.#opts = opts
@@ -343,6 +356,12 @@ export class SimApi {
     if (route === 'GET /api/energy/daily') return this.#energyDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()
     if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
+    if (route === 'PUT /api/loadpoints/{id}/schedule') {
+      return this.#putSchedule(matched.params['id'] ?? '', req.body)
+    }
+    if (route === 'DELETE /api/loadpoints/{id}/schedule') {
+      return this.#clearSchedule(matched.params['id'] ?? '')
+    }
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year
@@ -443,10 +462,50 @@ export class SimApi {
           manual_active: false,
           battery_boost: { state: 'inactive', active: false },
           surplus_only: false,
-          schedule: { soc_pct: 84, time_of_day_min_utc: 360, recurring: true },
+          ...(this.#schedule ? { schedule: this.#schedule } : {}),
         },
       ],
     })
+  }
+
+  /**
+   * Store or clear the standing instruction, validated as the box's
+   * `applyLoadpointSchedule` validates it. The days mask arrived with
+   * srcfl/ftw#869: seven bits, Monday first, zero meaning every day.
+   */
+  #putSchedule(id: string, body: Uint8Array | null): ApiAnswer {
+    if (id !== 'carport') return json(404, { error: 'loadpoint not found' })
+    if (!body || body.length === 0) return json(400, { error: 'a schedule or null' })
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      return json(400, { error: 'invalid schedule' })
+    }
+    if (parsed === null) {
+      this.#schedule = null
+      return json(200, { ok: true })
+    }
+    if (typeof parsed !== 'object') return json(400, { error: 'invalid schedule' })
+
+    const s = parsed as Record<string, unknown>
+    const min = s['time_of_day_min_utc']
+    if (typeof min !== 'number' || min < 0 || min >= 1440) {
+      return json(400, { error: 'time_of_day_min_utc must be 0..1439' })
+    }
+    const days = s['days']
+    if (days !== undefined && (typeof days !== 'number' || days < 0 || days > 127)) {
+      return json(400, { error: 'days must be a 7-bit weekday mask (0..127, bit 0 = Monday)' })
+    }
+    this.#schedule = s
+    return json(200, { ok: true })
+  }
+
+  #clearSchedule(id: string): ApiAnswer {
+    if (id !== 'carport') return json(404, { error: 'loadpoint not found' })
+    this.#schedule = null
+    return json(200, { ok: true })
   }
 
   /**

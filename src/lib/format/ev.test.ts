@@ -8,6 +8,9 @@ import {
   evScheduleSentence,
   evSessionSentence,
   localClock,
+  daysWord,
+  localInputToUtcMinutes,
+  utcMinutesToLocalInput,
   type WireLoadpoint,
 } from './ev'
 
@@ -71,6 +74,35 @@ describe('a charger described in words', () => {
     expect(
       evSessionSentence(toLoadpoint({ ...WIRE, delivered_wh_session: 18_400 }))
     ).toBe('18 kWh this session')
+  })
+
+  it('says the week the way a person does', () => {
+    expect(daysWord(0)).toBe('every day')
+    expect(daysWord(0b1111111)).toBe('every day')
+    expect(daysWord(0b0011111)).toBe('weekdays')
+    expect(daysWord(0b1100000)).toBe('weekends')
+    expect(daysWord(0b0010101)).toBe('Mon, Wed, Fri')
+  })
+
+  it('carries the mask into the schedule sentence', () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      schedule: { soc_pct: 84, time_of_day_min_utc: 360, recurring: true, days: 31 },
+    })
+    expect(evScheduleSentence(lp)).toContain('weekdays')
+  })
+
+  it('round-trips the kitchen clock to the wire and back', () => {
+    // Whatever zone runs this test, the pair of conversions must agree
+    // with each other — one conversion, one place, both directions.
+    for (const hhmm of ['00:00', '06:30', '23:45']) {
+      const min = localInputToUtcMinutes(hhmm)
+      expect(min).not.toBeNull()
+      expect(min).toBeGreaterThanOrEqual(0)
+      expect(min).toBeLessThan(1440)
+      expect(utcMinutesToLocalInput(min!)).toBe(hhmm)
+    }
+    expect(localInputToUtcMinutes('25:99')).toBeNull()
   })
 
   it('holds every sentence to the no-minus rule', () => {

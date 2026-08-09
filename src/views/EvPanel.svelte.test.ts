@@ -12,6 +12,16 @@ import EvPanel from './EvPanel.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { ROLE_VIEWER } from '$lib/protocol/messages'
+import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
+
+// The ceremony, played by a hand. The sim's configure tier refuses without
+// a step-up exactly as the box does; what is under test is that one save
+// runs it once and the refusal prose reaches the screen when it fails.
+vi.mock('$lib/identity/stepup', () => ({
+  stepUp: vi.fn(async () => 'done'),
+  stepUpHelp: () => 'Your passkey did not answer. Nothing was changed.',
+}))
 
 const CHARGING_EVENING = Date.UTC(2026, 6, 15, 18, 30, 0)
 
@@ -122,6 +132,154 @@ describe('the charger behind its bubble', () => {
       asked.mock.calls.length,
       'the panel never asked again on a wire that never dropped'
     ).toBeGreaterThan(afterMount)
+  })
+
+  it('saves a schedule in one PUT and one ceremony, and repaints from the box', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    const { stepUp } = await import('$lib/identity/stepup')
+    vi.mocked(stepUp).mockClear()
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+
+    const change = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Change'
+    )!
+    expect(change, 'no way in to the editor for an owner').toBeDefined()
+    change.click()
+    await vi.advanceTimersByTimeAsync(50)
+
+    const time = document.querySelector('input[type="time"]') as HTMLInputElement
+    time.value = '08:00'
+    time.dispatchEvent(new Event('input', { bubbles: true }))
+
+    // Weekdays, the way a thumb makes them: the every-day schedule shows
+    // all seven chips on, and turning Saturday and Sunday off is the whole
+    // gesture. (The draft holds all seven bits for exactly this reason —
+    // toggling a day off a raw zero mask would have meant "only that day".)
+    for (const day of ['Sat', 'Sun']) {
+      ;[...document.querySelectorAll<HTMLButtonElement>('button.chip')]
+        .find((b) => b.textContent?.trim() === day)!
+        .click()
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    const put = vi.spyOn(box.api, 'serve')
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Save schedule')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    // One ceremony for the whole draft, not one per field.
+    expect(vi.mocked(stepUp).mock.calls.length).toBe(1)
+
+    const saved = put.mock.calls.find(
+      (c) => c[0].method === 'PUT' && c[0].path.endsWith('/schedule') && c[0].stepUp
+    )
+    expect(saved, 'no stepped-up PUT reached the box').toBeDefined()
+    const bodyOnWire = JSON.parse(new TextDecoder().decode(saved![0].body!))
+    expect(bodyOnWire.time_of_day_min_utc).toBe(localInputToUtcMinutes('08:00'))
+    expect(bodyOnWire.days).toBe(0b0011111)
+    expect(bodyOnWire.recurring).toBe(true)
+
+    // The panel reread the box rather than trusting its own draft.
+    expect(document.body.textContent).toContain(`Ready by ${localClock(bodyOnWire.time_of_day_min_utc)}`)
+    expect(document.body.textContent).toContain('weekdays')
+  })
+
+  it('shows a viewer the schedule but never the pen', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now(), role: ROLE_VIEWER })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(document.body.textContent).toContain('Ready by')
+    expect([...document.querySelectorAll('button')].map((b) => b.textContent?.trim())).not.toContain(
+      'Change'
+    )
+  })
+
+  it('says what happened when the ceremony fails, and changes nothing', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    const stepup = await import('$lib/identity/stepup')
+    vi.mocked(stepup.stepUp).mockResolvedValueOnce('unavailable')
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    const before = document.body.textContent
+
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Change')!
+      .click()
+    await vi.advanceTimersByTimeAsync(50)
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Save schedule')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(document.body.textContent).toContain('Nothing was changed')
+    // Cancel out and the schedule reads exactly as before the attempt.
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Cancel')!
+      .click()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(document.body.textContent).toContain(
+      before!.match(/Ready by [^·]+/)![0].trim()
+    )
+  })
+
+  it('removes a schedule and says the absence honestly', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.body.textContent).toContain('Ready by')
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Change')!
+      .click()
+    await vi.advanceTimersByTimeAsync(50)
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Remove')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    // No sentence claims a schedule; the offer to set one takes its place.
+    expect(document.body.textContent).not.toContain('Ready by')
+    expect(document.body.textContent).toContain('Set a charging schedule')
   })
 
   it('keeps its facts through a drop and asks again on its own when the wire returns', async () => {
