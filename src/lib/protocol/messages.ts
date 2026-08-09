@@ -468,7 +468,11 @@ export function carriesOverSession(contentType: string | undefined): boolean {
 // Commands
 // --------------------------------------------------------------------------
 
-/** Operations the app can ask for. Each maps to a scope in the registry. */
+/**
+ * Operations the app can ask for, from contract/registry.yaml `ops` — the
+ * scope each demands lives there too, and tests/registry-contract.test.ts
+ * reads both back.
+ */
 export const OP_SET_MODE = 'site.mode.set'
 export const OP_BATTERY_HOLD = 'battery.hold'
 
@@ -559,6 +563,14 @@ const RETRYABLE: Record<string, boolean> = {
   // Not from the box. The session layer raises this one itself out of
   // api.end{truncated: true} — see contract/registry.yaml, client_errors.
   E_RESPONSE_TOO_LARGE: false,
+  // Also the app's own, from the same block. No ack means the box never took
+  // the intent, so trying again cannot act twice. No answer means the wire
+  // went away — the session reconnects on its own and the same ask can go
+  // again. A bad body is the box and the app disagreeing about a route, and
+  // asking again gets the same answer.
+  E_NO_ACK: true,
+  E_NO_ANSWER: true,
+  E_BAD_BODY: false,
 }
 
 /** Unknown codes are not retryable: guessing yes offers a button that cannot help. */
