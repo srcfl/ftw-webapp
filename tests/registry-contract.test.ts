@@ -12,7 +12,7 @@
  * file is the other half, and it cannot be checked from inside one clone —
  * scripts/check-contract-drift.mjs does it in CI with both checked out.
  *
- * Deliberately not a YAML parser. Adding one to read five blocks out of one
+ * Deliberately not a YAML parser. Adding one to read six blocks out of one
  * file would be a dependency in the shipping tree for a test, and the blocks
  * are flat lists whose shape is itself part of what is being pinned.
  */
@@ -60,9 +60,9 @@ function block(name: string): string[] {
  * One of the two error blocks.
  *
  * `errors` is what the box sends. `client_errors` is what this app raises for
- * itself and the box never sends — E_RESPONSE_TOO_LARGE, which the session
- * layer makes out of `api.end{truncated: true}`. Both are checked here,
- * because a code exempt from the check is a code that can drift.
+ * itself and the box never sends — the session's deadlines and the box-api
+ * layer's unreadable answers. Both are checked here, because a code exempt
+ * from the check is a code that can drift.
  */
 function registryErrors(name: 'errors' | 'client_errors' = 'errors'): {
   code: string
@@ -103,6 +103,27 @@ function registryScopes(): string[] {
 
 function registryCapabilities(): string[] {
   return block('capabilities').map((line) => line.trim().replace(/^-\s*/, ''))
+}
+
+function registryOps(): { name: string; scope: string }[] {
+  return block('ops').map((line) => {
+    const m = /name:\s*(\S+?),\s*scope:\s*(\S+?),/.exec(line)
+    expect(m, `unreadable op line: ${line}`).not.toBeNull()
+    return { name: m![1]!, scope: m![2]! }
+  })
+}
+
+/**
+ * The `OP_` constants in messages.ts, name and wire string together.
+ *
+ * Read out of the source like the app's error table above: the constants are
+ * the set of operations this app can put in a `cmd` frame at all.
+ */
+function appOps(): Record<string, string> {
+  const source = readFileSync(root('src/lib/protocol/messages.ts'), 'utf8')
+  return Object.fromEntries(
+    [...source.matchAll(/^export const (OP_[A-Z_]+) = '([^']+)'$/gm)].map(([, n, v]) => [n!, v!])
+  )
 }
 
 /** roles is nested, so it is read as one indented sub-block per role. */
@@ -186,6 +207,59 @@ describe('scopes and roles', () => {
       const want = spec.scopes.includes('*') ? registryScopes() : spec.scopes
       expect([...(ROLE_SCOPES[role] ?? [])], `${role} carries the wrong scopes`).toEqual(want)
       expect(ROLE_LABELS[role], `${role} is labelled differently`).toBe(spec.label)
+    }
+  })
+})
+
+describe('command operations', () => {
+  /**
+   * The `ops` block is newer than the constants it pins. OP_SET_MODE and
+   * OP_BATTERY_HOLD were hand-written here while the box hand-wrote the same
+   * strings beside its dispatcher, and nothing compared the two — the exact
+   * arrangement the registry exists to end. Set equality both ways: an op
+   * this app can send that the registry has never heard of fails, and so
+   * does a registry op this app cannot name.
+   */
+  it('are the registry’s ops exactly, in both directions', () => {
+    const declared = registryOps()
+      .map((o) => o.name)
+      .sort()
+    const constants = Object.values(appOps()).sort()
+    expect(constants.length, 'no OP_ constants were found to check').toBeGreaterThan(0)
+    expect(constants).toEqual(declared)
+  })
+
+  it('each demand a scope the registry declares', () => {
+    // An op is a door and its scope is the key the box checks at it. An op
+    // mapped to a scope that does not exist is a door no grant can ever open.
+    const scopes = new Set(registryScopes())
+    for (const { name, scope } of registryOps()) {
+      expect(scopes.has(scope), `${name} demands ${scope}, which is not a registry scope`).toBe(
+        true
+      )
+    }
+  })
+
+  it('demand the registry’s scope in the simulator playing the box', () => {
+    // The simulator's OP_SCOPES is what every test in this tree meets as the
+    // box's authorisation gate. The box's real table is checked against the
+    // registry on its own side, so this pair of checks is what lets the two
+    // tables disagree with each other only by first disagreeing with the
+    // registry — which CI compares byte for byte.
+    const declared = new Map(registryOps().map((o) => [o.name, o.scope]))
+    const ops = appOps()
+    const source = readFileSync(root('src/lib/sim/box.ts'), 'utf8')
+    const table = source.slice(
+      source.indexOf('const OP_SCOPES'),
+      source.indexOf('}', source.indexOf('const OP_SCOPES'))
+    )
+
+    const entries = [...table.matchAll(/\[(OP_[A-Z_]+)\]:\s*'([^']+)'/g)]
+    expect(entries.length, 'no ops were found in the simulator to check').toBe(declared.size)
+    for (const [, constant, scope] of entries) {
+      const wire = ops[constant!]
+      expect(wire, `the simulator's ${constant} is not a constant in messages.ts`).toBeDefined()
+      expect(scope, `the simulator demands ${scope} for ${wire}`).toBe(declared.get(wire!))
     }
   })
 })
