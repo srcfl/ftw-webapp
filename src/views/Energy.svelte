@@ -18,7 +18,7 @@
   crash — the same rule as every other capability.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
   import { EnergyStore, ENERGY_RANGES, ENERGY_RANGE_KEYS, type EnergyRangeKey } from '$lib/state/energy.svelte'
   import { formatEnergy, energyLabel } from '$lib/format/energy'
@@ -59,19 +59,31 @@
 
   const shownSeries = $derived(SERIES.find((s) => s.key === shown) ?? SERIES[0]!)
 
+  // A ticking clock, coarse on purpose: all it feeds is a name that changes
+  // once an hour. A bare Date.now() in the derived below reads the clock
+  // exactly once and never re-fires anything.
+  let nowMs = $state(Date.now())
+
+  onMount(() => {
+    const t = setInterval(() => (nowMs = Date.now()), 60_000)
+    return () => clearInterval(t)
+  })
+
   /**
    * What the box is being asked for.
    *
    * The local day is part of the name, so a screen left open overnight asks
-   * again rather than heading yesterday's figures "Today". A reconnect and a
-   * failed ask both earn a fresh one without the name having to change;
-   * askWhenLive gives that.
+   * again rather than heading yesterday's figures "Today" — and the hour is
+   * too, because today's column keeps filling all day: a "today so far" read
+   * at nine in the morning was still the figure at nine in the evening on a
+   * connection that never dropped. A reconnect and a failed ask both earn a
+   * fresh one without the name having to change; askWhenLive gives that.
    */
-  const wanted = $derived(
-    site.session.caps.has(CAP_PASSTHROUGH)
-      ? `energy ${energy.range} ${new Date().toDateString()}`
-      : null
-  )
+  const wanted = $derived.by(() => {
+    if (!site.session.caps.has(CAP_PASSTHROUGH)) return null
+    const at = new Date(nowMs)
+    return `energy ${energy.range} ${at.toDateString()} ${at.getHours()}`
+  })
 
   askWhenLive(untrack(() => site), () => wanted, () => energy.load())
 
@@ -162,16 +174,17 @@
       </div>
     </header>
 
-    <!-- Tappable, because each one is also what the chart below draws. A
-         radio group rather than four buttons: exactly one is always chosen. -->
-    <div class="cards" role="radiogroup" aria-label="What the chart shows">
+    <!-- Tappable, because each one is also what the chart below draws.
+         Pressed buttons rather than radios, the way the range picker above
+         solves the same exclusive choice: role=radio promises arrow-key
+         moves between the options, and these buttons never had them. -->
+    <div class="cards" role="group" aria-label="What the chart shows">
       {#each SERIES as series (series.key)}
         {@const parts = formatEnergy(totals[series.key])}
         <button
           type="button"
-          role="radio"
           class="card"
-          aria-checked={shown === series.key}
+          aria-pressed={shown === series.key}
           style:--swatch="var({series.colorVar})"
           onclick={() => (shown = series.key)}
         >
@@ -204,6 +217,10 @@
             bar-max="26"
             empty-text="nothing recorded"
           ></ftw-bar-chart>
+        {:catch}
+          <!-- The chunk never arrived. The figures above are complete either
+               way; silence here would read as a chart with nothing in it. -->
+          <p class="note">The chart didn't load — it will try again next time you open the app.</p>
         {/await}
       </div>
     {/if}
@@ -306,7 +323,7 @@
     transition: border-color var(--motion-fast) var(--ease);
   }
 
-  .card[aria-checked='true'] {
+  .card[aria-pressed='true'] {
     border-color: var(--swatch);
     background: var(--surface-elevated);
   }

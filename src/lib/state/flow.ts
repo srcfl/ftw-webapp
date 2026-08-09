@@ -50,7 +50,10 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
       kw: 0, toHub: true, color: 'var(--fg-muted)', sub: 'no data', clickable: false,
     })
   } else {
-    const g = gridW / 1000
+    // Magnitude only: the sign is wire convention, and the sub line already
+    // carries the direction. A minus over "exporting" is the raw sign the UI
+    // never shows.
+    const g = Math.abs(gridW) / 1000
     planets.push({
       id: 'grid', corner: 'bottom-left', title: 'GRID', role: 'grid',
       kw: g, toHub: gridW >= 0,
@@ -77,15 +80,18 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
 
   const batteryW = fields.get(FID.BATTERY_W)
   if (batteryW !== undefined) {
-    const b = batteryW / 1000
+    // Magnitude only, and the direction spelled out in the sub. A battery
+    // moves power both ways, so unlike solar the number alone cannot say
+    // which — and a raw minus is the one thing the UI never shows.
+    const b = Math.abs(batteryW) / 1000
     const socPermille = fields.get(FID.BATTERY_SOC)
     planets.push({
       id: 'battery', corner: 'top-right', title: 'BATTERY', role: 'battery',
       kw: b, toHub: batteryW < 0,
-      // Direction carried by the value's colour: charge green (filling),
+      // Direction also in the value's colour: charge green (filling),
       // discharge red (draining), idle the battery's identity cyan.
       color: idle(batteryW) ? 'var(--cyan)' : batteryW >= 0 ? 'var(--green-e)' : 'var(--red-e)',
-      sub: '',
+      sub: idle(batteryW) ? 'idle' : batteryW >= 0 ? 'charging' : 'discharging',
       soc: socPermille === undefined ? null : Math.round(socPermille / 10),
       clickable: false,
     })

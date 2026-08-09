@@ -28,6 +28,19 @@ import { NoiseTransport } from '$lib/crypto/transport'
 const HANDSHAKE_DEADLINE_MS = 12_000
 
 /**
+ * Retry pacing for a handshake that timed out on a healthy socket.
+ *
+ * The inner carrier redials a dead socket on its own, but it never re-emits
+ * 'open' on one that stayed up — and a box rebooting through an update says
+ * nothing while its socket stands. Without a retry here, one silent handshake
+ * would leave the app closed until the epoch rotates. Full jitter, like the
+ * relay's dial backoff, and capped so a revoked phone — deliberate silence,
+ * forever — costs one 48-byte message a minute at worst.
+ */
+const HANDSHAKE_BACKOFF_BASE_MS = 3_000
+const HANDSHAKE_BACKOFF_CAP_MS = 60_000
+
+/**
  * Message 2 of Noise_IK: the responder's ephemeral public key and one AEAD
  * tag over an empty payload. Fixed by the pattern, so anything else on the
  * wire is somebody else's frame.
@@ -73,6 +86,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   /** True once message 1 is out and we are waiting for the reply. */
   #awaitingReply = false
   #deadline: ReturnType<typeof setTimeout> | undefined
+  #retry: ReturnType<typeof setTimeout> | undefined
+  #attempt = 0
   #log: ((line: string) => void) | undefined
 
   /** Kept so each reconnection can start a fresh handshake from the same input. */
@@ -129,6 +144,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     if (this.#closed) return
     this.#closed = true
 
+    clearTimeout(this.#deadline)
+    this.#clearRetry()
     for (const u of this.#unsub) u()
     this.#unsub = []
 
@@ -145,6 +162,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     if (this.#closed) return
 
     if (s.phase === 'open') {
+      this.#attempt = 0
+      this.#clearRetry()
       this.#beginHandshake()
       return
     }
@@ -152,10 +171,13 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     // The inner carrier reconnects on its own, but a Noise session cannot
     // survive the gap: its keys are bound to one handshake and its counters
     // to one stream. So a drop restarts the handshake rather than resuming,
-    // which is also why split() must never be called twice.
+    // which is also why split() must never be called twice. A pending retry
+    // is cancelled too — its socket is gone, and the reconnect ends in an
+    // 'open' that starts a fresh handshake at once.
     this.#transport?.close()
     this.#transport = null
     this.#awaitingReply = false
+    this.#clearRetry()
     this.#setStatus(s)
   }
 
@@ -223,6 +245,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
         this.#transport = new NoiseTransport(handshake.split())
         this.#awaitingReply = false
         this.#handshake = null
+        this.#attempt = 0
         this.#setStatus({ phase: 'open', sinceMs: Date.now() })
       })
       .catch((err) => {
@@ -242,9 +265,28 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   }
 
   #fail(reason: string, retryable = true): void {
+    if (this.#closed) return
     this.#transport?.close()
     this.#transport = null
     this.#awaitingReply = false
     this.#setStatus({ phase: 'closed', reason, retryable })
+
+    // A retryable failure on a socket that still stands is retried from here,
+    // because nowhere else will: nothing above consumes `retryable`, and the
+    // inner carrier only re-emits 'open' after an actual reconnect. Between
+    // attempts the status stays closed-and-retryable, which is the truth.
+    if (!retryable || this.#inner.status.phase !== 'open') return
+    this.#clearRetry()
+    const ceiling = Math.min(HANDSHAKE_BACKOFF_CAP_MS, HANDSHAKE_BACKOFF_BASE_MS * 2 ** this.#attempt)
+    this.#attempt = Math.min(this.#attempt + 1, 16)
+    this.#retry = setTimeout(() => {
+      this.#retry = undefined
+      this.#beginHandshake()
+    }, Math.random() * ceiling)
+  }
+
+  #clearRetry(): void {
+    clearTimeout(this.#retry)
+    this.#retry = undefined
   }
 }

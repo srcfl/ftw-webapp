@@ -63,6 +63,9 @@ describe('planHeadline', () => {
     const h = planHeadline(p, T0 + 60_000)
     expect(h.text).toMatch(/charging at 3.0 kW/)
     expect(h.text).toMatch(/Then it covers the house/)
+    // The unit must survive the sentence around it: "2.0 kW", never "2.0 kw"
+    // — a lowercased clause once dragged the unit down with it.
+    expect(h.text).not.toMatch(/\d\s*k?w\b/)
     expect(h.slotIndex).toBe(0)
   })
 

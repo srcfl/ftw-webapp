@@ -21,6 +21,16 @@ export const FID = {
   BATTERY_W: 4,
   BATTERY_SOC: 5,
   LOAD_W: 6,
+  /**
+   * Which source feeds each power reading. Nothing in the app reads them
+   * yet, but this table is the app's copy of the registry's frozen set and
+   * tests/registry-contract.test.ts holds the two equal — a fid with no
+   * name here would need an exemption there, and an exemption list is the
+   * thing the registry exists to avoid.
+   */
+  SRC_GRID: 7,
+  SRC_PV: 8,
+  SRC_BATTERY: 9,
   /** Present only on a site with a charger. Absent means no EV node. */
   EV_W: 10,
 } as const

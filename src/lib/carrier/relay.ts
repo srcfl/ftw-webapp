@@ -182,7 +182,6 @@ export class RelayCarrier extends CarrierBase implements Carrier {
   #onMessage(ev: MessageEvent): void {
     if (typeof ev.data === 'string') {
       if (ev.data === CTRL_READY) {
-        this.#attempt = 0
         this.#corrections = 0
         this.#setStatus({ phase: 'open', sinceMs: this.#now() })
       } else if (ev.data === CTRL_GONE) {
@@ -193,6 +192,11 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     }
 
     if (this.#status.phase !== 'open') return
+    // Only a delivered frame proves the path works, so this is where the dial
+    // backoff resets. Resetting on the accept let a relay that accepts and
+    // then dies keep us dialling at the floor interval for as long as it
+    // crash-looped.
+    this.#attempt = 0
     this.emitFrame(new Uint8Array(ev.data as ArrayBuffer))
   }
 

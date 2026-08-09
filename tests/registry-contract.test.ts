@@ -18,13 +18,26 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { isRetryable } from '$lib/protocol/messages'
 import { SCOPES, ROLE_SCOPES, ROLE_LABELS } from '$lib/protocol/contract'
+import { FID } from '$lib/format/explanation'
 
 /** From the project root, which is where vitest runs. */
 const root = (p: string) => join(process.cwd(), p)
+
+/**
+ * Every non-test source file under src/, as a root-relative path with
+ * forward slashes. Tests are left out: a literal in a test cannot hide a
+ * feature from a user, and the box's names written plainly are often the
+ * very thing a test asserts.
+ */
+function sourceFiles(): string[] {
+  return readdirSync(root('src'), { recursive: true })
+    .map((p) => `src/${String(p).split(sep).join('/')}`)
+    .filter((p) => /\.(ts|svelte)$/.test(p) && !p.endsWith('.test.ts'))
+}
 
 const registry = readFileSync(root('contract/registry.yaml'), 'utf8')
 
@@ -177,21 +190,42 @@ describe('scopes and roles', () => {
   })
 })
 
+describe('frozen field ids', () => {
+  /**
+   * The registry froze these at v1 so an app of any age can draw the core
+   * view from them alone. The app's copy is the FID table in
+   * src/lib/format/explanation.ts, and it was the one shared table nothing
+   * read back — a renumbering on the box side would have passed this
+   * repository's CI. Id and name are checked as one pair, set equality both
+   * ways: a swap, a rename, a fid dropped and a fid the app has no name for
+   * all fail.
+   */
+  it('are the registry’s frozen_fields exactly, id and name together', () => {
+    const declared = block('frozen_fields').map((line) => {
+      const m = /^ {2}(\d+): \{ name: ([a-z0-9_]+),/.exec(line)
+      expect(m, `unreadable frozen field line: ${line}`).not.toBeNull()
+      return `${m![1]}: ${m![2]}`
+    })
+    const table = Object.entries(FID).map(([name, id]) => `${id}: ${name.toLowerCase()}`)
+    expect(table.sort()).toEqual(declared.sort())
+  })
+})
+
 describe('capabilities the app gates on', () => {
   /**
-   * Every view that gates on a capability names it in one `CAP_` constant
-   * beside a comment pointing at the registry. That convention is what makes
-   * this checkable at all — a bare string inside a `caps.has(...)` call is
-   * invisible here, and a capability the registry has never heard of is a
-   * view that silently never appears, which is also exactly what a box that
-   * legitimately lacks it looks like.
+   * Every gate names its capability in one `CAP_` constant beside a comment
+   * pointing at the registry, and this reads every constant so declared,
+   * anywhere in the tree. The hand-written-names check below is what makes
+   * the convention hold: a bare string inside `caps.has(...)` fails there,
+   * so a name cannot dodge this check by never being declared. A capability
+   * the registry has never heard of is a view that silently never appears,
+   * which is also exactly what a box that legitimately lacks it looks like.
    */
   it('all exist in the registry, so nothing hides a feature over a typo', () => {
     const declared = new Set(registryCapabilities())
-    const views = ['src/views/Plan.svelte', 'src/views/Energy.svelte', 'src/views/Access.svelte']
 
     let checked = 0
-    for (const file of views) {
+    for (const file of sourceFiles()) {
       for (const [, cap] of readFileSync(root(file), 'utf8').matchAll(
         /const CAP_[A-Z_]+ = '([^']+)'/g
       )) {
@@ -214,6 +248,59 @@ describe('capabilities the app gates on', () => {
       expect(declared.has(cap!), `the simulator claims ${cap}, which is not in the registry`).toBe(
         true
       )
+    }
+  })
+})
+
+describe('hand-written shared names', () => {
+  /**
+   * The checks above read constants, so a name only they can see is a name
+   * that must live in one. This is the other half: a capability written
+   * inline in `caps.has(...)` or a scope string written anywhere but the
+   * contract is a name no check reads, and a rename in the registry would
+   * sail past it. Grep-shaped on purpose — the convention it enforces is
+   * lexical, and a parser would be a heavier tool giving the same answer.
+   *
+   * The simulator is the one exception. It plays the box, whose names are
+   * generated from the registry, so its literals are compared against the
+   * registry rather than banned — the same treatment its CAPS list gets.
+   */
+  it('appear only in the contract, or in the simulator playing the box', () => {
+    // The scan can only ban a shape it recognises, so the shape is pinned to
+    // the registry first: a declared scope it cannot match is a scope the
+    // scan has gone blind to.
+    const shape = /^ftw\.[a-z_]+\.(?:read|write)$/
+    const declared = new Set(registryScopes())
+    for (const scope of declared) {
+      expect(scope, 'a registry scope the bare-name scan cannot recognise').toMatch(shape)
+    }
+
+    for (const file of sourceFiles()) {
+      if (file === 'src/lib/protocol/contract.ts') continue
+      const source = readFileSync(root(file), 'utf8')
+
+      const caps = [...source.matchAll(/caps\.has\(\s*'([^']+)'/g)].map((m) => m[1]!)
+      expect(
+        caps,
+        `${file} names a capability inline — declare it in a CAP_ constant so the registry check can see it`
+      ).toEqual([])
+
+      const scopes = [...source.matchAll(/'([^']+)'/g)]
+        .map((m) => m[1]!)
+        .filter((lit) => shape.test(lit))
+      if (file.startsWith('src/lib/sim/')) {
+        for (const lit of scopes) {
+          expect(
+            declared.has(lit),
+            `the simulator uses ${lit} in ${file}, which is not in the registry`
+          ).toBe(true)
+        }
+      } else {
+        expect(
+          scopes,
+          `${file} hand-writes a scope — import it from src/lib/protocol/contract.ts`
+        ).toEqual([])
+      }
     }
   })
 })

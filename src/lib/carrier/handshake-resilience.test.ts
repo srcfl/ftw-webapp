@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NoiseCarrier } from './noise'
 import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
-import { generateKeyPair } from '$lib/crypto/noise'
+import { generateKeyPair, HandshakeState } from '$lib/crypto/noise'
+import { NoiseTransport } from '$lib/crypto/transport'
 import type { CarrierState } from '$lib/protocol/types'
 
 /* A stray frame during the handshake must not end the carrier.
@@ -53,7 +54,7 @@ function carrierUnderTest() {
   })
   const seen: CarrierStatus[] = []
   carrier.onStatus((s) => seen.push(s))
-  return { inner, carrier, seen }
+  return { inner, carrier, seen, box }
 }
 
 describe('a handshake meeting somebody else’s frames', () => {
@@ -102,5 +103,42 @@ describe('a handshake meeting somebody else’s frames', () => {
     const closed = seen.find((s) => s.phase === 'closed')
     expect(closed, 'silence never ended the handshake').toBeDefined()
     expect(closed && 'retryable' in closed && closed.retryable).toBe(true)
+  })
+
+  it('asks again after the deadline, and a late-answering box still gets in', async () => {
+    // The deadline ends the first attempt retryably — but the socket is
+    // still open, and the inner carrier never re-emits 'open' on a socket
+    // that never dropped. The retry has to come from the Noise carrier
+    // itself, or a box rebooting through an update leaves the app closed
+    // until the epoch rotates.
+    const { inner, carrier, seen, box } = carrierUnderTest()
+    inner.open()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(inner.sent.length).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(13_000)
+    expect(seen.some((s) => s.phase === 'closed' && s.retryable)).toBe(true)
+
+    // A fresh message 1 goes out on its own, without the socket moving.
+    // Walked in small steps so the answer below lands while the newest
+    // attempt is still waiting, wherever the jitter put it. The step count
+    // is a bound, not a schedule: far more fake time than any first retry.
+    for (let i = 0; i < 100 && inner.sent.length === 1; i++) await vi.advanceTimersByTimeAsync(500)
+    expect(inner.sent.length, 'no second handshake was ever attempted').toBeGreaterThan(1)
+
+    // The box comes back and answers the newest attempt; the session opens
+    // with no reload and no reconnect.
+    const responder = HandshakeState.responder({ staticKey: box })
+    await responder.readMessage(inner.sent.at(-1)!)
+    inner.deliver(await responder.writeMessage())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(carrier.status.phase).toBe('open')
+
+    // And frames flow: the box's first transport frame decrypts and surfaces.
+    const heard: Uint8Array[] = []
+    carrier.onFrame((f) => heard.push(f))
+    const boxTransport = new NoiseTransport(responder.split())
+    inner.deliver(boxTransport.encrypt(Uint8Array.from([7, 7, 7])))
+    expect(heard).toEqual([Uint8Array.from([7, 7, 7])])
   })
 })

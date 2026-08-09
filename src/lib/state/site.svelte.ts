@@ -47,6 +47,16 @@ const NOW_FIDS: readonly Fid[] = [
 ]
 
 /**
+ * How long a 1 Hz stream may be quiet before the silence is reported.
+ *
+ * A stream is always a fraction of a second behind its last frame, and on
+ * mobile a single dropped tick is normal. Reporting that would make a healthy
+ * view flicker between "now" and "1s ago" forever, which reads as a fault
+ * where there is none. Past a couple of beats the silence is real.
+ */
+const STREAM_QUIET_AFTER_MS = 3_000
+
+/**
  * The sources behind the readings on the Now view, named by the box.
  *
  * Two kinds of field contribute nothing. One with no value has nothing on
@@ -74,6 +84,8 @@ export class SiteStore {
   #writer = new SnapshotWriter()
   #siteId: string | null = null
   #markedLive = false
+  /** Set for good in destroy(). A dead store must not accept a carrier. */
+  #destroyed = false
   /** Wall clock when the last frame arrived. Null until one does. */
   #lastFrameAtMs = $state<number | null>(null)
 
@@ -133,6 +145,18 @@ export class SiteStore {
    * read itself was already started by the inline script in index.html.
    */
   async start(siteId: string): Promise<void> {
+    // Repointed at a different home. The subscriber above tags every
+    // streaming frame with #siteId, so the old session has to be gone before
+    // the id moves — one frame in the gap and the old house is sealed to disk
+    // under the new one's id. The per-site bookkeeping resets with it, so the
+    // new home's cache restores exactly as on a launch. A launch and a
+    // same-home restart take neither branch.
+    if (this.#siteId !== null && this.#siteId !== siteId) {
+      this.#session.close()
+      this.#lastFrameAtMs = null
+      this.cachedAtMs = null
+      this.#markedLive = false
+    }
     this.#siteId = siteId
 
     const cached = (await takeBootSnapshot()) ?? (await loadSnapshot(siteId))
@@ -301,7 +325,16 @@ export class SiteStore {
    */
   get ageMs(): number {
     if (this.carrier === 'cache' && this.cachedAtMs !== null) {
-      return Date.now() - this.cachedAtMs
+      // The snapshot's readings were not new when they were written: each
+      // source row carries how far its last answer already lagged the box's
+      // clock at capture, and time on the shelf alone understates the age by
+      // exactly that. NaN rows — stamps from another boot — mean unknown,
+      // and unknown must not make the number smaller.
+      const shelfMs = Date.now() - this.cachedAtMs
+      const atCapture = nowSourceIds(this.session)
+        .map((s) => this.#session.ageOf(s))
+        .filter((a) => !Number.isNaN(a))
+      return atCapture.length > 0 ? shelfMs + Math.max(...atCapture) : shelfMs
     }
     const ages = nowSourceIds(this.session)
       .map((s) => this.#session.ageOf(s))
@@ -328,11 +361,7 @@ export class SiteStore {
     const at = this.#lastFrameAtMs
     if (at === null) return 0
     const since = this.#now - at
-    // A 1 Hz stream is always a fraction of a second behind its last frame.
-    // Reporting that would make a healthy view flicker between "now" and "1s
-    // ago" forever, which reads as a fault where there is none. Past a couple
-    // of beats the silence is real and every millisecond of it counts.
-    if (since < 3_000) return 0
+    if (since < STREAM_QUIET_AFTER_MS) return 0
     return since
   }
 
@@ -360,6 +389,15 @@ export class SiteStore {
   }
 
   connect(carrier: Carrier): void {
+    // A carrier can finish connecting after the store it was meant for is
+    // gone — sign out during a slow connect. Handing it to the session would
+    // start a live, self-reconnecting stream to the home this phone just
+    // left, unreferenced and unclosable. Closed rather than dropped, because
+    // a dropped carrier leaks its socket.
+    if (this.#destroyed) {
+      carrier.close()
+      return
+    }
     this.#session.connect(carrier)
   }
 
@@ -369,6 +407,7 @@ export class SiteStore {
   }
 
   destroy(): void {
+    this.#destroyed = true
     if (this.#ticker !== null) {
       clearInterval(this.#ticker)
       this.#ticker = null

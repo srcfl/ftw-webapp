@@ -172,11 +172,11 @@ describe('a viewer on the Plan screen', () => {
       new LoopbackCarrier(new SimBox({ now: () => MORNING, role: ROLE_VIEWER }), { latencyMs: 0 })
     )
     render(Plan, { props: { site } })
-    await vi.waitFor(() => expect(document.querySelector('[role="radio"]')).not.toBeNull(), {
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull(), {
       timeout: 2_000,
     })
 
-    const modes = [...document.querySelectorAll('[role="radio"]')] as HTMLButtonElement[]
+    const modes = [...document.querySelectorAll('button.choice')] as HTMLButtonElement[]
     expect(modes.length).toBeGreaterThan(0)
     expect(
       modes.every((b) => b.disabled),
@@ -205,11 +205,11 @@ describe('a viewer on the Plan screen', () => {
       )
     )
     render(Plan, { props: { site } })
-    await vi.waitFor(() => expect(document.querySelector('[role="radio"]')).not.toBeNull(), {
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull(), {
       timeout: 2_000,
     })
 
-    const modes = [...document.querySelectorAll('[role="radio"]')] as HTMLButtonElement[]
+    const modes = [...document.querySelectorAll('button.choice')] as HTMLButtonElement[]
     expect(modes.length).toBeGreaterThan(0)
     expect(
       modes.every((b) => b.disabled),
@@ -403,7 +403,7 @@ describe('a plan the box could not answer', () => {
     // answer after — the mode really did change, and the plan for it never
     // arrives.
     const mode = [...document.querySelectorAll('button.choice')].find(
-      (b) => b.getAttribute('aria-checked') === 'false' && !(b as HTMLButtonElement).disabled
+      (b) => b.getAttribute('aria-pressed') === 'false' && !(b as HTMLButtonElement).disabled
     ) as HTMLButtonElement
     expect(mode, 'no mode to switch to, so nothing under test happened').toBeTruthy()
     mode.click()

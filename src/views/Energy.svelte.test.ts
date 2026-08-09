@@ -88,7 +88,7 @@ describe('the energy screen', () => {
     expect(bars).toHaveLength(7)
 
     const sumKwh = bars.reduce((t, b) => t + b.value, 0)
-    const card = document.querySelector('.card[aria-checked="true"] .card-value')
+    const card = document.querySelector('.card[aria-pressed="true"] .card-value')
     const shown = Number((card?.textContent ?? '').replace(/[^0-9.]/g, ''))
 
     // Both sides printed at the same precision the card uses, because that is
@@ -128,6 +128,40 @@ describe('the energy screen', () => {
     expect(site.session.phase).toBe('streaming')
     expect(asked.mock.calls.length, 'nothing asked again once the box was back').toBeGreaterThan(1)
     expect((await chartWhenDrawn()).data).toHaveLength(7)
+  })
+
+  it('asks again once the hour turns, on a wire that never drops', async () => {
+    // "Today so far" keeps filling all day, and a figure fetched at nine in
+    // the morning used to still be the figure at nine in the evening unless
+    // the carrier happened to drop or the day turned over. The hour is part
+    // of the name the ask is made under, on a clock that ticks — a bare
+    // Date.now() in the name re-fires nothing.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    const asked = vi.spyOn(site, 'api')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+
+    render(Energy, { props: { site } })
+    for (let i = 0; i < 60 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(5)
+    }
+    await vi.advanceTimersByTimeAsync(200)
+    const before = asked.mock.calls.length
+
+    // An hour of quiet streaming — no drop, no midnight.
+    for (let i = 0; i < 61; i++) {
+      box.tick()
+      await vi.advanceTimersByTimeAsync(60_000)
+    }
+
+    expect(site.session.phase).toBe('streaming')
+    expect(
+      asked.mock.calls.length,
+      "today's figure froze at the hour it was fetched"
+    ).toBeGreaterThan(before)
   })
 
   it('never says the house recorded nothing before the box has said so', async () => {

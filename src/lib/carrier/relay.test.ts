@@ -8,7 +8,7 @@
  * carrier is expected to sort itself out without being asked.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { RelayServer } from '../../../relay/src/server.ts'
 import { RelayCarrier, BACKOFF_CAP_MS } from './relay'
 import { rendezvousHandle } from './rendezvous'
@@ -185,5 +185,85 @@ describe('the relay carrier', () => {
     // phone coming out of a tunnel is never more than a minute behind — and
     // the online and visibility handlers usually beat it to the retry.
     expect(BACKOFF_CAP_MS).toBe(60_000)
+  })
+})
+
+/**
+ * A socket the test opens, feeds and drops by hand, so a crash-looping relay
+ * can be played back without a server behind it.
+ */
+class StubSocket {
+  static all: StubSocket[] = []
+  readyState = 0
+  binaryType = ''
+  onopen: (() => void) | null = null
+  onmessage: ((ev: { data: unknown }) => void) | null = null
+  onclose: ((ev: { code: number; reason: string }) => void) | null = null
+  onerror: (() => void) | null = null
+
+  constructor(readonly url: string) {
+    StubSocket.all.push(this)
+  }
+
+  send(): void {}
+  close(): void {
+    this.readyState = 3
+  }
+
+  /** The relay accepts and the box is present. */
+  accept(): void {
+    this.readyState = 1
+    this.onopen?.()
+    this.onmessage?.({ data: 'ready' })
+  }
+  frame(): void {
+    this.onmessage?.({ data: new Uint8Array(8).buffer })
+  }
+  drop(): void {
+    this.readyState = 3
+    this.onclose?.({ code: 1006, reason: '' })
+  }
+}
+
+describe('backing off from a relay that accepts and then drops', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    StubSocket.all = []
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('resets the dial backoff on a delivered frame, not on the accept', () => {
+    // random: () => 1 makes every delay its full ceiling, so the schedule is
+    // exact: 500, 1000, 2000... A relay stuck in a crash loop accepts each
+    // join and dies before a frame moves. Resetting the counter at the
+    // accept had every redial landing at the floor interval for as long as
+    // the loop lasted.
+    const carrier = new RelayCarrier({
+      url: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 1,
+    })
+
+    StubSocket.all.at(-1)!.accept()
+    StubSocket.all.at(-1)!.drop()
+    vi.advanceTimersByTime(500)
+    expect(StubSocket.all.length).toBe(2)
+
+    StubSocket.all.at(-1)!.accept()
+    StubSocket.all.at(-1)!.drop()
+    vi.advanceTimersByTime(999)
+    expect(StubSocket.all.length, 'an accept alone reset the backoff').toBe(2)
+    vi.advanceTimersByTime(1)
+    expect(StubSocket.all.length).toBe(3)
+
+    // One frame through is proof the path works, and the counter heals.
+    StubSocket.all.at(-1)!.accept()
+    StubSocket.all.at(-1)!.frame()
+    StubSocket.all.at(-1)!.drop()
+    vi.advanceTimersByTime(500)
+    expect(StubSocket.all.length).toBe(4)
+
+    carrier.close()
   })
 })

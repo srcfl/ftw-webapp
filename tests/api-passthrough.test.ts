@@ -11,8 +11,8 @@
  * asserts on a stub agreeing with itself.
  */
 
-import { describe, it, expect } from 'vitest'
-import { Session, ApiError } from '$lib/protocol/session'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { Session, ApiError, API_TIMEOUT_MS, HIST_TIMEOUT_MS } from '$lib/protocol/session'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { CarrierBase, type Carrier, type CarrierStatus } from '$lib/carrier/carrier'
 import { encodeFrame, decodeFrame, LANE_BULK, type Envelope } from '$lib/protocol/frame'
@@ -428,7 +428,12 @@ describe('configuration', () => {
 })
 
 describe('a request that cannot finish', () => {
-  it('refuses a second call while one is in flight, and answers the first', async () => {
+  it('answers two views asking at once, never letting one meet "busy"', async () => {
+    // The box serves one call at a time and refuses a second in flight with
+    // E_UNAVAILABLE — that refusal is real and still in the simulator, and it
+    // costs whichever view loses the race a thirty-second backoff over a
+    // collision no view can see. So the session queues instead of racing, and
+    // two stores asking together is ordinary, not an error.
     const box = new SimBox({ now: () => NOON })
     const session = connect(box)
     await settle()
@@ -436,10 +441,23 @@ describe('a request that cannot finish', () => {
     const first = session.api({ method: 'GET', path: '/api/energy/daily', query: { days: '30' } })
     const second = session.api({ method: 'GET', path: '/api/app-link/devices' })
 
-    await expect(second).rejects.toMatchObject({
-      detail: { code: 'E_UNAVAILABLE', args: { reason: 'busy' } },
-    })
-    expect((await first).status).toBe(200)
+    const [a, b] = await Promise.all([first, second])
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+  })
+
+  it('lets a refused call hand the wire to the one queued behind it', async () => {
+    // Chained on settle, not success: a queue a failure could jam would turn
+    // one refusal into every call the app makes after it.
+    const box = new SimBox({ now: () => NOON, role: ROLE_OWNER })
+    const session = connect(box)
+    await settle()
+
+    const refused = session.api({ method: 'GET', path: '/api/caldav/credentials', stepUp: true })
+    const after = session.api({ method: 'GET', path: '/api/energy/daily' })
+
+    await expect(refused).rejects.toMatchObject({ detail: { code: 'E_LOCAL_ONLY' } })
+    expect((await after).status).toBe(200)
   })
 
   it('settles when the carrier goes away, rather than waiting out its deadline', async () => {
@@ -503,6 +521,9 @@ describe('a body that did not all arrive', () => {
     session.connect(carrier)
 
     const call = session.api({ method: 'GET', path: '/api/energy/daily' })
+    // The queue dispatches on a microtask; let the request reach the wire
+    // before reading it back off.
+    await Promise.resolve()
     const req = carrier.sent.find((e) => e.t === 'api.req')!
     const id = req.id!
 
@@ -513,6 +534,119 @@ describe('a body that did not all arrive', () => {
     carrier.deliver({ t: 'api.chunk', id, b: { seq: 2, data: new Uint8Array([125]) } })
 
     await expect(call).rejects.toThrow(/out of order/)
+  })
+})
+
+/**
+ * The deadline measures silence, not total time.
+ *
+ * A multi-megabyte answer is hundreds of chunks over a relay, and a deadline
+ * armed once at dispatch kills it mid-flow while the box keeps streaming into
+ * an id nobody holds any more. What the deadline exists for is a wire that
+ * has gone quiet — so every sign of life pushes it back, and only silence
+ * spends it.
+ */
+describe('an answer that is large rather than lost', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Records how a promise settles without ever waiting on it. */
+  function watch<T>(promise: Promise<T>): () => string {
+    let outcome = 'still waiting'
+    void promise.then(
+      () => (outcome = 'answered'),
+      (err: Error) => (outcome = err.message)
+    )
+    return () => outcome
+  }
+
+  it('completes however long the whole takes, while chunks keep arriving', async () => {
+    vi.useFakeTimers()
+    const carrier = new ManualCarrier()
+    const session = new Session({ build: 'test' })
+    session.connect(carrier)
+
+    const call = session.api({ method: 'GET', path: '/api/energy/daily' })
+    const outcome = watch(call)
+    await vi.advanceTimersByTimeAsync(0)
+    const id = carrier.sent.find((e) => e.t === 'api.req')!.id!
+
+    carrier.deliver({ t: 'api.head', id, b: { status: 200, headers: {}, len: null } })
+
+    // Two-thirds of the deadline between chunks, several times the deadline
+    // in total: slower than a deadline measuring the whole, faster than one
+    // measuring each gap.
+    const gap = Math.floor((API_TIMEOUT_MS * 2) / 3)
+    for (let seq = 0; seq < 5; seq++) {
+      await vi.advanceTimersByTimeAsync(gap)
+      carrier.deliver({ t: 'api.chunk', id, b: { seq, data: new Uint8Array([48 + seq]) } })
+    }
+    carrier.deliver({ t: 'api.end', id, b: { bytes: 5, truncated: false } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(outcome()).toBe('answered')
+    expect((await call).body.length).toBe(5)
+  })
+
+  it('still expires on total silence, even after signs of life', async () => {
+    vi.useFakeTimers()
+    const carrier = new ManualCarrier()
+    const session = new Session({ build: 'test' })
+    session.connect(carrier)
+
+    const outcome = watch(session.api({ method: 'GET', path: '/api/energy/daily' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const id = carrier.sent.find((e) => e.t === 'api.req')!.id!
+
+    // Progress first, so what expires below is quiet-after-progress and not
+    // a request nothing ever answered.
+    carrier.deliver({ t: 'api.head', id, b: { status: 200, headers: {}, len: null } })
+    carrier.deliver({ t: 'api.chunk', id, b: { seq: 0, data: new Uint8Array([48]) } })
+
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS + 1)
+    expect(outcome()).toBe('api request timed out')
+  })
+
+  it('gives a history window the same patience', async () => {
+    vi.useFakeTimers()
+    const carrier = new ManualCarrier()
+    const session = new Session({ build: 'test' })
+    session.connect(carrier)
+
+    let chunks = 0
+    const call = session.history(
+      { series: ['grid_w'], res: '1h', fromMs: 0, toMs: 4 * 3_600_000 },
+      () => {
+        chunks += 1
+      }
+    )
+    const outcome = watch(call)
+    const id = carrier.sent.find((e) => e.t === 'hist.query')!.id!
+
+    const gap = Math.floor((HIST_TIMEOUT_MS * 2) / 3)
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(gap)
+      carrier.deliver({
+        t: 'hist.chunk',
+        id,
+        b: {
+          tileId: `t${i}`,
+          etag: 'e',
+          res: '1h',
+          startMs: i * 3_600_000,
+          stepMs: 3_600_000,
+          series: ['grid_w'],
+          data: new Uint8Array(4),
+          partial: false,
+        },
+      })
+    }
+    carrier.deliver({ t: 'hist.end', id, b: { resActual: '1h', gaps: [] } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(outcome()).toBe('answered')
+    expect(chunks).toBe(4)
   })
 })
 
@@ -540,6 +674,26 @@ describe('a request carrying a body', () => {
     })
 
     expect(res.status).toBe(200)
+  })
+
+  it('refuses a body too large for the biggest bucket, and moves on', async () => {
+    // The refusal is a rejection like any other — nothing registered,
+    // nothing armed, and the wire is not jammed behind it.
+    const box = new SimBox({ now: () => NOON })
+    const session = connect(box)
+    await settle()
+
+    await expect(
+      session.api({
+        method: 'POST',
+        path: '/api/app-link/pairing',
+        body: new Uint8Array(20 * 1024),
+        stepUp: true,
+      })
+    ).rejects.toThrow(/bucket/)
+
+    const after = await session.api({ method: 'GET', path: '/api/energy/daily' })
+    expect(after.status).toBe(200)
   })
 })
 

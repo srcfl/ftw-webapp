@@ -29,6 +29,16 @@ import {
 } from '$lib/identity/vault'
 import { CarrierBase, type Carrier, type CarrierStatus } from '$lib/carrier/carrier'
 import { encodeFrame, LANE_CONTROL } from '$lib/protocol/frame'
+import { SiteStore } from '$lib/state/site.svelte'
+
+// jsdom has no ResizeObserver, and the History chart measures its own box
+// with one. Nothing below depends on the width it would report.
+class QuietResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver ??= QuietResizeObserver as unknown as typeof ResizeObserver
 
 /* The relay, stubbed at the one seam the shell reaches it through.
  *
@@ -208,6 +218,48 @@ describe('signing out, from the phone', () => {
     })
     await screen.findByText(/Live via encrypted relay/i, undefined, { timeout: 4_000 })
     expect(localStorage.getItem('ftw.site'), 'the launch pointer went with the home').toBe(SITE_ID)
+  })
+
+  it('gives a kept view back to the restored store, not to the stopped one', async () => {
+    // The other half of putting the home back. Views read the store once,
+    // untracked on purpose, so a view kept across the failed leave holds the
+    // one that was stopped for good — History sat mounted and never asked
+    // the restored store anything, forty seconds past every retry window.
+    // The failed path has to reset `seen` the way the successful one does.
+    const askedHistory = vi.spyOn(SiteStore.prototype, 'history')
+
+    await houseOnScreen()
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await vi.waitFor(() => expect(askedHistory).toHaveBeenCalled(), { timeout: 4_000 })
+    const oldStore = askedHistory.mock.contexts.at(-1)
+    const before = askedHistory.mock.calls.length
+
+    const database = await db()
+    const clear = database.clear.bind(database)
+    vi.spyOn(database, 'clear').mockImplementation(async (store) => {
+      if (store === 'snapshot') await clear(store)
+      else throw new Error('quota exceeded')
+    })
+
+    await confirmSignOut()
+    // The failure is still said, by a screen that was itself remounted.
+    await screen.findByText(/still on this phone and still works/i, undefined, { timeout: 4_000 })
+
+    // Back to History, the way a person returns to it.
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await vi.waitFor(
+      () => {
+        expect(
+          askedHistory.mock.calls.length,
+          'the restored store was never asked for a window'
+        ).toBeGreaterThan(before)
+        expect(
+          askedHistory.mock.contexts.at(-1),
+          'the ask went to the store that was stopped for good'
+        ).not.toBe(oldStore)
+      },
+      { timeout: 4_000 }
+    )
   })
 })
 

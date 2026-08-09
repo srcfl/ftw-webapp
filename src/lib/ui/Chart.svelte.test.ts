@@ -109,11 +109,17 @@ function strokedPaths(ops: Op[]): Path[] {
   return out
 }
 
-function mount(columns: Int32Array[], names: string[], traces: Trace[], axis: Domain) {
+function mount(
+  columns: Int32Array[],
+  names: string[],
+  traces: Trace[],
+  axis: Domain,
+  roles: Record<string, string> = ROLES
+) {
   const { ops, ctx } = recorder()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
   vi.spyOn(window, 'getComputedStyle').mockReturnValue({
-    getPropertyValue: (name: string) => ROLES[name] ?? '',
+    getPropertyValue: (name: string) => roles[name] ?? '',
   } as unknown as CSSStyleDeclaration)
 
   const frame: SeriesFrame = {
@@ -213,5 +219,26 @@ describe('colour comes from the palette', () => {
     for (const colour of painted) {
       expect(Object.values(ROLES), `painted with ${colour}`).toContain(colour)
     }
+  })
+
+  it('falls back to one neutral grey when a role resolves to nothing', () => {
+    // An empty resolution is a renamed token or a stylesheet that never
+    // mounted. The fallbacks used to be dark-palette hexes, which drew dark
+    // rules on a light card in light theme and blended into dark — masking
+    // the missing token in exactly one theme each. Wrong has to be visible
+    // the same way in both: one grey, everywhere.
+    const points = WIDTH * 2
+    const grid = new Int32Array(points).fill(2000)
+    const pv = new Int32Array(points).fill(-1000)
+
+    const ops = mount([grid, pv], ['grid_w', 'pv_w'], [GRID, PV], [-4000, 4000], {})
+    const painted = new Set<string>()
+    for (const op of ops) {
+      if (op.op === 'stroke') painted.add(op.strokeStyle)
+      if (op.op === 'fill' || op.op === 'fillRect') painted.add(op.fillStyle)
+    }
+
+    expect(painted.size).toBeGreaterThan(0)
+    expect([...painted]).toEqual(['#808080'])
   })
 })

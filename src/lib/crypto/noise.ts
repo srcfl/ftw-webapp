@@ -226,6 +226,18 @@ export class CipherState {
     }
   }
 
+  /**
+   * An independent copy: same key bytes, same counter, on its own buffer so
+   * destroying one cannot wipe the other. Exists for the handshake's
+   * commit-on-success reads; a transport cipher is never cloned.
+   */
+  clone(): CipherState {
+    const copy = new CipherState(this.#key?.slice() ?? null)
+    copy.#nonce = this.#nonce
+    copy.#destroyed = this.#destroyed
+    return copy
+  }
+
   /** Wipe the key. A closed session must not leave one reachable. */
   destroy(): void {
     this.#key?.fill(0)
@@ -280,6 +292,15 @@ class SymmetricState {
     const plaintext = this.cipher.decryptWithAd(this.h, ciphertext)
     this.mixHash(ciphertext)
     return plaintext
+  }
+
+  /** A copy to run a candidate message against. See the readMessage pair. */
+  clone(): SymmetricState {
+    const copy = new SymmetricState()
+    copy.ck = this.ck.slice()
+    copy.h = this.h.slice()
+    copy.cipher = this.cipher.clone()
+    return copy
   }
 
   split(): [CipherState, CipherState] {
@@ -436,15 +457,22 @@ export class HandshakeState {
       throw new NoiseError(`handshake message 1 is ${message.length} bytes`, 'E_NOISE_MESSAGE')
     }
 
-    this.#re = message.subarray(0, DH_BYTES)
-    this.#sym.mixHash(this.#re)
-    this.#sym.mixKey(await this.#s.diffieHellman(this.#re))
+    // Commit on success, as in #readMessage2: a message that fails to
+    // authenticate must leave no trace, or one stray frame ends every
+    // handshake that was still waiting for the real one.
+    const sym = this.#sym.clone()
+    const re = message.subarray(0, DH_BYTES)
+    sym.mixHash(re)
+    sym.mixKey(await this.#s.diffieHellman(re))
     // Fails here when the initiator pinned somebody else's static key, which
     // is exactly the relay-impersonation case.
-    this.#rs = this.#sym.decryptAndHash(message.subarray(DH_BYTES, encStaticEnd))
-    this.#sym.mixKey(await this.#s.diffieHellman(this.#rs))
-    const payload = this.#sym.decryptAndHash(message.subarray(encStaticEnd))
+    const rs = sym.decryptAndHash(message.subarray(DH_BYTES, encStaticEnd))
+    sym.mixKey(await this.#s.diffieHellman(rs))
+    const payload = sym.decryptAndHash(message.subarray(encStaticEnd))
 
+    this.#sym = sym
+    this.#re = re
+    this.#rs = rs
     this.#step = 'write2'
     return payload
   }
@@ -466,12 +494,20 @@ export class HandshakeState {
       throw new NoiseError(`handshake message 2 is ${message.length} bytes`, 'E_NOISE_MESSAGE')
     }
 
-    this.#re = message.subarray(0, DH_BYTES)
-    this.#sym.mixHash(this.#re)
-    this.#sym.mixKey(dh(this.#e!.secretKey, this.#re))
-    this.#sym.mixKey(await this.#s.diffieHellman(this.#re))
-    const payload = this.#sym.decryptAndHash(message.subarray(DH_BYTES))
+    // All mixing runs against a copy, which becomes the state only once the
+    // tag verifies. The relay broadcasts every frame in the room, and message
+    // 2 is exactly 48 bytes — two phones connecting at once read each other's
+    // replies. Mixing a stray one into the live state before the tag check
+    // would poison ck and h, and the genuine reply could never authenticate.
+    const sym = this.#sym.clone()
+    const re = message.subarray(0, DH_BYTES)
+    sym.mixHash(re)
+    sym.mixKey(dh(this.#e!.secretKey, re))
+    sym.mixKey(await this.#s.diffieHellman(re))
+    const payload = sym.decryptAndHash(message.subarray(DH_BYTES))
 
+    this.#sym = sym
+    this.#re = re
     this.#step = 'done'
     return payload
   }

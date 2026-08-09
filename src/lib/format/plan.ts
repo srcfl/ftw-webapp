@@ -109,7 +109,9 @@ export function planHeadline(plan: Plan | null, nowMs: number): PlanHeadline {
   const inMs = change.startMs - nowMs
 
   return {
-    text: `${describeSlot(now, 'now')} Then ${describeSlot(change, 'later').toLowerCase()} ${inWords(inMs)}.`,
+    // The 'later' wording already starts lowercase; lowercasing the whole
+    // clause here turned the unit into "170 w".
+    text: `${describeSlot(now, 'now')} Then ${describeSlot(change, 'later')} ${inWords(inMs)}.`,
     slotIndex: current,
   }
 }

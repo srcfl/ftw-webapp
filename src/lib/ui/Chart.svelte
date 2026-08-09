@@ -55,6 +55,16 @@
 
   let { frame, traces, axis, ticks = [], cursor = null, onCursor, height = 200 }: Props = $props()
 
+  /**
+   * What a role that resolves to nothing is painted as.
+   *
+   * An empty resolution is a renamed token or a stylesheet that never
+   * mounted, and a theme-matched fallback would mask it in the theme it
+   * matches. One mid-grey for every role is visibly wrong in both themes,
+   * which keeps tokens.css the only place a real colour lives.
+   */
+  const TOKEN_MISSING = '#808080'
+
   let canvas = $state<HTMLCanvasElement | null>(null)
   let box = $state<HTMLDivElement | null>(null)
   let width = $state(320)
@@ -121,12 +131,11 @@
     // Resolved once per paint. Components read design roles, never raw
     // values, and getComputedStyle inside the stroke loop is a stall.
     const style = getComputedStyle(box)
-    const role = (name: string, fallback: string) =>
-      style.getPropertyValue(name).trim() || fallback
-    const line = role('--line', '#2a2a2a')
-    const lineSoft = role('--line-soft', '#222222')
-    const sunken = role('--surface-sunken', '#101010')
-    const colors = traces.map((t) => role(t.colorVar, '#888'))
+    const role = (name: string) => style.getPropertyValue(name).trim() || TOKEN_MISSING
+    const line = role('--line')
+    const lineSoft = role('--line-soft')
+    const sunken = role('--surface-sunken')
+    const colors = traces.map((t) => role(t.colorVar))
 
     // Hours the box has nothing for, shaded before anything is drawn over
     // them. Recessed rather than marked, so it reads as absence.
@@ -164,7 +173,7 @@
 
     shapes.forEach((shape, t) => {
       if (!shape) return
-      const color = colors[t] ?? '#888'
+      const color = colors[t] ?? TOKEN_MISSING
 
       if (shape.kind === 'band') {
         // The spread of readings inside each pixel, filled; their mean, drawn
@@ -256,7 +265,7 @@
 
     if (cursor !== null && cursor >= 0 && cursor < frame.points) {
       const cx = Math.round(x(cursor)) + 0.5
-      ctx.strokeStyle = role('--fg-muted', '#858585')
+      ctx.strokeStyle = role('--fg-muted')
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(cx, 0)
@@ -267,7 +276,7 @@
         const column = frame.columns[frame.names.indexOf(trace.name)]
         const v = column?.[cursor!]
         if (v === undefined || v === MISSING_SAMPLE) return
-        ctx.fillStyle = colors[t] ?? '#888'
+        ctx.fillStyle = colors[t] ?? TOKEN_MISSING
         ctx.beginPath()
         ctx.arc(x(cursor!), y(v), 3, 0, Math.PI * 2)
         ctx.fill()

@@ -86,16 +86,3 @@ export class CarrierBase {
     this.#statusHandlers.clear()
   }
 }
-
-/**
- * How long a carrier must be quiet before the app stops calling it live.
- *
- * Deliberately longer than one missed frame. At 1 Hz a single dropped tick is
- * normal on mobile; demoting on the first gap would make the freshness band
- * flicker, and a flickering indicator teaches users to ignore it — which
- * defeats the one thing it exists to do.
- */
-export const DEGRADE_AFTER_MS = 4_000
-
-/** Further silence, after which the app falls back to the cache carrier. */
-export const FALL_BACK_AFTER_MS = 10_000

@@ -243,11 +243,13 @@
 <section class="modes">
   <h2 class="label">How your home is run</h2>
 
+  <!-- Pressed buttons rather than radios, the way History's range picker
+       solves the same exclusive choice: role=radio promises arrow-key moves
+       between the options, and these buttons never had them. -->
   {#snippet choice(info: ModeInfo)}
     <button
       class="choice"
-      role="radio"
-      aria-checked={plan.shownMode === info.key}
+      aria-pressed={plan.shownMode === info.key}
       disabled={!plan.canControl || plan.command.kind === 'sending'}
       onclick={() => choose(info.key)}
     >
@@ -256,7 +258,7 @@
     </button>
   {/snippet}
 
-  <div class="choices" role="radiogroup" aria-label="How your home is run">
+  <div class="choices" role="group" aria-label="How your home is run">
     {#each plan.primaryModes as info (info.key)}
       {@render choice(info)}
     {/each}
@@ -307,6 +309,10 @@
          there is a window to draw it costs 0.5 kB. -->
     {#await import('$vendor/ftw/ftw-price-chart.js') then _module}
       <ftw-price-chart fed bind:this={priceChart}></ftw-price-chart>
+    {:catch}
+      <!-- The chunk never arrived. The timeline below still prices its own
+           rows; silence here would read as a market with nothing in it. -->
+      <p class="short">The price chart didn't load — it will try again next time you open the app.</p>
     {/await}
     <!-- Said here rather than left to the component: it keeps its own stale
          state for the compact card, which this screen never renders, so a
@@ -440,7 +446,7 @@
       background var(--motion-base) var(--ease);
   }
 
-  .choice[aria-checked='true'] {
+  .choice[aria-pressed='true'] {
     border-color: var(--accent);
     background: var(--surface-elevated);
   }
