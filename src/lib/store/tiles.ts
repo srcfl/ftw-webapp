@@ -17,7 +17,8 @@
 
 import { db } from './db'
 import { cacheKey, seal, unseal, type Bytes } from './seal'
-import type { HistChunk } from '$lib/protocol/messages'
+import { RESOLUTIONS, type ResolutionSpec } from '$lib/protocol/history'
+import type { HistChunk, Resolution } from '$lib/protocol/messages'
 
 export interface CachedTile {
   tileId: string
@@ -115,8 +116,13 @@ export function haveList(cached: ReadonlyMap<string, CachedTile>): { tileId: str
  * Without this the cache grows for as long as the app is installed, holding
  * years the box itself has already evicted. Cheap enough to run after a
  * query, which is the only time the answer changes.
+ *
+ * Every row is judged against its own resolution's retention. The store
+ * holds a month of 5m beside two years of 1h, so a single cutoff would let
+ * one answer's window evict the other resolution's whole cache — the year
+ * chart self-destructing every time the day chart is opened.
  */
-export async function pruneTiles(siteId: string, oldestKeptMs: number): Promise<number> {
+export async function pruneTiles(siteId: string, nowMs: number): Promise<number> {
   try {
     const database = await db()
     const tx = database.transaction('tiles', 'readwrite')
@@ -124,7 +130,11 @@ export async function pruneTiles(siteId: string, oldestKeptMs: number): Promise<
 
     for (const row of await tx.store.getAll()) {
       if (row.siteId !== siteId) continue
-      if (row.startMs >= oldestKeptMs) continue
+      // A resolution this build has never heard of has no retention to judge
+      // by, and data it cannot judge is data it must not delete.
+      const spec: ResolutionSpec | undefined = RESOLUTIONS[row.res as Resolution]
+      if (!spec) continue
+      if (row.startMs >= nowMs - spec.retentionMs) continue
       await tx.store.delete(row.key)
       dropped += 1
     }

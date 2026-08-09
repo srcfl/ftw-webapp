@@ -49,3 +49,9 @@ export const ROLE_LABELS: Record<string, string> = {
 export function roleHasScope(role: string, scope: string): boolean {
   return (ROLE_SCOPES[role] ?? []).includes(scope)
 }
+
+/** The scope the box checks for OP_SET_MODE. */
+export const SCOPE_MODE_WRITE: Scope = 'ftw.mode.write'
+
+/** The capability a box offers when its optimizer accepts dispatch. */
+export const CAP_PLAN_DISPATCH = 'plan.dispatch'

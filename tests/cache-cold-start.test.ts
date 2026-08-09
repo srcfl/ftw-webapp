@@ -166,6 +166,68 @@ describe('cold start paints from cache', () => {
     expect(session.state.carrier).toBe('relay')
   })
 
+  it('leaves the carrier in charge when the cache read lands mid-handshake', async () => {
+    // The cold start's real order on a fast network: connect() first, the
+    // cache read landing while the hello is in the air. Nothing writes the
+    // carrier again on a connection that stays up, so a restore that stomped
+    // it here left "can't reach your box" standing over a live stream for as
+    // long as the app was open.
+    const box = new SimBox({ now: () => Date.now() })
+    const first = new Session({ build: 'test' })
+    first.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await settle()
+    await saveSnapshot(snapshotFromSession('sim-0001', first.state))
+    const cached = (await loadSnapshot('sim-0001'))!
+
+    const second = new Session({ build: 'test' })
+    let restored = false
+    let afterRestore: { phase: string; carrier: string } | null = null
+    second.subscribe((s) => {
+      if (s.phase === 'handshaking' && !restored) {
+        restored = true
+        second.restore(sessionPatchFromSnapshot(cached))
+        afterRestore = { phase: second.state.phase, carrier: second.state.carrier }
+      }
+    })
+    second.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    await settle(20)
+
+    // The cache painted its data and left the connection alone.
+    expect(afterRestore).toEqual({ phase: 'handshaking', carrier: 'relay' })
+    expect(second.state.phase).toBe('streaming')
+    expect(second.state.carrier).toBe('relay')
+  })
+
+  it('still paints from cache when the connect that outran it dies', async () => {
+    // The other half of the same race: the carrier won, the cache landed
+    // mid-handshake, and then the wire died before any snapshot arrived. The
+    // cached readings are all the app has, and they must be on screen.
+    const box = new SimBox({ now: () => Date.now() })
+    const first = new Session({ build: 'test' })
+    first.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await settle()
+    await saveSnapshot(snapshotFromSession('sim-0001', first.state))
+    const cached = (await loadSnapshot('sim-0001'))!
+
+    const second = new Session({ build: 'test' })
+    const carrier = new LoopbackCarrier(box, { latencyMs: 5 })
+    let cut = false
+    second.subscribe((s) => {
+      if (s.phase === 'handshaking' && !cut) {
+        cut = true
+        second.restore(sessionPatchFromSnapshot(cached))
+        carrier.drop('wire died mid-handshake')
+      }
+    })
+    second.connect(carrier)
+    await settle(20)
+
+    expect(cut).toBe(true)
+    expect(second.state.phase).toBe('failed')
+    expect(second.state.fields.size).toBeGreaterThan(0)
+    expect(second.state.fields.get(FID.GRID_W)).toBe(cached.fields[FID.GRID_W])
+  })
+
   it('reports nothing cached rather than failing on a first run', async () => {
     expect(await loadSnapshot('never-seen')).toBeNull()
   })

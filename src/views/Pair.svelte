@@ -9,7 +9,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { canScan, scanForEnrollment, ScanError, type ScanHandle } from '$lib/identity/scan'
-  import { pairWithBox, type PairedSite } from '$lib/identity/pairing'
+  import { boxFingerprint, pairWithBox, type PairedSite } from '$lib/identity/pairing'
   import { EnrollmentError } from '$lib/identity/enrollment'
   import { BOX_CODE_CHARS, foldBoxCode, groupBoxCode } from '$lib/identity/boxcode'
 
@@ -121,29 +121,16 @@
       const { parseEnrollmentFragment } = await import('$lib/identity/enrollment')
       try {
         const enrollment = parseEnrollmentFragment(fragment)
-        offered = { fragment, fingerprint: await fingerprintOf(enrollment.boxStaticPublic) }
+        // The same six characters the Box screen names a paired box by —
+        // one function, so the box being offered and the box you have
+        // cannot drift into being named two different ways.
+        offered = { fragment, fingerprint: await boxFingerprint(enrollment.boxStaticPublic) }
       } catch {
         stage = 'error'
         message = 'That link is not an FTW pairing code.'
       }
     })()
   })
-
-  /**
-   * A short, stable name for a box key.
-   *
-   * Six hex characters of its digest. Not a security control on its own —
-   * nobody memorises it — but it makes two different boxes visibly
-   * different, which is what a person needs to notice that the box being
-   * offered is not the one on their wall.
-   */
-  async function fingerprintOf(key: Uint8Array): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', key as BufferSource)
-    return Array.from(new Uint8Array(digest).subarray(0, 3))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('')
-      .toUpperCase()
-  }
 
   async function startScan() {
     stage = 'scanning'

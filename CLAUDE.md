@@ -35,7 +35,8 @@ These exist because breaking one of them breaks a promise made to users.
 - **Never fake live.** Every reading carries its age. If the box is
   unreachable, the app shows the last value with its timestamp — never a
   stale number styled as current.
-- **Freshness is two fields, never one.** `carrier` (relay, cache, none) and
+- **Freshness is two fields, never one.** `carrier` (webrtc, relay, cache,
+  none — from the registry) and
   `srcState` (live, lagging, stale, down, never) are orthogonal. Collapsing
   them into a single enum cannot express "connected, but the inverter went
   quiet 40 seconds ago", which is the case users most need to see.
@@ -72,7 +73,9 @@ These exist because breaking one of them breaks a promise made to users.
   from this app's catalogue in CI.
 - Tests sit beside the code as `*.test.ts`. Full-flow tests live in `tests/`.
 - Prefer explicit state over clever reactivity. A 1 Hz stream must not
-  recompute the tree; field cells are `$state.raw` and updated by fid.
+  re-render the tree: readings live in one session value so a frame is
+  consistent with itself, and everything derived from it memoises, so a
+  frame that changes nothing repaints nothing.
 
 ## Build and test
 

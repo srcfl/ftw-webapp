@@ -9,11 +9,9 @@
 import type { Plan, SiteMode, CmdResult, ModeInfo } from '$lib/protocol/messages'
 import { OP_SET_MODE } from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
+import { CAP_PLAN_DISPATCH, SCOPE_MODE_WRITE } from '$lib/protocol/contract'
 import type { SiteStore } from './site.svelte'
 import { FID } from '$lib/format/explanation'
-
-/** From contract/registry.yaml, and the scope the box checks for OP_SET_MODE. */
-const SCOPE_MODE_WRITE = 'ftw.mode.write'
 
 /** What the user sees while an intent is in flight. */
 export type CommandState =
@@ -30,7 +28,18 @@ export class PlanStore {
   #site: SiteStore
   #timer: ReturnType<typeof setTimeout> | null = null
 
-  plan = $state<Plan | null>(null)
+  /**
+   * What the box intends to do, read where the session keeps it.
+   *
+   * The session holds the one copy, because a plan does not only arrive as an
+   * answer: the box replans after a mode change made from any phone and
+   * pushes the result unasked, with no request id. A copy held here caught
+   * only the answers, so a long-lived connection drained to "no plan" while
+   * the session's plan moved on without it.
+   */
+  get plan(): Plan | null {
+    return this.#site.session.plan
+  }
 
   /**
    * Bumped when something other than the session wants the plan again.
@@ -105,7 +114,7 @@ export class PlanStore {
    * gets this wrong is merely rude rather than unsafe.
    */
   get canControl(): boolean {
-    return this.#site.session.caps.has('plan.dispatch') && this.#hasModeScope
+    return this.#site.session.caps.has(CAP_PLAN_DISPATCH) && this.#hasModeScope
   }
 
   /**
@@ -160,17 +169,19 @@ export class PlanStore {
   }
 
   /**
-   * Fetch the plan, and say so when the box could not send one.
+   * Ask for the plan, and say so when the box could not send one.
    *
-   * Rejects on failure as well as saying it, because the caller that heals
-   * this — `askWhenLive` — has no other way to tell an answer from a failure
-   * the store swallowed. The view keeps whatever plan it had either way.
+   * The answer itself lands on session state, where `plan` reads it — this
+   * only asks and owns the failure sentence. Rejects on failure as well as
+   * saying it, because the caller that heals this — `askWhenLive` — has no
+   * other way to tell an answer from a failure the store swallowed. The view
+   * keeps whatever plan it had either way.
    */
   async load(): Promise<void> {
     this.loading = true
     this.problem = null
     try {
-      this.plan = await this.#site.plan()
+      await this.#site.plan()
     } catch (err) {
       // A plan the box could not send is not a broken app. What happens now
       // is that the app asks again on its own, so that is what it says — the

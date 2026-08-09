@@ -3,6 +3,8 @@ import 'fake-indexeddb/auto'
 import { Session } from '$lib/protocol/session'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { saveSnapshot } from '$lib/store/snapshot'
+import { FID } from '$lib/format/explanation'
 import type { SourceState } from '$lib/protocol/types'
 
 /* Age is a claim, and a wrong one is the one thing this app must never make.
@@ -131,6 +133,49 @@ describe('the age keeps moving when the stream stops', () => {
 
     // And it is added to the reading's own age, not swapped for it.
     expect(site.ageMs).toBe(liveAgeMs + site.sinceLastFrameMs)
+
+    site.destroy()
+  })
+})
+
+/* The cached view's age, when the snapshot was already behind at capture.
+ *
+ * Time on the shelf is only half the answer. A snapshot written while the
+ * inverter had been quiet for a minute holds readings a minute older than the
+ * write stamp says, and the source rows in the snapshot carry exactly that —
+ * lastOk against the box's clock at capture. Counting the shelf alone
+ * reported those readings younger than they ever were.
+ */
+describe('the age of a cached view', () => {
+  it('carries the staleness the readings already had at capture', async () => {
+    // The meter's last answer was 40 s behind the box's clock when the
+    // snapshot was written, and the snapshot has sat two minutes since.
+    await saveSnapshot({
+      siteId: 'box-stale-capture',
+      savedAtMs: Date.now() - 120_000,
+      uptimeMs: 500_000,
+      fields: { [FID.GRID_W]: 1_200 },
+      sources: {
+        meter: {
+          kind: 'driver',
+          name: 'meter',
+          lastOkMs: 460_000,
+          staleAfterMs: 5_000,
+          state: 'stale',
+        },
+      },
+      dispatchBlockedBy: [],
+      dict: { [String(FID.GRID_W)]: { name: 'grid_w', unit: 'W', srcId: 'meter' } },
+      controlRev: 1,
+    })
+
+    const { SiteStore } = await import('./site.svelte')
+    const site = new SiteStore('test')
+    await site.start('box-stale-capture')
+
+    expect(site.carrier, 'nothing restored, so the rest proves nothing').toBe('cache')
+    // Two minutes on the shelf plus the 40 s the meter already lagged.
+    expect(site.ageMs).toBeGreaterThanOrEqual(160_000)
 
     site.destroy()
   })

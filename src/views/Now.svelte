@@ -17,15 +17,15 @@
   interface Props {
     site: SiteStore
     /**
-     * This phone is pointed at a home, whether or not one has painted yet.
+     * Whether this view is the one on screen.
      *
-     * Not `site.paired`, which is really "a reading has arrived". A phone that
-     * is paired, cannot reach its box and has nothing cached fails that test
-     * while being as paired as a phone gets — and this screen told it to scan
-     * a code, under a tab bar leading to a Box screen naming the very box it
-     * had just denied. The shell owns the answer, so both read the same one.
+     * The shell hides Now rather than destroying it while another tab is up,
+     * so without this the 1 Hz stream would keep feeding a display-none SVG
+     * for as long as someone reads their history. The feed below reads the
+     * current fields the moment this turns true, so nothing is missed by
+     * having skipped the ones nobody could see.
      */
-    hasHome: boolean
+    active?: boolean
     /**
      * What to do when no carrier could be built. Null while one exists.
      *
@@ -46,31 +46,52 @@
     wayBack?: (() => void) | null
   }
 
-  let { site, hasHome, connectHelp = null, wayBack = null }: Props = $props()
+  let { site, active = true, connectHelp = null, wayBack = null }: Props = $props()
 
-  const live = $derived(site.session.phase === 'streaming' && site.carrier !== 'cache')
+  // Live is three claims at once, and every one has failed on its own: a
+  // session still connecting, a cache being shown, and a stream whose socket
+  // is open while its frames — or one inverter behind them — have gone
+  // quiet. That last one is the exact case the static switch exists for,
+  // and phase and carrier cannot see it.
+  const live = $derived(
+    site.session.phase === 'streaming' && site.carrier !== 'cache' && site.srcState === 'live'
+  )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
 
   // The component takes data by method, the way the dashboard feeds it.
   // An effect rather than an attribute because setReadings() is the
-  // component's whole API, and inventing a second one would fork it.
+  // component's whole API, and inventing a second one would fork it. Only
+  // while this view is the one on screen — fed hidden it is 1 Hz of work
+  // nobody can see — and because the effect reads the fields as they are
+  // when `active` returns, coming back starts from the present.
   $effect(() => {
-    flow?.setReadings(flowReadings(site.session.fields))
+    if (active) flow?.setReadings(flowReadings(site.session.fields))
   })
+
+  /**
+   * The boot phase, said in this screen's own voice.
+   *
+   * The wire's names are shared with the box and stable for machines —
+   * 'vacuum' is a database being compacted, not a sentence anyone should
+   * meet on their phone. The box sends codes; this app owns all prose, and
+   * a phase this app does not know is still a box getting ready.
+   */
+  function bootWords(phase: string): string {
+    switch (phase) {
+      case 'vacuum':
+        return 'tidying its records'
+      case 'migrate':
+        return 'bringing its records up to date'
+      case 'drivers':
+        return 'waking the equipment'
+      default:
+        return 'getting ready'
+    }
+  }
 </script>
 
-{#if !hasHome}
-  <section class="empty">
-    <h1>Nothing paired yet</h1>
-    <p>
-      Scan the code shown on your FTW box to connect. Everything stays between
-      this app and your box — nothing readable passes through Sourceful.
-    </p>
-    <button class="primary" disabled>Scan code</button>
-    <p class="note">Pairing lands with the enrollment flow.</p>
-  </section>
-{:else if site.session.phase === 'booting'}
+{#if site.session.phase === 'booting'}
   <section class="empty">
     <h1>Your box is starting</h1>
     <p>
@@ -78,7 +99,7 @@
       Nothing is wrong — it will appear here as soon as it is ready.
     </p>
     {#if site.session.boot}
-      <p class="note">{site.session.boot.phase} · {site.session.boot.pct}%</p>
+      <p class="note">{bootWords(site.session.boot.phase)} · {site.session.boot.pct}%</p>
     {/if}
   </section>
 {:else if site.session.phase === 'terminated'}
@@ -216,11 +237,6 @@
     border-radius: var(--radius-sm);
     padding: 0 var(--space-5);
     font-weight: 500;
-  }
-
-  .primary:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 
   /* The same pair of weights the pairing screen uses, because they lead to the

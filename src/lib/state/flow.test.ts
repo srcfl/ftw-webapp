@@ -76,4 +76,44 @@ describe('flowReadings', () => {
     const grid = r.planets.find((p) => p.id === 'grid')!
     expect(grid.sub).toBe('no data')
   })
+
+  it('never hands the component a negative number to draw', () => {
+    // The wire's sign is direction — positive into the site, negative out —
+    // and the hero renders kw as text, so a sign passed through here is a raw
+    // minus on screen: "-3.40 kW" over "exporting". Direction travels as
+    // toHub and as the sub line's word, never as the number's sign.
+    const everythingOutward = flowReadings(
+      fields([
+        [FID.GRID_W, -3_400],
+        [FID.PV_W, -2_300],
+        [FID.BATTERY_W, -2_000],
+        [FID.EV_W, 0],
+        [FID.LOAD_W, 900],
+      ])
+    )
+    for (const p of everythingOutward.planets) {
+      expect(p.kw, `${p.id} carried the wire's sign into the hero`).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('says which way the battery is moving, in the component’s own words', () => {
+    // A battery moves power both ways, so unlike solar the magnitude alone
+    // cannot say which. Without the word, "2.00 kW" is a battery doing
+    // something unstated.
+    const discharging = flowReadings(fields([[FID.BATTERY_W, -2_000]])).planets.find(
+      (p) => p.id === 'battery'
+    )!
+    expect(discharging.kw).toBeCloseTo(2)
+    expect(discharging.sub).toBe('discharging')
+
+    const charging = flowReadings(fields([[FID.BATTERY_W, 1_800]])).planets.find(
+      (p) => p.id === 'battery'
+    )!
+    expect(charging.sub).toBe('charging')
+
+    const resting = flowReadings(fields([[FID.BATTERY_W, 0]])).planets.find(
+      (p) => p.id === 'battery'
+    )!
+    expect(resting.sub).toBe('idle')
+  })
 })

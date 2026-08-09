@@ -239,6 +239,70 @@ describe('a history window the wire cut short', () => {
     expect(asked.mock.calls.length - afterMount, 'one tap put two windows on the wire').toBe(1)
   })
 
+  it('re-asks as the window ages, on a wire that never drops', async () => {
+    // The slow staleness no reconnect ever heals: the window is fetched once
+    // and its right edge is labelled "now" for as long as the screen is open.
+    // On a LAN carrier that stays up for days, nothing else re-asks — so the
+    // name the window is asked under has to carry which five minutes "now"
+    // is, the chart's own step.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    const asked = vi.spyOn(site, 'history')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+
+    render(History, { props: { site } })
+    for (let i = 0; i < 50 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(5)
+    }
+    await vi.advanceTimersByTimeAsync(200)
+    const before = asked.mock.calls.length
+
+    // Six quiet minutes with the stream alive under them.
+    for (let i = 0; i < 6; i++) {
+      box.tick()
+      await vi.advanceTimersByTimeAsync(60_000)
+    }
+
+    expect(site.session.phase).toBe('streaming')
+    expect(asked.mock.calls.length, "the chart's now never moved").toBeGreaterThan(before)
+
+    // And the fresh ask is for a window ending near the new now, not a
+    // re-send of the old one.
+    const spans = asked.mock.calls.at(-1)![0]
+    expect(spans.toMs).toBeGreaterThan(NOON + 4 * 60_000)
+    expect(spans.toMs).toBeLessThanOrEqual(NOON + 7 * 60_000)
+  })
+
+  it('says minutes for a gap under an hour, never "0 h"', async () => {
+    // The note is gated on missingMs > 0, so every gap it names is real —
+    // and rounded to hours alone, everything under thirty minutes was named
+    // and then measured at nothing.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    // The box's answer with a twelve-minute hole in it. The sentence is what
+    // is under test, not the wire that carries the gap list.
+    vi.spyOn(site, 'history').mockResolvedValue({
+      resActual: '5m',
+      gaps: [{ fromMs: NOON - 12 * 60_000, toMs: NOON, reason: 'no_data' }],
+    })
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 0 }))
+
+    render(History, { props: { site } })
+    for (let i = 0; i < 100 && !/not recorded/.test(document.body.textContent ?? ''); i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+
+    expect(document.body.textContent).toMatch(/12 min not recorded/)
+    expect(document.body.textContent, 'a real gap was measured at nothing').not.toMatch(
+      /\b0 (h|min)\b/
+    )
+  })
+
   it('goes back for a range the user tapped, when that answer is the one lost', async () => {
     // The path a person actually reaches: not a drop, not the mount ask, but
     // a tap on "7 d" whose answer never arrives. It used to fetch outside the

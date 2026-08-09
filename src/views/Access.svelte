@@ -161,6 +161,10 @@
     {#await import('$lib/ui/QrCode.svelte') then module}
       {@const QrCode = module.default}
       <QrCode text={access.invite.url} label="Pairing code for this home" />
+    {:catch}
+      <!-- The chunk never arrived. The invitation itself is fine — only the
+           drawing is missing — so say what to do, not what broke. -->
+      <p>The code didn't load — open this screen again to draw it.</p>
     {/await}
   {:else}
     <p>

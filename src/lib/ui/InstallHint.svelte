@@ -29,7 +29,10 @@
       <span class="key">Share</span>, then <span class="key">Add to Home Screen</span>. It opens
       instantly and keeps your readings between visits.
     </p>
-    <button aria-label="Dismiss" onclick={() => (open = false)}>Close</button>
+    <!-- Named by its visible text alone: someone steering by voice says the
+         word they can see, and an aria-label saying anything else breaks
+         "tap Close". -->
+    <button onclick={() => (open = false)}>Close</button>
   </div>
 {/if}
 

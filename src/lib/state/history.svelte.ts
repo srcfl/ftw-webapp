@@ -13,7 +13,6 @@
 
 import type { HistChunk, HistEnd, Resolution } from '$lib/protocol/messages'
 import {
-  RESOLUTIONS,
   planQuery,
   assembleFrame,
   clipFrame,
@@ -107,6 +106,11 @@ export class HistoryStore {
    * away, on the screen where the wire is busiest.
    */
   select(range: RangeKey): void {
+    // The cursor is an index into the current frame, and the same index in
+    // another range is another moment — against a longer step it can even
+    // name a time in the future. There is no honest sample to move it to
+    // until the new frame exists, so it lets go.
+    if (range !== this.range) this.cursor = null
     this.range = range
   }
 
@@ -175,7 +179,7 @@ export class HistoryStore {
       this.loaded = true
       show()
 
-      if (siteId) void pruneTiles(siteId, toMs - RESOLUTIONS[end.resActual].retentionMs)
+      if (siteId) void pruneTiles(siteId, toMs)
     } catch (err) {
       // A reply for a range the user has already moved off is not this
       // range's news, and it is not a reason to ask for this one again.

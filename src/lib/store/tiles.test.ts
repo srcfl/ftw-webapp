@@ -13,6 +13,7 @@ import { packColumns } from '$lib/protocol/history'
 import type { HistChunk } from '$lib/protocol/messages'
 
 const SITE = 'sim-0001'
+const DAY_MS = 86_400_000
 
 function chunk(overrides: Partial<HistChunk> = {}): HistChunk {
   return {
@@ -84,9 +85,36 @@ describe('history tiles on disk', () => {
     await saveTile(SITE, chunk())
     await saveTile(SITE, chunk({ tileId: '5m/1/3062', startMs: 3062 * 43_200_000 }))
 
-    const dropped = await pruneTiles(SITE, 3062 * 43_200_000)
+    // A month past the newer tile: the older one has left the box's 5m
+    // retention, the newer one sits exactly on its edge.
+    const dropped = await pruneTiles(SITE, 3062 * 43_200_000 + 30 * DAY_MS)
 
     expect(dropped).toBe(1)
     expect((await loadTiles(SITE, ['5m/1/3061', '5m/1/3062'])).size).toBe(1)
+  })
+
+  it('prunes each resolution by its own retention', async () => {
+    // The box keeps a month of 5m beside two years of 1h, and both answers
+    // prune the same store. Judged by one cutoff, a 5m answer's month would
+    // evict hour tiles deep inside their own two years — the year chart
+    // self-destructing every time the day chart is opened.
+    const nowMs = 3062 * 43_200_000 + 30 * DAY_MS
+    await saveTile(SITE, chunk()) // 5m, a month and a half old: expired
+    await saveTile(
+      SITE,
+      chunk({
+        tileId: '1h/1/500',
+        res: '1h',
+        startMs: nowMs - 300 * DAY_MS,
+        stepMs: 3_600_000,
+      })
+    )
+
+    const dropped = await pruneTiles(SITE, nowMs)
+
+    expect(dropped).toBe(1)
+    const held = await loadTiles(SITE, ['5m/1/3061', '1h/1/500'])
+    expect(held.has('1h/1/500'), 'the year cache was judged by the month’s window').toBe(true)
+    expect(held.has('5m/1/3061')).toBe(false)
   })
 })

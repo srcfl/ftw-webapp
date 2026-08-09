@@ -46,12 +46,25 @@
      * Rejects with the home still on the phone and still working.
      */
     leave: () => Promise<void>
+    /**
+     * The shell's word that the last sign-out attempt failed.
+     *
+     * A failed leave tears every view down and puts the home back, this
+     * screen included, so the failure cannot live in this screen's own
+     * state — the instance that met it is gone. Opening on the same
+     * sentence it would have shown beats a Sign out button pretending
+     * nothing happened.
+     */
+    stuck?: boolean
   }
 
-  let { site, leave }: Props = $props()
+  let { site, leave, stuck = false }: Props = $props()
 
   type Stage = 'idle' | 'confirming' | 'leaving' | 'stuck' | 'copy-kept'
-  let stage = $state<Stage>('idle')
+  // Read once at construction, on purpose: the shell's word is about how
+  // this instance opens, not a value to follow afterwards.
+  // svelte-ignore state_referenced_locally
+  let stage = $state<Stage>(stuck ? 'stuck' : 'idle')
 
   /**
    * Whether Sourceful is holding a sealed copy of this home.

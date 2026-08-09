@@ -186,6 +186,21 @@ describe('leaving, from the phone', () => {
     const stillThere = await database.get('sites', SITE_ID)
     expect(stillThere, 'the home this screen says is still here').toBeTruthy()
   })
+
+  it('opens on the unfinished sign-out when the shell says so', async () => {
+    // A failed leave tears this screen down with every other view when the
+    // shell puts the home back, so the instance that met the failure — and
+    // held it in local state — is gone. The shell's word is what keeps the
+    // sentence on screen instead of a Sign out button pretending nothing
+    // happened.
+    const site = new SiteStore('test')
+    void site.start(SITE_ID)
+    render(Box, { props: { site, leave: vi.fn(async () => {}), stuck: true } })
+
+    const said = () => (document.body.textContent ?? '').replace(/\s+/g, ' ')
+    await vi.waitFor(() => expect(said()).toMatch(/That didn.t finish/i))
+    expect(said()).toMatch(/still on this phone and still works/i)
+  })
 })
 
 /* The spare key, and what it costs.

@@ -12,7 +12,7 @@
   Loaded on demand, so none of this sits on the path to the first frame.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
   import Energy from '$views/Energy.svelte'
   import { axisOf, ticksOf, type Domain, type Trace } from '$lib/ui/chart'
@@ -42,13 +42,34 @@
     { name: 'load_w', label: 'House', colorVar: '--fg-dim' },
   ]
 
+  // A ticking clock, coarse on purpose: the only thing it feeds is a name
+  // that changes every five minutes. A bare Date.now() in the closure below
+  // would never re-fire the effect it lives in.
+  let nowMs = $state(Date.now())
+
+  onMount(() => {
+    const t = setInterval(() => (nowMs = Date.now()), 60_000)
+    return () => clearInterval(t)
+  })
+
   // Asked for when the session is up, again whenever it comes back, and again
   // after a window the box could not serve. The cached tiles are already on
   // screen by then; what a drop cost was the difference between them and now,
   // and on mount alone nothing ever went back for it. The range in flight is
   // whichever one is selected, so a reconnect refills the chart the user is
   // actually looking at.
-  askWhenLive(untrack(() => site), () => history.range, () => history.load())
+  //
+  // The window always ends at this moment, so which five minutes "this
+  // moment" is belongs in the name — the chart's own step, and the note
+  // below promises a point for each of them. Without it a connection that
+  // never drops never re-asks, and the right edge is labelled "now" all
+  // afternoon. Each re-ask is a cheap delta: the have-list already covers
+  // everything held.
+  askWhenLive(
+    untrack(() => site),
+    () => `${history.range} ${Math.floor(nowMs / 300_000)}`,
+    () => history.load()
+  )
 
   const frame = $derived(history.frame)
   const hasData = $derived((frame?.points ?? 0) > 0)
@@ -123,6 +144,19 @@
     return `${hours} hours`
   }
 
+  /**
+   * How much of the window went missing, in the unit a person would say.
+   *
+   * Rounded to hours alone, every gap under thirty minutes printed "0 h" —
+   * a note that names a fault and then measures it at nothing. Minutes
+   * under an hour, whole hours from there, and never a zero of any unit:
+   * the note only exists because something is missing.
+   */
+  function missingWords(ms: number): string {
+    if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))} min`
+    return `${Math.round(ms / 3_600_000)} h`
+  }
+
   const stamp = $derived.by(() => {
     const at = history.cursorAtMs
     if (at === null) return null
@@ -174,7 +208,9 @@
     </div>
   </header>
 
-  <div class="plot">
+  <!-- The chart's height is published to the CSS so the placeholder can be
+       sized from it: the card must not jump when one swaps for the other. -->
+  <div class="plot" style:--chart-h="{CHART_H}px">
     {#if hasData && frame}
       <!-- The scale is DOM text beside the canvas, not pixels on it, so it
            reflows and respects the text size the reader chose. It is hidden
@@ -260,7 +296,7 @@
       Reading your box…
     {:else if frame && history.resActual}
       One point every {stepWords(frame.stepMs)}, from your box{#if missingMs > 0}
-        · {Math.round(missingMs / 3_600_000)} h not recorded{/if}
+        · {missingWords(missingMs)} not recorded{/if}
     {/if}
   </p>
 </section>
@@ -323,6 +359,9 @@
   }
 
   .plot {
+    /* The x-axis strip under the canvas. Named once, because the placeholder
+       below adds it to the chart's height and the two must agree. */
+    --axis-h: 16px;
     background: var(--surface-raised);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
@@ -367,7 +406,7 @@
   .axis {
     grid-column: 2;
     position: relative;
-    height: 16px;
+    height: var(--axis-h);
     margin-top: var(--space-2);
   }
 
@@ -391,7 +430,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 220px;
+    /* Exactly what the drawn frame occupies — chart, axis strip and the gap
+       between — so the card holds still when one replaces the other. */
+    height: calc(var(--chart-h) + var(--axis-h) + var(--space-2));
     color: var(--fg-muted);
     font-size: 13px;
     text-align: center;

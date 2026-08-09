@@ -17,6 +17,7 @@ import {
   wireBytes,
   LANE_CONTROL,
   LANE_BULK,
+  BULK_BUCKETS,
   FrameError,
 } from './frame'
 import {
@@ -188,7 +189,8 @@ interface PendingHistory {
   onChunk: (chunk: HistChunk) => void
   resolve: (end: HistEnd) => void
   reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  /** Unset only before the request is on the wire. See #armDeadline. */
+  timer?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -203,7 +205,8 @@ export const API_TIMEOUT_MS = 20_000
 interface PendingApi {
   resolve: (res: ApiResponse) => void
   reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  /** Unset only before the request is on the wire. See #armDeadline. */
+  timer?: ReturnType<typeof setTimeout>
   head: ApiHead | null
   chunks: Uint8Array[]
   bytes: number
@@ -217,7 +220,8 @@ export const PLAN_TIMEOUT_MS = 8_000
 interface PendingPlan {
   resolve: (plan: Plan) => void
   reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  /** Unset only before the request is on the wire. See #armDeadline. */
+  timer?: ReturnType<typeof setTimeout>
 }
 
 /** A price window is one bulk message too, so it keeps the plan's deadline. */
@@ -226,7 +230,8 @@ export const PRICE_TIMEOUT_MS = 8_000
 interface PendingPrices {
   resolve: (prices: Prices) => void
   reject: (err: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  /** Unset only before the request is on the wire. See #armDeadline. */
+  timer?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -369,6 +374,8 @@ export class Session {
   #pendingPrices = new Map<number, PendingPrices>()
   #pendingApi = new Map<number, PendingApi>()
   #pendingCmd = new Map<string, PendingCmd>()
+  /** The api queue's tail. Always settled-safe; see api(). */
+  #apiTail: Promise<void> = Promise.resolve()
   /** Set only while the box says it is starting. See BOOT_RETRY_MS. */
   #bootRetry: ReturnType<typeof setTimeout> | undefined
 
@@ -394,9 +401,31 @@ export class Session {
    * band says how long ago that was. Carrier stays 'cache', which is a
    * carrier and not a failure state: it is how the app has something honest
    * to show in its first frame.
+   *
+   * The cache read races the connect, and either may win. Landing while a
+   * carrier is mid-handshake, the cache still paints — that is the cold-start
+   * promise — but only the data: the phase, the carrier and the box's clock
+   * belong to the connection already under way. Nothing writes the carrier
+   * again on a connection that stays up, so a cache that overwrote it here
+   * left "can't reach your box" standing over a live stream for as long as
+   * the app was open.
    */
   restore(patch: Partial<SessionState>): void {
-    if (this.#state.phase === 'streaming') return
+    const phase = this.#state.phase
+    if (phase === 'streaming') return
+
+    if (phase === 'handshaking' || phase === 'subscribing' || phase === 'booting') {
+      // Fields already held mean a reconnect, and live readings are newer
+      // than any snapshot on disk.
+      if (this.#state.fields.size > 0) return
+      const data = { ...patch }
+      delete data.phase
+      delete data.carrier
+      delete data.uptimeMs
+      this.#patch(data)
+      return
+    }
+
     this.#patch({ ...patch, phase: 'idle', carrier: 'cache' })
   }
 
@@ -486,13 +515,13 @@ export class Session {
     this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
 
     return new Promise<HistEnd>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pendingHistory.delete(id)
-        reject(new Error('history request timed out'))
-      }, HIST_TIMEOUT_MS)
-
-      this.#pendingHistory.set(id, { onChunk, resolve, reject, timer })
+      // Sent before anything is registered: a payload the largest bucket
+      // cannot carry throws out of the executor, rejecting the promise with
+      // no entry and no timer left behind for the deadline to sweep up.
       this.#sendBulk({ t: 'hist.query', id, b: query })
+
+      this.#pendingHistory.set(id, { onChunk, resolve, reject })
+      this.#armDeadline(this.#pendingHistory, id, HIST_TIMEOUT_MS, 'history request timed out')
     })
   }
 
@@ -509,13 +538,12 @@ export class Session {
     this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
 
     return new Promise<Plan>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pendingPlan.delete(id)
-        reject(new Error('plan request timed out'))
-      }, PLAN_TIMEOUT_MS)
-
-      this.#pendingPlan.set(id, { resolve, reject, timer })
+      // Send first: a refused payload rejects through the executor and
+      // leaves nothing registered. See history().
       this.#sendBulk({ t: 'plan.get', id })
+
+      this.#pendingPlan.set(id, { resolve, reject })
+      this.#armDeadline(this.#pendingPlan, id, PLAN_TIMEOUT_MS, 'plan request timed out')
     })
   }
 
@@ -533,13 +561,12 @@ export class Session {
     this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
 
     return new Promise<Prices>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pendingPrices.delete(id)
-        reject(new Error('price request timed out'))
-      }, PRICE_TIMEOUT_MS)
-
-      this.#pendingPrices.set(id, { resolve, reject, timer })
+      // Send first: a refused payload rejects through the executor and
+      // leaves nothing registered. See history().
       this.#sendBulk({ t: 'price.get', id, b: query })
+
+      this.#pendingPrices.set(id, { resolve, reject })
+      this.#armDeadline(this.#pendingPrices, id, PRICE_TIMEOUT_MS, 'price request timed out')
     })
   }
 
@@ -554,28 +581,41 @@ export class Session {
    * an answer here, not a failure. Rejects with `ApiError` when the box sent a
    * stable code instead, and with a plain Error when the wire went away, the
    * deadline passed, or the answer arrived in pieces that do not fit together.
+   *
+   * One call is on the wire at a time, because that is how many the box
+   * serves: a second in flight is answered "busy", which costs whichever view
+   * lost the race a thirty-second backoff over a collision no view can see.
+   * The queue is chained on settle, not success, so a call that fails hands
+   * the wire to the one behind it — and each call's deadline is armed when it
+   * dispatches, because a place in the queue is not time spent waiting on the
+   * box.
    */
   api(req: ApiReq): Promise<ApiResponse> {
+    const turn = this.#apiTail.then(() => this.#dispatchApi(req))
+    this.#apiTail = turn.then(
+      () => undefined,
+      () => undefined
+    )
+    return turn
+  }
+
+  #dispatchApi(req: ApiReq): Promise<ApiResponse> {
+    // Checked at dispatch, not enqueue: what matters is whether the wire is
+    // there when this call's turn comes. A queued call whose predecessor was
+    // settled by the carrier going away meets the same answer it would have
+    // met in the pending map, now instead of at its deadline.
     if (!this.#carrier) return Promise.reject(new Error('no carrier'))
+    if (this.#carrier.status.phase === 'closed') {
+      return Promise.reject(new Error('carrier closed'))
+    }
 
     const id = this.#nextRequestId
     this.#nextRequestId = (this.#nextRequestId + 1) % 0xffffffff || 1
 
     return new Promise<ApiResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pendingApi.delete(id)
-        reject(new Error('api request timed out'))
-      }, API_TIMEOUT_MS)
-
-      this.#pendingApi.set(id, {
-        resolve,
-        reject,
-        timer,
-        head: null,
-        chunks: [],
-        bytes: 0,
-        nextSeq: 0,
-      })
+      // Sent before anything is registered: a payload the largest bucket
+      // cannot carry throws out of the executor, rejecting the promise with
+      // no entry and no timer left behind for the deadline to sweep up.
       this.#sendBulk({
         t: 'api.req',
         id,
@@ -588,6 +628,16 @@ export class Session {
           ...(req.body ? { body: wireBytes(req.body) } : {}),
         },
       })
+
+      this.#pendingApi.set(id, {
+        resolve,
+        reject,
+        head: null,
+        chunks: [],
+        bytes: 0,
+        nextSeq: 0,
+      })
+      this.#armDeadline(this.#pendingApi, id, API_TIMEOUT_MS, 'api request timed out')
     })
   }
 
@@ -693,9 +743,20 @@ export class Session {
       case 'tick':
         this.#onTick(envelope.b as Tick)
         break
-      case 'hist.chunk':
-        this.#pendingHistory.get(envelope.id ?? -1)?.onChunk(envelope.b as HistChunk)
+      case 'hist.chunk': {
+        const hist = this.#pendingHistory.get(envelope.id ?? -1)
+        if (hist) {
+          // A window still arriving is not a window that has gone quiet.
+          this.#armDeadline(
+            this.#pendingHistory,
+            envelope.id!,
+            HIST_TIMEOUT_MS,
+            'history request timed out'
+          )
+          hist.onChunk(envelope.b as HistChunk)
+        }
         break
+      }
       case 'hist.end':
         this.#settleHistory(envelope.id, envelope.b as HistEnd)
         break
@@ -780,6 +841,10 @@ export class Session {
 
     this.#patch({
       phase: 'streaming',
+      // A snapshot only arrives over a carrier, so the stream names the one
+      // feeding it — whatever a cache paint that landed mid-handshake may
+      // have said in the meantime.
+      ...(this.#carrier ? { carrier: this.#carrier.kind } : {}),
       uptimeMs: b.uptimeMs,
       controlRev: b.controlRev,
       dict: b.dict,
@@ -872,6 +937,7 @@ export class Session {
     // rather than allowed to rewrite what the caller will be told.
     if (pending.head !== null) return
     pending.head = head
+    this.#armDeadline(this.#pendingApi, id!, API_TIMEOUT_MS, 'api request timed out')
   }
 
   #onApiChunk(id: number | undefined, chunk: ApiChunk): void {
@@ -891,6 +957,7 @@ export class Session {
     pending.nextSeq += 1
     pending.chunks.push(chunk.data)
     pending.bytes += chunk.data.length
+    this.#armDeadline(this.#pendingApi, id!, API_TIMEOUT_MS, 'api request timed out')
   }
 
   /**
@@ -1010,7 +1077,7 @@ export class Session {
     if (!this.#carrier) return
     // Sized by trial: the encoder refuses to grow a bucket, so the frame is
     // built once and stepped up rather than guessed at from the object.
-    for (const bucket of [1024, 4096, 16384]) {
+    for (const bucket of BULK_BUCKETS) {
       try {
         this.#carrier.send(encodeFrame({ lane: LANE_BULK, flags: 0, envelope }, bucket))
         return
@@ -1019,6 +1086,30 @@ export class Session {
       }
     }
     throw new FrameError('bulk payload exceeds the largest bucket', 'E_FRAME_EXCEEDS_BUCKET')
+  }
+
+  /**
+   * Arm — or push back — a request's deadline.
+   *
+   * The deadline measures silence, not total time. A multi-megabyte answer
+   * arriving steadily in chunks is a request that is working, and a deadline
+   * armed once at dispatch would kill it mid-flow while the box kept
+   * streaming into an id nobody held any more. So every head and chunk
+   * re-arms it, and what expires is a wire that has gone quiet.
+   */
+  #armDeadline<P extends { timer?: ReturnType<typeof setTimeout>; reject: (err: Error) => void }>(
+    map: Map<number, P>,
+    id: number,
+    ms: number,
+    message: string
+  ): void {
+    const pending = map.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pending.timer = setTimeout(() => {
+      map.delete(id)
+      pending.reject(new Error(message))
+    }, ms)
   }
 
   #detach(): void {

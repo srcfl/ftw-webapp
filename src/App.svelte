@@ -181,6 +181,10 @@
     if (import.meta.env.DEV && id === SIM_SITE_ID) {
       // Dynamic import keeps the simulator out of production bundles entirely.
       void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
+        // The import lands an await after it was asked for, and a sign-out in
+        // that gap replaces the store. A feed for the discarded one must not
+        // attach — nor overwrite the stopFeed that stops the current one.
+        if (store !== site) return
         stopFeed = attachSimulatedSite(store).stop
       })
     } else {
@@ -265,6 +269,16 @@
   }
 
   /**
+   * The last sign-out failed and the home was put back. False otherwise.
+   *
+   * Held by the shell because the failure outlives the screen that met it:
+   * a failed leave remounts every view against the restored store, and a
+   * remounted Box has no memory of its own. The same shape as connectHelp —
+   * shell state passed down, so the screen can say what happens now.
+   */
+  let leaveFailed = $state(false)
+
+  /**
    * Leave this home — or put it back, if the disk would not let go of it.
    *
    * It lives in the shell because the shell owns the two things that write:
@@ -278,11 +292,15 @@
    *
    * When the disk refuses, this phone still holds the home. So the shell puts
    * it back on screen and back on the wire rather than leaving a frozen view
-   * behind a message promising it still works, and rethrows so the Box screen
-   * can say what happened.
+   * behind a message promising it still works. The views are torn down the
+   * same way a successful leave tears them down — kept, they hold the stopped
+   * store, untracked on purpose, and never ask the restored one for anything.
+   * `leaveFailed` is how the remounted Box screen still knows what happened,
+   * because its own memory of the attempt goes with it.
    */
   async function leave() {
     const id = site.siteId ?? siteId
+    leaveFailed = false
 
     try {
       const { leaveHome } = await import('$lib/state/leave')
@@ -301,6 +319,12 @@
         // the slow way — through the database, after painting nothing.
         void import('$lib/identity/pairing').then(({ setCurrentSite }) => setCurrentSite(id))
       }
+      // The same reset the success path makes, for the same reason: a view
+      // kept from the old store would come back holding a home that has
+      // stopped. The route has not moved, so the screen being looked at is
+      // rebuilt in place against the restored store.
+      leaveFailed = true
+      seen = { plan: false, history: false, box: false }
       throw err
     }
 
@@ -372,7 +396,12 @@
            A view that has never been opened is still not built: `seen` gates
            the first mount, so the cost is paid once and never again. -->
       <div class="view" hidden={router.current !== 'now'}>
-        <Now {site} {hasHome} {connectHelp} wayBack={() => (recovering = true)} />
+        <Now
+          {site}
+          active={router.current === 'now'}
+          {connectHelp}
+          wayBack={() => (recovering = true)}
+        />
       </div>
 
       {#if seen.plan}
@@ -388,6 +417,14 @@
           {#await import('$views/History.svelte') then module}
             {@const History = module.default}
             <History {site} />
+          {:catch}
+            <!-- The chunk never arrived — an update mid-flight, a network that
+                 died under it. Nothing retries a failed import; the next
+                 launch fetches it fresh, and silence here reads as a broken
+                 tab rather than a lost download. -->
+            <p class="load-note">
+              This screen didn't load — it will try again next time you open the app.
+            </p>
           {/await}
         </div>
       {/if}
@@ -398,7 +435,11 @@
         <div class="view" hidden={router.current !== 'box'}>
           {#await import('$views/Box.svelte') then module}
             {@const Box = module.default}
-            <Box {site} {leave} />
+            <Box {site} {leave} stuck={leaveFailed} />
+          {:catch}
+            <p class="load-note">
+              This screen didn't load — it will try again next time you open the app.
+            </p>
           {/await}
         </div>
       {/if}
@@ -448,6 +489,14 @@
 <style>
   .settling {
     min-height: 60vh;
+  }
+
+  /* A view whose code never arrived. Quiet prose where the screen would be,
+     because a blank panel under a working tab bar reads as a broken app. */
+  .load-note {
+    padding: var(--space-7) var(--space-4);
+    color: var(--fg-muted);
+    font-size: 13px;
   }
 
   /* `hidden` is the switch, so a view that is not showing costs no layout and

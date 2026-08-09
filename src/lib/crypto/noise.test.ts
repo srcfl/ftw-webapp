@@ -236,6 +236,64 @@ describe('a relay cannot present itself as a box', () => {
   })
 })
 
+describe('a stray frame cannot poison a waiting handshake', () => {
+  // The relay broadcasts every uplink frame to all streams in a room, and
+  // message 2 is exactly 48 bytes — two phones connecting at once read each
+  // other's replies. A reply that fails to authenticate must leave the
+  // handshake exactly as it was, or the genuine reply can never open it.
+  it('completes on the genuine message 2 after rejecting somebody else’s', async () => {
+    const { app, box } = pair()
+    const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
+    const responder = HandshakeState.responder({ staticKey: box })
+
+    await responder.readMessage(await initiator.writeMessage())
+    const m2 = await responder.writeMessage()
+
+    // Another household's valid message 2: right shape, wrong session.
+    const otherBox = generateKeyPair()
+    const otherInitiator = HandshakeState.initiator({
+      staticKey: generateKeyPair(),
+      remoteStatic: otherBox.publicKey,
+    })
+    const otherResponder = HandshakeState.responder({ staticKey: otherBox })
+    await otherResponder.readMessage(await otherInitiator.writeMessage())
+    const stray = await otherResponder.writeMessage()
+
+    await expect(initiator.readMessage(stray)).rejects.toThrow(NoiseError)
+
+    // The genuine reply still opens the session, and a transport frame
+    // round-trips under the split keys.
+    await initiator.readMessage(m2)
+    const a = initiator.split()
+    const b = responder.split()
+    const ad = new Uint8Array(0)
+    const frame = utf8('grid_w=1200')
+    expect(bytesToHex(b.recv.decryptWithAd(ad, a.send.encryptWithAd(ad, frame)))).toBe(bytesToHex(frame))
+    expect(bytesToHex(a.recv.decryptWithAd(ad, b.send.encryptWithAd(ad, frame)))).toBe(bytesToHex(frame))
+  })
+
+  it('completes on the genuine message 1 after rejecting somebody else’s', async () => {
+    const { app, box } = pair()
+    const initiator = HandshakeState.initiator({ staticKey: app, remoteStatic: box.publicKey })
+    const responder = HandshakeState.responder({ staticKey: box })
+    const m1 = await initiator.writeMessage()
+
+    // A message 1 aimed at some other box. Its first decryption cannot
+    // authenticate here, and it must not move the responder either.
+    const strayInitiator = HandshakeState.initiator({
+      staticKey: generateKeyPair(),
+      remoteStatic: generateKeyPair().publicKey,
+    })
+    await expect(responder.readMessage(await strayInitiator.writeMessage())).rejects.toThrow(NoiseError)
+
+    await responder.readMessage(m1)
+    await initiator.readMessage(await responder.writeMessage())
+    expect(initiator.isComplete).toBe(true)
+    expect(responder.isComplete).toBe(true)
+    expect(bytesToHex(initiator.split().handshakeHash)).toBe(bytesToHex(responder.split().handshakeHash))
+  })
+})
+
 describe('state machine', () => {
   it('refuses to write out of turn', async () => {
     const { app, box } = pair()
