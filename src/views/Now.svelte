@@ -9,9 +9,12 @@
 <script lang="ts">
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
+  import { untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings } from '$lib/state/flow'
+  import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
+  import EvPanel from './EvPanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -67,6 +70,25 @@
   // when `active` returns, coming back starts from the present.
   $effect(() => {
     if (active) flow?.setReadings(flowReadings(site.session.fields))
+  })
+
+  /** The charger's sheet, opened by a tap on its bubble. */
+  let evOpen = $state(false)
+
+  // The hero says which bubble was tapped; only the charger's opens
+  // anything, and only when the session can actually read the box's API —
+  // a panel that could never fill would be a door painted on a wall.
+  $effect(() => {
+    const el = flow
+    if (!el) return
+    const onPlanet = (e: Event) => {
+      const role = (e as CustomEvent<{ role?: string }>).detail?.role
+      if (role === 'ev' && untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) {
+        evOpen = true
+      }
+    }
+    el.addEventListener('ftw-planet-click', onPlanet)
+    return () => el.removeEventListener('ftw-planet-click', onPlanet)
   })
 
   /**
@@ -182,6 +204,10 @@
     <ftw-energy-flow bind:this={flow} embedded static={live ? undefined : true}
     ></ftw-energy-flow>
   </div>
+
+  {#if evOpen}
+    <EvPanel {site} onclose={() => (evOpen = false)} />
+  {/if}
 {/if}
 
 <style>

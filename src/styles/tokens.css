@@ -10,8 +10,9 @@
  *
  * These values are shared with FTW's on-box UI (forty-two-watts/web/
  * components/theme.css). Keep them in step: a user running both surfaces
- * should not see two different products. tests/tokens.test.ts locks the
- * contract that every role resolves in both themes.
+ * should not see two different products. scripts/check-token-drift.mjs
+ * holds that promise in CI — every token a vendored component reads must
+ * resolve to the same value here and there, in both themes.
  */
 
 :root {
@@ -76,6 +77,15 @@
   --violet: var(--energy-mobility);
   --white-s: var(--fg);
   --accent-e: var(--accent);
+  /* The box's names for the card paddings this file already defines. The
+     history and savings cards read these; without the alias they run on
+     their fallbacks and drift the moment either value changes. */
+  --card-pad: var(--pad-card);
+  --card-pad-tight: var(--pad-card-tight);
+  /* Consumed by the hero's stats row and defined in neither repo's theme —
+     its #f59e0b fallback escapes theming entirely. Pinned to the amber
+     role here until the box's theme.css names it too. */
+  --stat-warn: var(--energy-generation);
 
   /* Hero surfaces for the energy flow, from the box's theme.css. */
   --hero-bg-top: #1a1a1a;

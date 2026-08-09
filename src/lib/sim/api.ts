@@ -98,6 +98,23 @@ const ROUTES: Record<string, RouteFacts> = {
   'POST /api/battery/manual_hold': { tier: 'actuate' },
   'DELETE /api/battery/manual_hold': { tier: 'actuate' },
 
+  // The charger. Reads are reads; everything that starts, stops or redirects
+  // charging is actuation, priced exactly as the box prices it — including
+  // the schedule, which today rides the target route and is therefore out of
+  // reach from here. That refusal is a fact the app must meet in tests, not
+  // a gap this simulator smooths over.
+  'GET /api/loadpoints': { tier: 'read' },
+  'GET /api/mpc/plan': { tier: 'read' },
+  'GET /api/loadpoints/{id}/manual_hold': { tier: 'read' },
+  'GET /api/loadpoints/{id}/battery_boost': { tier: 'read' },
+  'POST /api/loadpoints/{id}/target': { tier: 'actuate' },
+  'POST /api/loadpoints/{id}/soc': { tier: 'actuate' },
+  'POST /api/loadpoints/{id}/force_start': { tier: 'actuate' },
+  'POST /api/loadpoints/{id}/manual_hold': { tier: 'actuate' },
+  'DELETE /api/loadpoints/{id}/manual_hold': { tier: 'actuate' },
+  'POST /api/loadpoints/{id}/battery_boost': { tier: 'actuate' },
+  'DELETE /api/loadpoints/{id}/battery_boost': { tier: 'actuate' },
+
   // At the box, in the house. A credential, a whole file, or a person needed
   // in the room.
   'GET /api/config': { tier: 'local' },
@@ -324,6 +341,8 @@ export class SimApi {
     const route = matched.pattern
 
     if (route === 'GET /api/energy/daily') return this.#energyDaily(req.query)
+    if (route === 'GET /api/loadpoints') return this.#loadpoints()
+    if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year
@@ -369,6 +388,104 @@ export class SimApi {
     // on a box, where a tier is written on the same line as the handler, and
     // no test should lean on it.
     return json(404, { error: 'not found' })
+  }
+
+  /**
+   * The charger, from the same house the live view samples.
+   *
+   * Same generator, same seed, same minute — the panel's "charging at
+   * 7.3 kW" and the hero's EV bubble must read as one household. The car
+   * plugs in after the commute and charges 17:00–19:30, exactly the window
+   * `sample` gives `evW` to, and the session meter integrates that window.
+   *
+   * Field names are the box's own: `loadpoint.State` marshals snake_case,
+   * and an app built against camelCase here would render blanks against
+   * every real box while this tree stayed green. No `current_soc_pct` on
+   * purpose — an easee without a car API genuinely does not know it, and
+   * the honest absence is a case the panel has to carry.
+   */
+  #loadpoints(): ApiAnswer {
+    const now = this.#opts.now()
+    const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
+    const d = new Date(now)
+    const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
+
+    // Plugged in from the evening commute until the morning departure.
+    const pluggedIn = hourOfDay >= 17 || hourOfDay < 7
+
+    // What the session has delivered so far: the charging window is flat
+    // ~7.2 kW, so the meter is minutes-into-window times that rate.
+    const windowStartMs = new Date(now).setUTCHours(17, 0, 0, 0)
+    const chargedMinutes =
+      hourOfDay >= 17
+        ? Math.min(now - windowStartMs, 2.5 * 3_600_000) / 60_000
+        : hourOfDay < 7
+          ? 150
+          : 0
+    const sessionWh = Math.round((chargedMinutes / 60) * 7200)
+
+    return json(200, {
+      enabled: true,
+      loadpoints: [
+        {
+          id: 'carport',
+          driver_name: 'easee',
+          plugged_in: pluggedIn,
+          current_power_w: r.evW,
+          delivered_wh_session: pluggedIn ? sessionWh : 0,
+          target_soc_pct: 84,
+          updated_at_ms: now,
+          soc_source: 'none',
+          min_charge_w: 4140,
+          max_charge_w: 11000,
+          phases: 3,
+          voltage_v: 230,
+          manual_active: false,
+          battery_boost: { state: 'inactive', active: false },
+          surplus_only: false,
+          schedule: { soc_pct: 84, time_of_day_min_utc: 360, recurring: true },
+        },
+      ],
+    })
+  }
+
+  /**
+   * The optimiser's plan for the charger, derived from the same window.
+   *
+   * Quarter-hour slots over the next day, with `loadpoint_power_w` set in
+   * the slots the house's own generator would charge in. The box's real
+   * planner prices every slot; this one carries only what the app draws —
+   * a slot missing a price is a case the store must already survive,
+   * because a box mid-replan serves exactly that.
+   */
+  #mpcPlan(): ApiAnswer {
+    const now = this.#opts.now()
+    const slotMs = 15 * 60_000
+    const first = Math.floor(now / slotMs) * slotMs
+
+    const actions = []
+    for (let i = 0; i < 96; i++) {
+      const startMs = first + i * slotMs
+      const h = new Date(startMs).getUTCHours() + new Date(startMs).getUTCMinutes() / 60
+      const charging = h >= 17 && h < 19.5
+      actions.push({
+        slot_start_ms: startMs,
+        slot_len_min: 15,
+        ems_mode: charging ? 'charge' : 'idle',
+        reason: charging ? 'charge from cheap grid' : 'hold',
+        loadpoint_power_w: { carport: charging ? 7200 : 0 },
+        loadpoint_soc_pct_by_id: {},
+      })
+    }
+
+    return json(200, {
+      enabled: true,
+      plan: {
+        generated_at_ms: now,
+        horizon_slots: actions.length,
+        actions,
+      },
+    })
   }
 
   /**

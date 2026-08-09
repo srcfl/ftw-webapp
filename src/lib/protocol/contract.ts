@@ -55,3 +55,9 @@ export const SCOPE_MODE_WRITE: Scope = 'ftw.mode.write'
 
 /** The capability a box offers when its optimizer accepts dispatch. */
 export const CAP_PLAN_DISPATCH = 'plan.dispatch'
+
+/** The capability a box offers when a charger is among its resources. */
+export const CAP_DER_EV = 'der.ev'
+
+/** The box's own API over the session. Absent hides every view that needs it. */
+export const CAP_API_PASSTHROUGH = 'api.passthrough'
