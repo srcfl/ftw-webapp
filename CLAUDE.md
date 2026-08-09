@@ -85,9 +85,11 @@ npm test          # unit and contract tests
 npm run check     # types
 npm run verify    # all of the above plus a production build
 
-# The registry against the box's copy. Needs a checkout of srcfl/ftw, which
-# is why it is not part of verify — CI runs it on every push and pull request.
+# The registry against the box's copy, and the design tokens against the
+# box's theme. Both need a checkout of srcfl/ftw, which is why they are not
+# part of verify — CI runs them on every push and pull request.
 npm run check:contract ../ftw/contract/registry.yaml
+npm run check:tokens ../ftw/web/components/theme.css
 ```
 
 Run the narrow test while iterating, `npm run verify` before handoff.

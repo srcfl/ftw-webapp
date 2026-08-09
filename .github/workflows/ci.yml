@@ -66,10 +66,16 @@ jobs:
           ref: ${{ steps.pair.outputs.ref }}
           path: .box
           token: ${{ secrets.FTW_CONTRACT_TOKEN || github.token }}
-          sparse-checkout: contract/registry.yaml
+          # The registry, and the theme the vendored components read their
+          # tokens from. Two files, one promise each: same names, same bytes
+          # for the first; same resolved values for the second.
+          sparse-checkout: |
+            contract/registry.yaml
+            web/components/theme.css
           sparse-checkout-cone-mode: false
 
       - run: node scripts/check-contract-drift.mjs .box/contract/registry.yaml
+      - run: node scripts/check-token-drift.mjs .box/web/components/theme.css
 
   verify:
     runs-on: ubuntu-latest

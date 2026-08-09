@@ -108,7 +108,10 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
       kw: e, toHub: false,
       color: active ? 'var(--green-e)' : 'var(--white-s)',
       sub: active ? 'charging' : 'idle',
-      clickable: false,
+      // The one bubble that opens something: the charger's sheet. The hero
+      // makes a clickable planet a button with a name, so the tap target
+      // and its announcement come from the component, not from here.
+      clickable: true,
     })
   }
 

@@ -248,6 +248,11 @@ const CAPS = [
   'cmd.precondition',
   'cmd.readback',
   'der.battery',
+  // The simulated house has a charger on the carport wall, so the box says
+  // so — the same claim that gates the EV panel against a real box. (No
+  // apostrophes here: the contract test reads this list with a quote
+  // scanner, and prose contractions read as capability names to it.)
+  'der.ev',
   'plan.dispatch',
   'price.spot',
   'api.passthrough',
