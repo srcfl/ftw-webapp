@@ -74,10 +74,15 @@
 
   function beginEdit(lp: Loadpoint): void {
     saveError = null
+    // The wire's zero means every day; the draft holds all seven bits
+    // instead, so tapping Saturday off an every-day schedule means "not
+    // Saturday" — with a raw zero it would have meant "only Saturday",
+    // the exact opposite of the thumb's intent.
+    const wireDays = lp.schedule?.days ?? 0
     draft = {
       lpId: lp.id,
       time: utcMinutesToLocalInput(lp.schedule?.timeOfDayMinUtc ?? 6 * 60),
-      days: lp.schedule?.days ?? 0,
+      days: wireDays === 0 ? 0x7f : wireDays & 0x7f,
       socPct: Math.round(lp.schedule?.socPct ?? lp.targetSocPct ?? 80),
     }
   }
@@ -103,7 +108,10 @@
           soc_pct: draft.socPct,
           time_of_day_min_utc: minUtc,
           recurring: true,
-          days: draft.days & 0x7f,
+          // All seven days is the wire's zero — the canonical spelling of
+          // "every day", and what every schedule saved before masks
+          // existed already carries.
+          days: draft.days === 0x7f ? 0 : draft.days & 0x7f,
         },
       })
       draft = null
@@ -178,7 +186,7 @@
               {#each DAY_LABELS as day, bit (day)}
                 <button
                   class="chip"
-                  aria-pressed={draft.days === 0 || (draft.days & (1 << bit)) !== 0}
+                  aria-pressed={(draft.days & (1 << bit)) !== 0}
                   disabled={saving}
                   onclick={() => toggleDay(bit)}
                 >
@@ -199,7 +207,13 @@
               <span>%</span>
             </div>
             <div class="actions">
-              <button class="primary" disabled={saving} onclick={() => void saveDraft()}>
+              <!-- Every day off is not a schedule — the wire has no way to
+                   say it, and zero would silently mean the opposite. -->
+              <button
+                class="primary"
+                disabled={saving || draft.days === 0}
+                onclick={() => void saveDraft()}
+              >
                 {saving ? 'Saving…' : 'Save schedule'}
               </button>
               <button class="quiet" disabled={saving} onclick={() => (draft = null)}>
@@ -414,7 +428,8 @@
   }
 
   .editor input[type='number'] {
-    width: 5ch;
+    /* Three digits plus the browser's own spinner, or "84" clips to "8". */
+    width: 8ch;
   }
 
   .chips {

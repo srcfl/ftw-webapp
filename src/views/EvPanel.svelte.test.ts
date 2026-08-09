@@ -162,10 +162,11 @@ describe('the charger behind its bubble', () => {
     time.value = '08:00'
     time.dispatchEvent(new Event('input', { bubbles: true }))
 
-    // Weekdays: with a zero mask every chip reads pressed; tapping Sat and
-    // Sun turns exactly those off... which with a zero mask means building
-    // the weekday mask explicitly.
-    for (const day of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']) {
+    // Weekdays, the way a thumb makes them: the every-day schedule shows
+    // all seven chips on, and turning Saturday and Sunday off is the whole
+    // gesture. (The draft holds all seven bits for exactly this reason —
+    // toggling a day off a raw zero mask would have meant "only that day".)
+    for (const day of ['Sat', 'Sun']) {
       ;[...document.querySelectorAll<HTMLButtonElement>('button.chip')]
         .find((b) => b.textContent?.trim() === day)!
         .click()
