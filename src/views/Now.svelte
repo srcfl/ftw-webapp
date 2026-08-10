@@ -15,6 +15,7 @@
   import { flowReadings } from '$lib/state/flow'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import EvPanel from './EvPanel.svelte'
+  import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -75,16 +76,24 @@
   /** The charger's sheet, opened by a tap on its bubble. */
   let evOpen = $state(false)
 
-  // The hero says which bubble was tapped; only the charger's opens
-  // anything, and only when the session can actually read the box's API —
-  // a panel that could never fill would be a door painted on a wall.
+  /** The live-line sheet for one part of the house, or null. */
+  let liveRole = $state<LiveRole | null>(null)
+
+  const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
+
+  // The hero says which bubble was tapped. The charger opens its own panel of
+  // controls — but only when the box's API is actually reachable, or the
+  // panel would be a door painted on a wall. Every other bubble opens its
+  // live line, which needs nothing but the stream already on screen.
   $effect(() => {
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
       const role = (e as CustomEvent<{ role?: string }>).detail?.role
-      if (role === 'ev' && untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) {
-        evOpen = true
+      if (role === 'ev') {
+        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) evOpen = true
+      } else if (role && LIVE_ROLES.has(role)) {
+        liveRole = role as LiveRole
       }
     }
     el.addEventListener('ftw-planet-click', onPlanet)
@@ -207,6 +216,10 @@
 
   {#if evOpen}
     <EvPanel {site} onclose={() => (evOpen = false)} />
+  {/if}
+
+  {#if liveRole}
+    <LivePanel {site} role={liveRole} onclose={() => (liveRole = null)} />
   {/if}
 {/if}
 

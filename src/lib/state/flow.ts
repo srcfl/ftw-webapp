@@ -59,7 +59,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
       kw: g, toHub: gridW >= 0,
       color: idle(gridW) ? 'var(--fg-muted)' : gridW >= 0 ? 'var(--red-e)' : 'var(--green-e)',
       sub: idle(gridW) ? 'balanced' : gridW >= 0 ? 'importing' : 'exporting',
-      clickable: false,
+      clickable: true,
     })
   }
 
@@ -74,7 +74,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
       color: idle(pvW) ? 'var(--fg-muted)' : 'var(--amber)',
       // One-directional: the number already says generating or idle.
       sub: '',
-      clickable: false,
+      clickable: true,
     })
   }
 
@@ -93,7 +93,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
       color: idle(batteryW) ? 'var(--cyan)' : batteryW >= 0 ? 'var(--green-e)' : 'var(--red-e)',
       sub: idle(batteryW) ? 'idle' : batteryW >= 0 ? 'charging' : 'discharging',
       soc: socPermille === undefined ? null : Math.round(socPermille / 10),
-      clickable: false,
+      clickable: true,
     })
   }
 
