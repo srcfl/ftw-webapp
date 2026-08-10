@@ -549,8 +549,14 @@
        keeps the ordinary padding and one with an indicator clears it
        exactly. */
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
-    border-top: 1px solid var(--line-soft);
-    background: var(--surface-sunken);
+    border-top: 1px solid var(--line);
+    /* Raised, not sunken. Sunken is #101010 against the shell's #0d0d0d —
+       three steps apart, which on a phone's black screen is no difference at
+       all: the labels read as floating over nothing, and the bar's lower half
+       (its own padding, plus the home indicator's clearance on an installed
+       app) reads as a band of dead black rather than as part of a bar. A
+       surface you can see is what makes that space belong to something. */
+    background: var(--surface-raised);
   }
 
   nav button {
