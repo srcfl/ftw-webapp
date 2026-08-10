@@ -10,9 +10,13 @@
   # the IndexedDB read before the bundle is parsed. Moving it out would cost
   # the thing it exists for.
   #
-  # connect-src names the relay explicitly. If a compromised build ever tried
-  # to send readings somewhere else, the browser refuses.
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://relay.ftw.energy; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; manifest-src 'self'
+  # connect-src names every destination explicitly — the relay, and the
+  # escrow that holds the sealed recovery copy. If a compromised build ever
+  # tried to send readings somewhere else, the browser refuses. The escrow
+  # was once missing from this list, and the recovery flow's fetch died in
+  # the browser as "could not be reached" while every probe from outside
+  # passed; tests/csp-contract.test.ts now holds the list to the code.
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://relay.ftw.energy https://escrow.ftw.energy; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; manifest-src 'self'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   # The camera is used to scan the pairing code and nothing else asks for
