@@ -131,6 +131,18 @@ describe('an update never mixes two builds', () => {
 
     expect((await caches.keys()).sort()).toEqual(['ftw:a1', 'ftw:b2'])
   })
+
+  it('takes over only when the page explicitly asks', async () => {
+    const next = await load('b2')
+    await next.fire('install')
+
+    expect(next.skipped).toBe(false)
+    await next.fire('message', undefined, { data: { type: 'something-else' } })
+    expect(next.skipped).toBe(false)
+
+    await next.fire('message', undefined, { data: { type: 'skip-waiting' } })
+    expect(next.skipped).toBe(true)
+  })
 })
 
 describe('what it refuses to touch', () => {

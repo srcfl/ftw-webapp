@@ -84,6 +84,11 @@ describe('leaving, from the phone', () => {
   it('names the box it is paired to, without needing to reach it', async () => {
     mounted()
 
+    // The box software and the web app are two releases. Showing the latter's
+    // build id is how a screenshot can prove which deployed client is open.
+    expect(screen.getByText('Web app')).toBeTruthy()
+    expect(screen.getByText('dev')).toBeTruthy()
+
     // Nothing here connects. The box has to be nameable precisely when it is
     // out of reach, because that is one of the reasons someone opens this.
     const fingerprint = await screen.findByText(/^[0-9A-F]{6}$/)

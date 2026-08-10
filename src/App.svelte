@@ -15,6 +15,7 @@
   import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router } from '$lib/state/route.svelte'
+  import { refreshApp, serviceWorker } from '$lib/pwa/service-worker.svelte'
 
   // Replaced wholesale when someone signs out. `$state.raw` rather than
   // `$state`, because what changes is which store the views read, never a
@@ -161,6 +162,11 @@
   /** Whatever is feeding the store: the development simulator, or nothing. */
   let stopFeed: (() => void) | undefined
 
+  /** The three DOM layers moved directly by the installed app's pull gesture. */
+  let scrollPane: HTMLElement
+  let pullSurface: HTMLElement
+  let pullIndicator: HTMLElement
+
   /** Development starts on the simulated box unless a real one is paired. */
   const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
 
@@ -201,6 +207,39 @@
     }
     document.addEventListener('visibilitychange', onHide)
     const unlisten = router.listen()
+    const nav = navigator as Navigator & { standalone?: boolean }
+    // These flags exist only in the Vite development build. They make the
+    // two touch-only states renderable in a desktop browser review.
+    const preview = import.meta.env.DEV ? new URLSearchParams(location.search) : null
+    const installed =
+      nav.standalone === true ||
+      window.matchMedia?.('(display-mode: standalone)').matches === true ||
+      preview?.has('standalone') === true
+    if (preview?.has('update-ready')) serviceWorker.waiting = true
+    let mounted = true
+    let stopPull: (() => void) | undefined
+    // Not on the first-frame path. The gesture is installed from its cached
+    // chunk just after mount, and Safari tabs keep their own native gesture.
+    if (installed) {
+      void import('$lib/pwa/pull-to-refresh').then(({ attachPullToRefresh }) => {
+        if (!mounted) return
+        stopPull = attachPullToRefresh({
+          scroller: scrollPane,
+          surface: pullSurface,
+          indicator: pullIndicator,
+          refresh: refreshApp,
+        })
+        if (preview?.has('pull-ready')) {
+          const fire = (type: string, x: number, y: number) => {
+            const event = new Event(type, { bubbles: true, cancelable: true })
+            Object.defineProperty(event, 'touches', { value: [{ clientX: x, clientY: y }] })
+            scrollPane.dispatchEvent(event)
+          }
+          fire('touchstart', 201, 80)
+          fire('touchmove', 202, 270)
+        }
+      })
+    }
 
     if (useSimulator) {
       siteId = SIM_SITE_ID
@@ -216,6 +255,8 @@
     return () => {
       document.removeEventListener('visibilitychange', onHide)
       unlisten()
+      mounted = false
+      stopPull?.()
       stopFeed?.()
       site.destroy()
     }
@@ -366,7 +407,14 @@
 
   <UpdateLine />
 
-  <main>
+  <main bind:this={scrollPane}>
+    <div class="pull-refresh" data-state="idle" aria-hidden="true" bind:this={pullIndicator}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5"></circle>
+      </svg>
+    </div>
+
+    <div class="pull-surface" bind:this={pullSurface}>
     {#if resolvingSite && !pairingFragment}
       <!-- A local read, so this is a frame or two. Deliberately quiet: it is
            not a spinner for a network call, it is the app checking what it
@@ -444,6 +492,7 @@
         </div>
       {/if}
     {/if}
+    </div>
   </main>
 
   <!-- Four screens, so four buttons. The hash already works and the back
@@ -531,9 +580,85 @@
   }
 
   main {
+    position: relative;
     flex: 1;
     overflow-y: auto;
     overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Only these two layers move during a pull. Touchmove writes their
+     compositor transforms directly, so no reading or view rerenders while a
+     finger is down. */
+  .pull-surface {
+    min-height: 100%;
+    transition: transform var(--motion-base) var(--ease);
+  }
+
+  :global(.pull-surface[data-pulling='true']) {
+    transition: none;
+  }
+
+  .pull-refresh {
+    position: absolute;
+    top: var(--space-2);
+    left: 50%;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surface-elevated);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(-50%, -28px, 0) scale(0.78);
+    transition:
+      transform var(--motion-base) var(--ease),
+      opacity var(--motion-fast) var(--ease);
+    will-change: transform, opacity;
+  }
+
+  :global(.pull-refresh[data-state='pulling']),
+  :global(.pull-refresh[data-state='ready']) {
+    transition: none;
+  }
+
+  :global(.pull-refresh[data-state='ready']) {
+    border-color: var(--accent-strong);
+  }
+
+  .pull-refresh svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: 38 16;
+    transform: rotate(var(--pull-turn, 0deg));
+  }
+
+  :global(.pull-refresh[data-state='ready'] svg),
+  :global(.pull-refresh[data-state='refreshing'] svg) {
+    stroke: var(--accent);
+  }
+
+  :global(.pull-refresh[data-state='refreshing'] svg) {
+    animation: pull-spin 620ms linear infinite;
+  }
+
+  @keyframes pull-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.pull-refresh[data-state='refreshing'] svg) {
+      animation: none;
+    }
   }
 
   /* At the bottom because that is where a thumb is, and above the home

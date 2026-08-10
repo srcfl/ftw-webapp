@@ -2,4 +2,4 @@
 "ftw-webapp": patch
 ---
 
-Let installed iOS apps paint through the full screen while keeping controls above the home indicator.
+Let installed apps fill the iOS screen, pull to refresh, apply a ready update without a force-close, and show their web build on the Box screen.

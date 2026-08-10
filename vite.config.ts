@@ -66,8 +66,11 @@ export default defineConfig({
 
   define: {
     // The build identifier the app announces at handshake, so a box can tell
-    // which client it is talking to. Replaced by the release hash in CI.
-    __APP_BUILD__: JSON.stringify(process.env['GITHUB_SHA']?.slice(0, 12) ?? 'dev'),
+    // which client it is talking to. GitHub Actions and Cloudflare Workers
+    // Builds expose the same commit under different names.
+    __APP_BUILD__: JSON.stringify(
+      (process.env['WORKERS_CI_COMMIT_SHA'] ?? process.env['GITHUB_SHA'])?.slice(0, 12) ?? 'dev'
+    ),
   },
 
   resolve: {

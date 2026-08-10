@@ -65,8 +65,8 @@ type Listener = (event: SwEvent) => void
 /** The subset of the event surface src/sw.ts uses. */
 export interface SwEvent {
   request?: { method: string; url: string; mode: string }
-  /** A push's payload, when one arrived. `json()` throws like the real one. */
-  data?: { json(): unknown }
+  /** A push payload or a page message, depending on the event. */
+  data?: unknown
   /** The notification a click landed on. */
   notification?: { close(): void }
   waitUntil(promise: Promise<unknown>): void
@@ -89,6 +89,8 @@ export class FakeWorker {
 
   /** Every notification shown, in order. */
   shown: { title: string; body: string }[] = []
+  /** Whether the page explicitly asked this installed worker to take over. */
+  skipped = false
   /** What the page side sees: open windows, and URLs opened fresh. */
   windows: FakeWindowClient[] = []
   opened: string[] = []
@@ -102,6 +104,10 @@ export class FakeWorker {
   readonly clients = {
     matchAll: async (): Promise<FakeWindowClient[]> => this.windows,
     openWindow: async (url: string): Promise<void> => void this.opened.push(url),
+  }
+
+  skipWaiting = async (): Promise<void> => {
+    this.skipped = true
   }
 
   constructor(

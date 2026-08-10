@@ -222,6 +222,7 @@
   {/if}
 
   <dl>
+    <div><dt>Web app</dt><dd class="num">{__APP_BUILD__}</dd></div>
     {#if build}
       <div><dt>Software</dt><dd class="num">{build}</dd></div>
     {/if}
