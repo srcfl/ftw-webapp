@@ -87,7 +87,7 @@ describe('leaving, from the phone', () => {
     // The box software and the web app are two releases. Showing the latter's
     // build id is how a screenshot can prove which deployed client is open.
     expect(screen.getByText('Web app')).toBeTruthy()
-    expect(screen.getByText('dev')).toBeTruthy()
+    expect(screen.getByText(__APP_BUILD__)).toBeTruthy()
 
     // Nothing here connects. The box has to be nameable precisely when it is
     // out of reach, because that is one of the reasons someone opens this.
