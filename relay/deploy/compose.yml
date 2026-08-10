@@ -25,6 +25,12 @@ services:
       # Read X-Forwarded-For. True only because Caddy is in front on loopback;
       # exposed directly this would let a client choose its own rate-limit slot.
       RELAY_TRUST_PROXY: '1'
+      # The dead man rows — the relay's only file, and the only volume the
+      # relay container mounts. See README.md's claim table for exactly what
+      # a row holds and what it cannot say.
+      RELAY_DEADMAN_PATH: /state/deadman.json
+    volumes:
+      - relay-state:/state
     logging:
       driver: json-file
       options:
@@ -47,3 +53,4 @@ volumes:
   caddy-data:
   caddy-config:
   caddy-logs:
+  relay-state:

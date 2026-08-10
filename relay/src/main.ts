@@ -2,7 +2,7 @@
  *
  *   PORT=8787 node relay/src/main.ts
  *
- * Three environment variables and no configuration file. Everything else is a
+ * Four environment variables and no configuration file. Everything else is a
  * constant in server.ts, where it can be read alongside the code it governs.
  */
 
@@ -17,6 +17,8 @@ const relay = await RelayServer.start({
   // value the client types, and anyone could spread themselves across the
   // whole counter array.
   trustProxy: process.env['RELAY_TRUST_PROXY'] === '1',
+  // The dead man rows — the relay's only file. Unset disables the switch.
+  deadmanPath: process.env['RELAY_DEADMAN_PATH'] ?? '',
   // Counts only. A handle here would be the household identifier this whole
   // design exists to avoid handing over.
   log: (line) => console.log(new Date().toISOString() + ' ' + line),

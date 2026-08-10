@@ -10,16 +10,18 @@
   runs, when this phone joined, and the name to look for on the box's own list
   — and the door.
 
-  One thing here can be turned on, and it belongs to the door rather than to a
-  settings list: whether Sourceful holds a sealed copy of this home, so a
-  phone that is lost or wiped can come back with the passkey alone. It is the
-  mirror image of signing out and it is answered in the same words on the same
-  screen, which is why it is not on the pairing flow — that flow's whole
-  budget is two taps, and a privacy question is not worth the third for
-  someone who has not lost a phone yet.
+  What can be turned on here is what belongs to the pairing itself, not a
+  settings list. Whether Sourceful holds a sealed copy of this home, so a
+  phone that is lost or wiped can come back with the passkey alone — the
+  mirror image of signing out, answered in the same words on the same screen,
+  which is why it is not on the pairing flow: that flow's whole budget is two
+  taps, and a privacy question is not worth the third for someone who has not
+  lost a phone yet. And whether this box can reach this phone when the app is
+  closed — notifications — which is the same relationship read the other way,
+  and is undone by the same door.
 
-  Nothing else may be set here. A second switch is how this becomes the
-  settings screen the app does not have.
+  Nothing else may be set here. The next switch someone wants to add is how
+  this becomes the settings screen the app does not have.
 
   The two halves of leaving are kept apart on purpose. Signing out clears this
   phone; it does not tell the box to stop trusting it. Nothing on the wire can
@@ -35,6 +37,7 @@
   import { boxFingerprint, pairedSites } from '$lib/identity/pairing'
   import { deviceIdOnBox, openVaultStore } from '$lib/identity/vault'
   import Access from '$views/Access.svelte'
+  import Notifications from '$views/Notifications.svelte'
 
   interface Props {
     site: SiteStore
@@ -250,6 +253,12 @@
   <!-- Who else this box trusts. The same question signing out asks, from the
        other end, which is why it lives on this screen and not a new one. -->
   <Access {site} />
+
+  <hr />
+
+  <!-- Whether this box can reach this phone when the app is closed. A fact
+       about the pairing, like the roster above it. -->
+  <Notifications {site} />
 
   <hr />
 

@@ -44,14 +44,35 @@ wire's constants in the other two.
 | No compression | `perMessageDeflate: false` — a compressed frame's size depends on its content |
 | No padding, no trimming | `send()` forwards the received buffer unchanged |
 | No handle derivation | Needs a secret that never comes near here; see `src/lib/carrier/rendezvous.ts` |
-| No storage | Rooms are a `Map` and are deleted with their last socket |
-| No record of who was here | `log` is given counts; `inspect()` is everything held |
+| No storage of traffic | Rooms are a `Map` and are deleted with their last socket |
+| One stored file, and only this | The dead man rows: id, endpoint, ciphertext, deadline, a pre-signed delivery header. `deadman.ts` is the whole write path |
+| No record of who was here | `log` is given counts and statuses; `inspect()` is everything held, and holds counts |
+
+**The dead man's switch is the one thing the relay holds**, because it is the
+one notification the box cannot push about itself: that it is gone. A box
+leaves a sealed row — an opaque id (an HMAC of a secret that never comes
+here), a push endpoint, a ciphertext encrypted at home with keys the relay
+never had, a deadline, and a delivery authorisation the box pre-signed. While
+the box's socket claims the id the switch is held; when the claim stays
+dropped past the deadline, the relay posts the ciphertext, once, and will not
+fire that id again until the box has been back — with a half-hour floor so a
+flapping line is one message, not a night of them.
+
+What a row undeniably tells the operator: that some box exists, which push
+service its household uses, and — while a socket claims it, in memory only —
+which connection is that box's. What it cannot tell: what the message says,
+which household it is, or anything about the traffic beside it. The routing
+path is untouched: a claim is one consumed word on the uplink, never routed,
+and room bytes remain unread.
 
 `tests/relay-blindness.test.ts` runs a real box against a real app across this
 server, collects every routed byte, every logged line and everything in memory,
 and fails if a message type, a device name or a watt reading is anywhere in it.
 It first checks that the same detector catches the unsealed frames, because a
-detector that catches nothing proves nothing.
+detector that catches nothing proves nothing. The dead man tests hold the new
+claims the same way: the persisted file is byte-audited against the five
+fields, a fired switch posts the ciphertext byte-identical, and the
+constant-shape test still passes with the switch armed.
 
 ## The rendezvous handle rotates
 
