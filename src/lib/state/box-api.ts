@@ -7,15 +7,17 @@
  *
  * It runs the step-up. A write is refused with E_NEEDS_STEP_UP until a passkey
  * ceremony has happened, and the honest shape of that is: ask, be refused,
- * prompt, ask again — once per call. The app never knows a route's tier
- * beforehand and never carries a list of them: the box prices each route
- * beside its handler, and a copy of that here would be the list that rots.
+ * prompt, ask again. The app never knows a route's tier beforehand and never
+ * carries a list of them: the box prices each route beside its handler, and a
+ * copy of that here would be the list that rots.
  *
- * Every write pays it, not only the first of a session. The box refuses on the
- * flag alone and keeps nothing about a ceremony that already ran, so a second
- * write is refused exactly as the first was. Sending the flag ahead of the
- * ceremony to save the round trip would be this app claiming something that
- * had not happened.
+ * This app still asks without the flag first and only prompts on refusal — it
+ * never claims a ceremony that has not happened. What changed is the box: a
+ * genuine ceremony now vouches for the configure calls that follow it on the
+ * same session for a few minutes, so a settings screen that writes several
+ * things in a row prompts once rather than once per write. The app does
+ * nothing to earn that but ask honestly; the window lives on the box, where
+ * the freshness of the proof can actually be measured.
  *
  * It owns the prose. The box sends stable codes; every word a person reads is
  * this app's, and every word says what happens now rather than what broke.

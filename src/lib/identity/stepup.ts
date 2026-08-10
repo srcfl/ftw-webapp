@@ -15,10 +15,13 @@
  * the method, the path and the flag as it arrived. Nothing counts these and
  * nothing rate-limits them, and this comment said otherwise for a release.
  *
- * Run once per write, not once per session. The box refuses on the flag alone
- * and remembers no ceremony, so every configure request pays a refusal, a
- * prompt and a replay. Caching an outcome here would be this app deciding how
- * long the box's answer lasts.
+ * Run whenever the box refuses a write, not on a schedule this app keeps. The
+ * box now remembers a genuine ceremony for a few minutes and waves through the
+ * configure calls that follow, so a run of writes usually prompts once — but
+ * that window is the box's to measure, not this app's to assume. This layer
+ * only ever prompts in answer to a refusal it was actually given; caching an
+ * outcome here would be this app deciding how long the box's answer lasts,
+ * which is exactly the claim it must not make.
  *
  * Which is why this is deliberately NOT `unlockWrappingKey`. That falls back
  * to the local copy with no prompt when PRF is missing or an assertion fails,
