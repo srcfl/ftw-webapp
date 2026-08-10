@@ -64,15 +64,23 @@ describe('the shell fits any screen', () => {
     )
   })
 
-  it('gives the tab bar a surface you can actually see', () => {
-    // The bar was --surface-sunken (#101010) against the shell's --surface
-    // (#0d0d0d): three steps apart, and on a phone's black screen no
-    // difference at all. The labels read as floating over nothing and the
-    // bar's own lower half read as a band of dead black — which is what
-    // Fredrik reported twice, in both a Safari tab and an installed app.
+  it('runs into the strip below it rather than ending at a seam', () => {
+    // Below an installed app's web view is a strip of screen iOS paints and
+    // no CSS here can reach; it carries the app's own background. A bar in
+    // its own shade would end against that strip in a visible line — which
+    // is what a raised bar looked like — so the bar takes the same surface
+    // and one rule across the top is what says "bar" instead.
     const nav = rule('nav')
-    expect(nav).toMatch(/background:\s*var\(--surface-raised\)/)
+    expect(nav).toMatch(/background:\s*var\(--surface\)/)
     expect(nav, 'a bar with no visible edge is not a bar').toMatch(/border-top:/)
+  })
+
+  it('puts the labels on the edge where the system already cleared it', () => {
+    // Measured: an installed iOS app is laid out short of the screen, so the
+    // indicator is already clear and anything below the labels is a gap
+    // between the bar and the strip it should be continuous with.
+    const reserved = rule(':global(html.reserved-by-the-os) nav')
+    expect(reserved).toMatch(/padding-bottom:\s*0/)
   })
 
   it('reserves the notch on the shell, so the bar is free to reach the edge', () => {
