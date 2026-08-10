@@ -509,14 +509,9 @@
   /* The shell is exactly one screen, and the view inside it scrolls — the
      tab bar stays put and `main` scrolls inside itself.
 
-     Anchored with `position: fixed; inset: 0`, not a height. An installed
-     iOS PWA with a translucent status bar mismeasures dvh: `100dvh` came
-     back short of the real screen, so the shell ended above the bottom and
-     left a black band of unpainted screen under the tab bar. `inset: 0`
-     pins all four edges to the actual layout viewport, which iOS reports
-     correctly, so the shell fills the screen with no arithmetic to get
-     wrong. The insets live here now: the top padding reserves the notch,
-     the tab bar reserves the home indicator, and <body> no longer pads. */
+     Anchored with `position: fixed; inset: 0`, not a dynamic viewport unit.
+     The insets live here: the top padding reserves the notch, the tab bar
+     reserves the home indicator, and <body> only paints the backstop. */
   .app {
     position: fixed;
     inset: 0;
@@ -524,6 +519,15 @@
     flex-direction: column;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
     background: var(--surface);
+  }
+
+  /* WebKit can make the fixed containing block one top inset shorter in an
+     installed app with a translucent status bar. `100vh` still names the
+     whole installed screen there, so let the shell extend past that short
+     block. The class is set before first paint only for that measured case. */
+  :global(html.reserved-by-the-os) .app {
+    bottom: auto;
+    height: 100vh;
   }
 
   main {
@@ -549,30 +553,14 @@
        keeps the ordinary padding and one with an indicator clears it
        exactly.
 
-       Except where the system has already done it. Measured on Fredrik's
-       installed app: window, visual viewport, shell and bar all end at 812
-       while env(safe-area-inset-bottom) still reports 34px — iOS keeps a
-       standalone web view out of the indicator's zone AND goes on reporting
-       the inset, so honouring it there reserves the same strip twice and
-       leaves an empty band inside the bar. `html.reserved-by-the-os` is set
-       at startup for exactly that case and nothing else; every other phone,
-       tab and platform keeps the clearance it needs. */
+       The full-height standalone override paints behind the indicator, so
+       this inset remains the clearance for the buttons. */
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
-    /* The one line that says "bar". Everything else about it is the same
-       surface as the app, on purpose: below an installed app's web view
-       there is a strip of screen iOS paints and no CSS here can reach, and
-       it carries this colour. A bar in a different shade would end at that
-       strip in a visible seam; the same shade runs into it, so the bottom
-       of the app is one surface with a rule drawn across it. */
+    /* The one line that says "bar". Everything else uses the app surface so
+       the bar, the full-height shell and the area behind the home indicator
+       read as one surface. */
     border-top: 1px solid var(--line);
     background: var(--surface);
-  }
-
-  /* Where the system already cleared the indicator, the labels go all the
-     way down to meet the strip below — nothing between the bar and the edge
-     of what we are allowed to paint. See the note above the padding. */
-  :global(html.reserved-by-the-os) nav {
-    padding-bottom: 0;
   }
 
   nav button {

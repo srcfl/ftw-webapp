@@ -75,12 +75,13 @@ describe('the shell fits any screen', () => {
     expect(nav, 'a bar with no visible edge is not a bar').toMatch(/border-top:/)
   })
 
-  it('puts the labels on the edge where the system already cleared it', () => {
-    // Measured: an installed iOS app is laid out short of the screen, so the
-    // indicator is already clear and anything below the labels is a gap
-    // between the bar and the strip it should be continuous with.
-    const reserved = rule(':global(html.reserved-by-the-os) nav')
-    expect(reserved).toMatch(/padding-bottom:\s*0/)
+  it('fills the installed iOS screen when its fixed viewport is short', () => {
+    // On the measured phone, inset: 0 stopped 62px above the screen edge.
+    // WebKit still exposes the full installed screen as 100vh, so the shell
+    // uses that height only for the short standalone case.
+    const reserved = rule(':global(html.reserved-by-the-os) .app')
+    expect(reserved).toMatch(/bottom:\s*auto/)
+    expect(reserved).toMatch(/height:\s*100vh/)
   })
 
   it('reserves the notch on the shell, so the bar is free to reach the edge', () => {
