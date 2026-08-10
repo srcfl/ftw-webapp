@@ -21,6 +21,15 @@ html {
      itself reads as a bug there. Views scroll, the shell does not. */
   overscroll-behavior-y: none;
   -webkit-text-size-adjust: 100%;
+
+  /* The backstop colour behind everything. Without it html is transparent
+     and an installed PWA shows WebKit's black wherever body does not reach
+     to the pixel — the safe-area insets under a black-translucent status
+     bar, the hair of difference between 100dvh and 100%, the moment of a
+     rotation. That black reads as dead space around the app. Painting html
+     the surface colour means any such gap is the app's own background, not
+     a hole in it. */
+  background: var(--surface);
 }
 
 body {
