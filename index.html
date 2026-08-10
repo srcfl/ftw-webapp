@@ -73,7 +73,11 @@
           setTimeout(() => done(null), 400)
 
           try {
-            const req = indexedDB.open('ftw', 1)
+            // Omit the version so this opens whatever schema the installed
+            // app already owns. Pinning this probe to v1 made every healthy
+            // v2 database throw VersionError, which disabled the warm-launch
+            // path on every current install.
+            const req = indexedDB.open('ftw')
             req.onerror = () => done(null)
             // An upgrade here means the database does not exist yet — and
             // opening it CREATED it, at version 1, with no object stores. The

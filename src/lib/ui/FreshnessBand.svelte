@@ -21,11 +21,19 @@
 
   interface Props {
     carrier: CarrierState
+    /** Open transport, which may exist before it has delivered a reading. */
+    transport?: CarrierState
     /** Worst state across the sources this view depends on. */
     srcState: SourceState
     /** Age of the oldest reading on screen, in ms. */
     ageMs: number
     phase: SessionPhase
+    /** Time since this attempt began. Driven by the store's one shared clock. */
+    waitMs?: number
+    /** The last frame restarts the live dot's short beat. */
+    frameAtMs?: number | null
+    /** Real progress sent by a box that is starting. */
+    bootPct?: number | null
     /**
      * No carrier could be built at all, so nothing is in flight to wait for.
      *
@@ -39,11 +47,26 @@
     noCarrier?: boolean
   }
 
-  let { carrier, srcState, ageMs, phase, noCarrier = false }: Props = $props()
+  let {
+    carrier,
+    transport = 'none',
+    srcState,
+    ageMs,
+    phase,
+    waitMs = 0,
+    frameAtMs = null,
+    bootPct = null,
+    noCarrier = false,
+  }: Props = $props()
 
   /** Still trying, and has not yet failed. */
   const reaching = $derived(
-    !noCarrier && (phase === 'idle' || phase === 'handshaking' || phase === 'subscribing')
+    !noCarrier &&
+      (phase === 'idle' ||
+        phase === 'handshaking' ||
+        phase === 'subscribing' ||
+        phase === 'failed' ||
+        phase === 'booting')
   )
 
   const tone = $derived.by(() => {
@@ -55,18 +78,19 @@
 
   const message = $derived.by(() => {
     if (carrier === 'relay' || carrier === 'webrtc') {
-      const where = carrier === 'webrtc' ? 'Live at home' : 'Live via encrypted relay'
+      const liveWhere = carrier === 'webrtc' ? 'Live at home' : 'Live via encrypted relay'
+      const connected = carrier === 'webrtc' ? 'Home link connected' : 'Encrypted relay connected'
       switch (srcState) {
         case 'live':
-          return where
+          return liveWhere
         case 'never':
-          return `${where} · no reading yet`
+          return `${connected} · no reading yet`
         case 'down':
-          return `${where} · a device stopped responding`
+          return `${connected} · a device stopped responding`
         default:
           // The age rides in its own element now, so the sentence says what
           // the connection is doing and nothing else.
-          return `${where} · readings`
+          return `${connected} · readings`
       }
     }
 
@@ -76,11 +100,25 @@
     // happened, so this one must not contradict it.
     if (phase === 'terminated') return 'Access ended'
 
+    if (phase === 'booting') return 'Your box is starting'
+
     // Not connected. Say how old the readings are, which is the question
     // being asked, rather than diagnosing a connection we have not finished
     // testing.
-    if (reaching) return 'Reaching your box'
+    if (reaching) {
+      if (phase === 'failed') return 'Reconnecting to your box'
+      if (phase === 'subscribing') return 'Waiting for live readings'
+      if (phase === 'handshaking' && transport === 'relay') return 'Securing encrypted relay'
+      if (phase === 'handshaking' && transport === 'webrtc') return 'Securing home link'
+      return 'Connecting to your box'
+    }
     return "Can't reach your box"
+  })
+
+  const waitText = $derived.by(() => {
+    if (!reaching) return null
+    if (phase === 'booting' && bootPct !== null) return `${Math.round(bootPct)}%`
+    return `${Math.max(0, Math.floor(waitMs / 1_000))}s`
   })
 
   /**
@@ -108,8 +146,15 @@
      cannot easily see freshness" was actually about. Sticky as well, so it
      holds that position even if it is ever placed inside a scroller. -->
 <div class="band" data-tone={tone} role="status" aria-live="polite">
-  <span class="dot" aria-hidden="true"></span>
+  {#key frameAtMs}
+    <span class="dot" data-beat={tone === 'live' && frameAtMs !== null} aria-hidden="true"></span>
+  {/key}
   <span class="text">{message}</span>
+  {#if waitText}
+    <!-- This changes every second. Keep it visual so VoiceOver announces the
+         state change, not a spoken countdown on every tick. -->
+    <span class="wait num" aria-hidden="true">{waitText}</span>
+  {/if}
   <!-- The two fields stay two things. The carrier is the dot and the words;
        the age is its own element, in tabular figures so a number that changes
        every second does not shift the line under the reader's eye. -->
@@ -142,6 +187,11 @@
     flex: none;
   }
 
+  .wait {
+    color: var(--fg-muted);
+    flex: none;
+  }
+
   .age.unknown {
     /* The box cannot place this reading in time. Saying so quietly beats
        showing a number that would be invented. */
@@ -164,6 +214,10 @@
 
   .band[data-tone='live'] .dot {
     background: var(--fresh-live);
+  }
+
+  .band[data-tone='live'] .dot[data-beat='true'] {
+    animation: live-beat 680ms var(--ease) both;
   }
 
   .band[data-tone='stale'] .dot {
@@ -192,10 +246,29 @@
     }
   }
 
+  @keyframes live-beat {
+    0% {
+      opacity: 0.55;
+      transform: scale(0.78);
+    }
+    35% {
+      opacity: 1;
+      transform: scale(1.35);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .band[data-tone='reaching'] .dot {
       animation: none;
       opacity: 0.6;
+    }
+
+    .band[data-tone='live'] .dot[data-beat='true'] {
+      animation: none;
     }
   }
 </style>

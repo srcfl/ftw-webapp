@@ -19,10 +19,49 @@ import 'fake-indexeddb/auto'
 import { SiteStore } from './site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import { db } from '$lib/store/db'
+import { db, type StoredSnapshot } from '$lib/store/db'
 import { loadSnapshot } from '$lib/store/snapshot'
 
+type SnapshotModule = typeof import('$lib/store/snapshot')
+
+const snapshotSeam = vi.hoisted(() => ({
+  takeBoot: null as SnapshotModule['takeBootSnapshot'] | null,
+  load: null as SnapshotModule['loadSnapshot'] | null,
+}))
+
+vi.mock('$lib/store/snapshot', async (importOriginal) => {
+  const actual = await importOriginal<SnapshotModule>()
+  return {
+    ...actual,
+    takeBootSnapshot: () =>
+      snapshotSeam.takeBoot ? snapshotSeam.takeBoot() : actual.takeBootSnapshot(),
+    loadSnapshot: (siteId: string) =>
+      snapshotSeam.load ? snapshotSeam.load(siteId) : actual.loadSnapshot(siteId),
+  }
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => (resolve = done))
+  return { promise, resolve }
+}
+
+function snapshot(siteId: string, value: number): StoredSnapshot {
+  return {
+    siteId,
+    savedAtMs: value,
+    uptimeMs: value,
+    fields: { '1': value },
+    sources: {},
+    dispatchBlockedBy: [],
+    dict: {},
+    controlRev: 0,
+  }
+}
+
 beforeEach(async () => {
+  snapshotSeam.takeBoot = null
+  snapshotSeam.load = null
   const database = await db()
   for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
     await database.clear(store)
@@ -54,6 +93,48 @@ describe('a store repointed at another home mid-stream', () => {
 
     site.destroy()
   })
+
+  it("keeps B's cache when A's earlier read finishes last", async () => {
+    const lateA = deferred<StoredSnapshot | null>()
+    const takeBoot = vi
+      .fn<SnapshotModule['takeBootSnapshot']>()
+      .mockImplementationOnce(() => lateA.promise)
+      .mockResolvedValueOnce(null)
+    const load = vi
+      .fn<SnapshotModule['loadSnapshot']>()
+      .mockImplementation(async (siteId) => (siteId === 'home-b' ? snapshot('home-b', 22) : null))
+    snapshotSeam.takeBoot = takeBoot
+    snapshotSeam.load = load
+
+    const site = new SiteStore('test')
+    const startA = site.start('home-a')
+    await vi.waitFor(() => expect(takeBoot).toHaveBeenCalledTimes(1))
+
+    const startB = site.start('home-b')
+    await startB
+    expect(site.siteId).toBe('home-b')
+    expect(site.session.fields.get(1)).toBe(22)
+
+    lateA.resolve(snapshot('home-a', 11))
+    await startA
+
+    expect(site.siteId).toBe('home-b')
+    expect(site.session.fields.get(1), "A's late cache replaced B").toBe(22)
+    site.destroy()
+  })
+
+  it('ignores a boot row for A when the store now starts B', async () => {
+    snapshotSeam.takeBoot = vi.fn(async () => snapshot('home-a', 11))
+    const load = vi.fn(async () => snapshot('home-b', 22))
+    snapshotSeam.load = load
+
+    const site = new SiteStore('test')
+    await site.start('home-b')
+
+    expect(load).toHaveBeenCalledWith('home-b')
+    expect(site.session.fields.get(1)).toBe(22)
+    site.destroy()
+  })
 })
 
 describe('a carrier that finishes connecting after sign-out', () => {
@@ -71,5 +152,21 @@ describe('a carrier that finishes connecting after sign-out', () => {
 
     expect(carrier.status.phase, 'a store nothing owns kept a live carrier').toBe('closed')
     expect(spoken, 'the dead store still spoke to the box').not.toHaveBeenCalled()
+  })
+
+  it('is closed when it was built for the previous home', async () => {
+    const box = new SimBox({})
+    const spoken = vi.spyOn(box, 'receive')
+    const site = new SiteStore('test')
+    await site.start('home-a')
+    await site.start('home-b')
+
+    const carrier = new LoopbackCarrier(box, { latencyMs: 0 })
+    expect(site.connect(carrier, 'home-a')).toBe(false)
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(carrier.status.phase).toBe('closed')
+    expect(spoken, 'the stale carrier spoke to home A').not.toHaveBeenCalled()
+    site.destroy()
   })
 })

@@ -18,8 +18,8 @@
  * so "no live client left" can be days off, and the user sits on a build that
  * has long since been replaced. The client asks for the handover instead, at a
  * moment when nothing is mid-flight: it messages `skip-waiting` only while the
- * page is hidden or being freshly loaded, and reloads the instant the new
- * worker takes control. That reload is a whole navigation, so the page still
+ * page is hidden or the user presses Update, and reloads when the new worker
+ * takes control. That reload is a whole navigation, so the page still
  * never runs one build's shell against another's chunks — atomicity is kept,
  * the handover is just asked for rather than waited out. Old caches are dropped
  * in `activate`, which by then cannot run while anyone is still reading them.

@@ -6,7 +6,7 @@
   without hardware; in production the carrier comes from enrollment.
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import InstallHint from '$lib/ui/InstallHint.svelte'
   import UpdateLine from '$lib/ui/UpdateLine.svelte'
@@ -14,8 +14,8 @@
   import Plan from '$views/Plan.svelte'
   import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
-  import { Router } from '$lib/state/route.svelte'
-  import { refreshApp, serviceWorker } from '$lib/pwa/service-worker.svelte'
+  import { Router, type Route } from '$lib/state/route.svelte'
+  import { checkForAppUpdate, serviceWorker } from '$lib/pwa/service-worker.svelte'
 
   // Replaced wholesale when someone signs out. `$state.raw` rather than
   // `$state`, because what changes is which store the views read, never a
@@ -36,6 +36,8 @@
   // the browser tab's localStorage, and to any install whose localStorage was
   // evicted while the sites survived.
   let siteId = $state<string | null>(readSiteHint())
+  /** A public simulator session. It has no site id and writes no home to disk. */
+  let demoActive = $state(false)
 
   function readSiteHint(): string | null {
     try {
@@ -52,7 +54,16 @@
   // Untracked for the same reason: the store only ever changes on a sign-out,
   // which happens long after the launch path has run and replaces the views
   // reading it anyway.
-  if (initialSiteId) void untrack(() => site.start(initialSiteId))
+  let restoringHome = $state(initialSiteId !== null)
+  if (initialSiteId) {
+    void (async () => {
+      try {
+        await untrack(() => site.start(initialSiteId))
+      } finally {
+        restoringHome = false
+      }
+    })()
+  }
 
   /**
    * The database is the record; localStorage only points at it.
@@ -79,18 +90,18 @@
       let recovered: string | null = null
       try {
         recovered = await currentSiteId()
+        if (!recovered || siteId) return
+        siteId = recovered
+        try {
+          localStorage.setItem('ftw.site', recovered)
+        } catch {
+          /* the database still holds the record */
+        }
+        await site.start(recovered)
+        await connect(site, recovered)
       } finally {
         resolvingSite = false
       }
-      if (!recovered || siteId) return
-      siteId = recovered
-      try {
-        localStorage.setItem('ftw.site', recovered)
-      } catch {
-        /* the database still holds the record */
-      }
-      await site.start(recovered)
-      await connect(site, recovered)
     })()
   }
 
@@ -129,14 +140,101 @@
    * because nothing that has not been asked for belongs on the path to the
    * first frame.
    */
-  let seen = $state({ plan: false, history: false, box: false })
+  type HistoryViewComponent = (typeof import('$views/History.svelte'))['default']
+  type BoxViewComponent = (typeof import('$views/Box.svelte'))['default']
+  type DemoBoxViewComponent = (typeof import('$views/DemoBox.svelte'))['default']
+
+  let HistoryView = $state<HistoryViewComponent | null>(null)
+  let BoxView = $state<BoxViewComponent | null>(null)
+  let DemoBoxView = $state<DemoBoxViewComponent | null>(null)
+  let viewLoadError = $state({ history: false, box: false })
+  let historyLoad: Promise<void> | null = null
+  let boxLoad: Promise<void> | null = null
+
+  /** The URL changes at once; the visible panel changes only when it is ready. */
+  let displayedRoute = $state<Route | null>(
+    router.current === 'history' || router.current === 'box' ? null : router.current
+  )
+  let seen = $state({
+    plan: router.current === 'plan',
+    history: false,
+    box: false,
+  })
+  let routeRequest = 0
+  let routeSavedFrom: Route | null = null
+  const scrollByRoute: Record<Route, number> = { now: 0, plan: 0, history: 0, box: 0 }
+
+  function loadView(route: Route): Promise<void> {
+    if (route === 'history') {
+      historyLoad ??= import('$views/History.svelte')
+        .then((module) => {
+          HistoryView = module.default
+        })
+        .catch(() => {
+          viewLoadError.history = true
+        })
+      return historyLoad
+    }
+    if (route === 'box') {
+      boxLoad ??= import('$views/Box.svelte')
+        .then((module) => {
+          BoxView = module.default
+        })
+        .catch(() => {
+          viewLoadError.box = true
+        })
+      return boxLoad
+    }
+    return Promise.resolve()
+  }
+
+  function markSeen(route: Route): void {
+    if (route === 'plan') seen.plan = true
+    if (route === 'history') seen.history = true
+    if (route === 'box') seen.box = true
+  }
+
+  /**
+   * Mount a requested panel while the old one remains visible, then swap.
+   *
+   * The token makes a slow History import unable to win after a later Box
+   * tap. The first tick mounts the target hidden; the second restores that
+   * tab's own scroll position after it becomes the one layout can see.
+   */
+  async function showRoute(route: Route): Promise<void> {
+    const request = ++routeRequest
+    await loadView(route)
+    if (request !== routeRequest || router.current !== route) return
+
+    markSeen(route)
+    await tick()
+    if (request !== routeRequest || router.current !== route) return
+
+    if (displayedRoute && scrollPane && routeSavedFrom !== displayedRoute) {
+      scrollByRoute[displayedRoute] = scrollPane.scrollTop
+    }
+    routeSavedFrom = null
+    displayedRoute = route
+    await tick()
+    if (request === routeRequest && scrollPane) scrollPane.scrollTop = scrollByRoute[route]
+  }
+
   $effect(() => {
-    if (router.current === 'plan') seen.plan = true
-    if (router.current === 'history') seen.history = true
-    if (router.current === 'box') seen.box = true
+    const route = router.current
+    void showRoute(route)
   })
 
-  const needsPairing = $derived(!siteId && !site.paired && !resolvingSite)
+  function go(route: Route): void {
+    // Save before changing the hash. WebKit may reset the scroller as it
+    // updates history, which is too late for the async panel swap to read it.
+    if (displayedRoute && scrollPane) {
+      scrollByRoute[displayedRoute] = scrollPane.scrollTop
+      routeSavedFrom = displayedRoute
+    }
+    router.go(route)
+  }
+
+  const needsPairing = $derived(!demoActive && !siteId && !site.paired && !resolvingSite)
 
   /**
    * Someone asked for the way back into a home this phone already has.
@@ -157,18 +255,26 @@
   let recovering = $state(false)
 
   /** This phone is pointed at a home, whether or not one has painted yet. */
-  const hasHome = $derived(site.paired || siteId !== null)
+  const hasHome = $derived(demoActive || site.paired || siteId !== null)
 
   /** Whatever is feeding the store: the development simulator, or nothing. */
   let stopFeed: (() => void) | undefined
+  /** Public demo controls, kept separate from the development debug handle. */
+  let demoFeed: { tick: () => void; stop: () => void } | undefined
+  /** Newest carrier build asked for per store. Older results are discarded. */
+  const connectGeneration = new WeakMap<SiteStore, number>()
 
   /** The three DOM layers moved directly by the installed app's pull gesture. */
   let scrollPane: HTMLElement
   let pullSurface: HTMLElement
   let pullIndicator: HTMLElement
 
-  /** Development starts on the simulated box unless a real one is paired. */
-  const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
+  /** Development starts on the simulator unless `?pairing` asks to review setup. */
+  const preview = import.meta.env.DEV ? new URLSearchParams(location.search) : null
+  const useSimulator =
+    import.meta.env.DEV &&
+    !preview?.has('pairing') &&
+    (!initialSiteId || initialSiteId === SIM_SITE_ID)
 
   /**
    * Point a store at its box.
@@ -185,7 +291,7 @@
    */
   function openFeed(store: SiteStore, id: string): void {
     if (import.meta.env.DEV && id === SIM_SITE_ID) {
-      // Dynamic import keeps the simulator out of production bundles entirely.
+      // Development loads the same on-demand simulator as the public demo.
       void import('$lib/dev/simulated-site').then(({ attachSimulatedSite }) => {
         // The import lands an await after it was asked for, and a sign-out in
         // that gap replaces the store. A feed for the discarded one must not
@@ -199,6 +305,60 @@
     }
   }
 
+  /**
+   * Start the same protocol simulator used by the test suite.
+   *
+   * No site id is assigned and start() is not called, so the snapshot writer
+   * has no key to write under. Leaving the demo destroys this store instead
+   * of running the real sign-out path.
+   */
+  async function startDemo(): Promise<void> {
+    if (demoActive) return
+    const [{ attachDemoSite }, demoBox] = await Promise.all([
+      import('$lib/demo/simulated-site'),
+      import('$views/DemoBox.svelte'),
+    ])
+    const demoSite = new SiteStore(__APP_BUILD__)
+    let nextDemoFeed: ReturnType<typeof attachDemoSite>
+    try {
+      nextDemoFeed = attachDemoSite(demoSite)
+    } catch (error) {
+      demoSite.destroy()
+      throw error
+    }
+
+    stopFeed?.()
+    site.destroy()
+    site = demoSite
+    demoFeed = nextDemoFeed
+    DemoBoxView = demoBox.default
+    stopFeed = nextDemoFeed.stop
+    demoActive = true
+    recovering = false
+    connectHelp = null
+    pairingFragment = null
+    go('now')
+  }
+
+  /** Return to setup without touching any saved home or passkey. */
+  function exitDemo(): void {
+    if (!demoActive) return
+    stopFeed?.()
+    stopFeed = undefined
+    demoFeed = undefined
+    DemoBoxView = null
+    site.destroy()
+    site = new SiteStore(__APP_BUILD__)
+    demoActive = false
+    siteId = null
+    connectHelp = null
+    restoringHome = false
+    resolvingSite = false
+    seen = { plan: false, history: false, box: false }
+    displayedRoute = 'now'
+    go('now')
+  }
+
   onMount(() => {
     // The last chance to persist. 'visibilitychange' rather than 'unload',
     // which iOS does not reliably fire when an app is swiped away.
@@ -210,7 +370,6 @@
     const nav = navigator as Navigator & { standalone?: boolean }
     // These flags exist only in the Vite development build. They make the
     // two touch-only states renderable in a desktop browser review.
-    const preview = import.meta.env.DEV ? new URLSearchParams(location.search) : null
     const installed =
       nav.standalone === true ||
       window.matchMedia?.('(display-mode: standalone)').matches === true ||
@@ -218,6 +377,15 @@
     if (preview?.has('update-ready')) serviceWorker.waiting = true
     let mounted = true
     let stopPull: (() => void) | undefined
+    let warmTimer: ReturnType<typeof setTimeout> | undefined
+    const warmFrame = requestAnimationFrame(() => {
+      // The launch and first real frame have gone first. These two small view
+      // chunks can now parse off-screen, so the first tab tap never waits on
+      // an import even when it comes from the service worker cache.
+      warmTimer = setTimeout(() => {
+        void Promise.all([loadView('history'), loadView('box')])
+      }, 350)
+    })
     // Not on the first-frame path. The gesture is installed from its cached
     // chunk just after mount, and Safari tabs keep their own native gesture.
     if (installed) {
@@ -227,7 +395,7 @@
           scroller: scrollPane,
           surface: pullSurface,
           indicator: pullIndicator,
-          refresh: refreshApp,
+          refresh: refreshCurrent,
         })
         if (preview?.has('pull-ready')) {
           const fire = (type: string, x: number, y: number) => {
@@ -256,6 +424,8 @@
       document.removeEventListener('visibilitychange', onHide)
       unlisten()
       mounted = false
+      cancelAnimationFrame(warmFrame)
+      clearTimeout(warmTimer)
       stopPull?.()
       stopFeed?.()
       site.destroy()
@@ -272,11 +442,24 @@
   let connectHelp = $state<string | null>(null)
 
   async function connect(store: SiteStore, id: string) {
+    const generation = (connectGeneration.get(store) ?? 0) + 1
+    connectGeneration.set(store, generation)
+    const current = () =>
+      connectGeneration.get(store) === generation && store === site && store.siteId === id
+
     try {
       const { connectToSite } = await import('$lib/state/connect')
-      store.connect(await connectToSite(id))
+      const carrier = await connectToSite(id)
+      if (!current()) {
+        carrier.close('superseded connection')
+        return
+      }
+      if (!store.connect(carrier, id)) return
       connectHelp = null
     } catch (err) {
+      // A failure from home A must not replace home B's current connection
+      // state after a switch, any more than A's carrier may replace B's.
+      if (!current()) return
       // The cached readings stay on screen with an honest age. There is no
       // "try again" button because the carrier reconnects on its own — but
       // that is only true once one exists, and these are the failures where
@@ -290,6 +473,29 @@
       const help = (err as { help?: unknown } | null)?.help
       connectHelp = typeof help === 'string' ? help : null
     }
+  }
+
+  /** Check the app build and ask this home for a fresh stream in place. */
+  async function refreshCurrent(): Promise<void> {
+    // Update discovery is not part of the gesture's critical path. If a new
+    // build finishes installing, UpdateLine appears and the user chooses the
+    // one navigation that is actually needed.
+    void checkForAppUpdate()
+
+    if (demoActive) {
+      demoFeed?.tick()
+      return
+    }
+
+    const id = site.siteId ?? siteId
+    if (!id) return
+
+    if (import.meta.env.DEV && id === SIM_SITE_ID) {
+      globalThis.ftwSim?.box.tick(1_000)
+      return
+    }
+
+    await connect(site, id)
   }
 
   function onPaired(pairedSiteId: string) {
@@ -366,6 +572,8 @@
       // rebuilt in place against the restored store.
       leaveFailed = true
       seen = { plan: false, history: false, box: false }
+      displayedRoute = null
+      void showRoute(router.current)
       throw err
     }
 
@@ -379,7 +587,8 @@
     siteId = null
     // A view kept from the old store would come back holding the old home.
     seen = { plan: false, history: false, box: false }
-    router.go('now')
+    displayedRoute = null
+    go('now')
   }
 </script>
 
@@ -395,12 +604,22 @@
   <!-- Nothing about freshness while the pairing screen is up: the readings it
        would date are not on screen, and this phone is being pointed at a box
        rather than reading one. -->
-  {#if hasHome && !recovering}
+  {#if demoActive}
+    <div class="demo-band" data-live={site.session.phase === 'streaming'} role="status">
+      <span class="demo-dot" aria-hidden="true"></span>
+      <span>{site.session.phase === 'streaming' ? 'Live demo · simulated home' : 'Starting the demo'}</span>
+      <button type="button" onclick={exitDemo}>Exit demo</button>
+    </div>
+  {:else if hasHome && !recovering}
     <FreshnessBand
       carrier={site.carrier}
+      transport={site.session.carrier}
       srcState={site.srcState}
       ageMs={site.ageMs}
       phase={site.session.phase}
+      waitMs={site.connectionWaitMs}
+      frameAtMs={site.lastFrameAtMs}
+      bootPct={site.session.boot?.pct ?? null}
       noCarrier={connectHelp !== null}
     />
   {/if}
@@ -415,7 +634,7 @@
     </div>
 
     <div class="pull-surface" bind:this={pullSurface}>
-    {#if resolvingSite && !pairingFragment}
+    {#if (resolvingSite || restoringHome) && !pairingFragment}
       <!-- A local read, so this is a frame or two. Deliberately quiet: it is
            not a spinner for a network call, it is the app checking what it
            already knows. -->
@@ -431,29 +650,25 @@
         problem={recovering ? connectHelp : null}
         dismiss={recovering ? () => (recovering = false) : null}
         onPaired={(s) => onPaired(s.siteId)}
+        onTryDemo={needsPairing && !pairingFragment ? startDemo : null}
       />
     {:else}
-      <!-- Views are hidden, never destroyed.
-           An {#if} chain tore the whole view down on every tap and built the
-           next one from nothing: Plan threw away a plan it was holding and
-           re-asked the box, History blanked although its tiles were on disk,
-           and the scroll position went with them. That is what "going from
-           live to plan feels like a page reload" was — because it was one.
-           The box's own dashboard keeps every panel in the DOM and toggles a
-           class, which is why it feels instant, and this now does the same.
-           A view that has never been opened is still not built: `seen` gates
-           the first mount, so the cost is paid once and never again. -->
-      <div class="view" hidden={router.current !== 'now'}>
+      <!-- Views are hidden, never destroyed. A target first mounts hidden and
+           only then replaces the visible panel, so a lazy chunk can never
+           leave the shell with nothing to paint. Each tab also gets its own
+           saved scroll position. A view that has never been requested is not
+           built; `seen` pays that cost once and keeps its state after. -->
+      <div class="view" hidden={displayedRoute !== 'now'}>
         <Now
           {site}
-          active={router.current === 'now'}
+          active={displayedRoute === 'now'}
           {connectHelp}
           wayBack={() => (recovering = true)}
         />
       </div>
 
       {#if seen.plan}
-        <div class="view" hidden={router.current !== 'plan'}>
+        <div class="view" hidden={displayedRoute !== 'plan'}>
           <Plan {site} />
         </div>
       {/if}
@@ -461,34 +676,30 @@
       {#if seen.history}
         <!-- Loaded on demand: the chart, its canvas and the tile cache must
              not sit on the path to the first frame of the app. -->
-        <div class="view" hidden={router.current !== 'history'}>
-          {#await import('$views/History.svelte') then module}
-            {@const History = module.default}
-            <History {site} />
-          {:catch}
-            <!-- The chunk never arrived — an update mid-flight, a network that
-                 died under it. Nothing retries a failed import; the next
-                 launch fetches it fresh, and silence here reads as a broken
-                 tab rather than a lost download. -->
+        <div class="view" hidden={displayedRoute !== 'history'}>
+          {#if HistoryView}
+            <HistoryView {site} />
+          {:else if viewLoadError.history}
             <p class="load-note">
               This screen didn't load — it will try again next time you open the app.
             </p>
-          {/await}
+          {/if}
         </div>
       {/if}
 
       {#if seen.box}
         <!-- Opened by hand a handful of times in the life of an install, so it
              is loaded when someone asks for it and never before. -->
-        <div class="view" hidden={router.current !== 'box'}>
-          {#await import('$views/Box.svelte') then module}
-            {@const Box = module.default}
-            <Box {site} {leave} stuck={leaveFailed} />
-          {:catch}
+        <div class="view" hidden={displayedRoute !== 'box'}>
+          {#if demoActive && DemoBoxView}
+            <DemoBoxView {site} onExit={exitDemo} />
+          {:else if BoxView}
+            <BoxView {site} {leave} stuck={leaveFailed} />
+          {:else if viewLoadError.box}
             <p class="load-note">
               This screen didn't load — it will try again next time you open the app.
             </p>
-          {/await}
+          {/if}
         </div>
       {/if}
     {/if}
@@ -512,30 +723,68 @@
       <button
         type="button"
         aria-current={router.current === 'now' ? 'page' : undefined}
-        onclick={() => router.go('now')}>Now</button
+        onclick={() => go('now')}>Now</button
       >
       <button
         type="button"
         aria-current={router.current === 'plan' ? 'page' : undefined}
-        onclick={() => router.go('plan')}>Plan</button
+        onclick={() => go('plan')}>Plan</button
       >
       <button
         type="button"
         aria-current={router.current === 'history' ? 'page' : undefined}
-        onclick={() => router.go('history')}>History</button
+        onpointerdown={() => void loadView('history')}
+        onclick={() => go('history')}>History</button
       >
       <button
         type="button"
         aria-current={router.current === 'box' ? 'page' : undefined}
-        onclick={() => router.go('box')}>Box</button
+        onpointerdown={() => void loadView('box')}
+        onclick={() => go('box')}>Box</button
       >
     </nav>
   {/if}
 
-  <InstallHint />
+  {#if hasHome && !recovering && !demoActive}
+    <InstallHint />
+  {/if}
 </div>
 
 <style>
+  .demo-band {
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 36px;
+    padding: 0 var(--space-4);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--surface-sunken);
+  }
+
+  .demo-dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--fg-muted);
+  }
+
+  .demo-band[data-live='true'] .demo-dot {
+    background: var(--energy-export);
+  }
+
+  .demo-band button {
+    min-height: 36px;
+    margin-left: auto;
+    color: var(--fg-label);
+    touch-action: manipulation;
+  }
+
   .settling {
     min-height: 60vh;
   }
@@ -687,7 +936,16 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--fg-muted);
-    transition: color var(--motion-fast) var(--ease), background var(--motion-fast) var(--ease);
+    touch-action: manipulation;
+    transition:
+      color var(--motion-fast) var(--ease),
+      background var(--motion-fast) var(--ease),
+      transform var(--motion-fast) var(--ease);
+  }
+
+  nav button:active {
+    background: var(--surface-raised);
+    transform: scale(0.97);
   }
 
   nav button[aria-current='page'] {

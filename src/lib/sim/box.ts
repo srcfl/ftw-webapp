@@ -281,6 +281,8 @@ export interface SimBoxOptions {
   now?: () => number
   /** Ceiling the optimiser defends, in watts. */
   ceilingW?: number
+  /** Keep true by default; the public in-memory demo is the sole exception. */
+  requireApiStepUp?: boolean
   /**
    * The role this session's enrolment carries.
    *
@@ -354,6 +356,9 @@ export class SimBox {
       house: this.house,
       now: this.#now,
       ceilingW: this.#ceilingW,
+      ...(opts.requireApiStepUp === undefined
+        ? {}
+        : { requireStepUp: opts.requireApiStepUp }),
       // The API answers about the same charger the door commands: one
       // household, whichever surface asks.
       loadpointState: () => ({

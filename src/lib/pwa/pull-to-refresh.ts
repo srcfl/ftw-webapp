@@ -15,6 +15,8 @@ const THRESHOLD_PX = 56
 const MAX_PX = 104
 const RESISTANCE_PX = 96
 const HOLD_PX = 44
+/** Long enough to read as completed, short enough to never feel held. */
+const MIN_REFRESH_VISIBLE_MS = 280
 
 type Refresh = () => void | Promise<void>
 
@@ -46,6 +48,7 @@ export function attachPullToRefresh({
   let tracking = false
   let locked = false
   let armed = false
+  let refreshing = false
   let settleTimer: ReturnType<typeof setTimeout> | undefined
 
   // The dynamic chunk arrives after mount, so this does not tax the first
@@ -54,7 +57,7 @@ export function attachPullToRefresh({
   surface.style.willChange = 'transform'
 
   const start = (event: TouchEvent) => {
-    if (event.touches.length !== 1 || scroller.scrollTop > 0) return
+    if (refreshing || event.touches.length !== 1 || scroller.scrollTop > 0) return
     const touch = event.touches[0]
     if (!touch) return
 
@@ -117,6 +120,7 @@ export function attachPullToRefresh({
     }
 
     armed = false
+    refreshing = true
     surface.removeAttribute('data-pulling')
     surface.style.transform = `translate3d(0, ${HOLD_PX}px, 0)`
     indicator.dataset.state = 'refreshing'
@@ -125,12 +129,12 @@ export function attachPullToRefresh({
     indicator.setAttribute('aria-hidden', 'false')
     indicator.setAttribute('aria-label', 'Refreshing FTW')
 
+    const shownAt = Date.now()
     try {
-      // A successful refresh navigates. If a host blocks that navigation,
-      // release the held surface instead of leaving the app stuck halfway.
       void Promise.resolve(refresh()).then(
         () => {
-          settleTimer = setTimeout(settle, 1_500)
+          const remaining = Math.max(0, MIN_REFRESH_VISIBLE_MS - (Date.now() - shownAt))
+          settleTimer = setTimeout(settle, remaining)
         },
         settle
       )
@@ -144,6 +148,7 @@ export function attachPullToRefresh({
     tracking = false
     locked = false
     armed = false
+    refreshing = false
     settle()
   }
 

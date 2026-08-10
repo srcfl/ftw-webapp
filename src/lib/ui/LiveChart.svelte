@@ -14,6 +14,8 @@
   fakes.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte'
+
   interface Props {
     /** The current reading, in watts. Null when there is none. */
     value: number | null
@@ -165,14 +167,24 @@
     ctx.fill()
   }
 
-  // One loop, running while mounted. It reads the wall clock only to place
-  // "now" and to pace the ease; a hidden panel is unmounted, so it never
-  // spins unseen.
+  // One loop, only while the reading is live. A stale panel remains mounted
+  // so it can say "last known", but its line and time axis must stop with the
+  // data rather than spending frames moving an old reading across the screen.
   $effect(() => {
+    const running = live
+    if (!running) {
+      untrack(() => {
+        if (nowMs === 0) nowMs = Date.now()
+        bounds()
+        draw()
+      })
+      return
+    }
+
     const loop = (ts: number) => {
       raf = requestAnimationFrame(loop)
       nowMs = Date.now()
-      if (live) displayV = eased(nowMs)
+      displayV = eased(nowMs)
       if (ts - lastPaint < FRAME_MS) return
       lastPaint = ts
       bounds()
@@ -203,12 +215,17 @@
     }
     minY = lo * 1.05
     maxY = hi * 1.05
+    if (!live) {
+      nowMs = Date.now()
+      bounds()
+      draw()
+    }
   })
 
   // A real frame — value and a fresh tick — starts a new ease. Silence (the
   // tick unchanged) leaves the line exactly where it froze.
   $effect(() => {
-    if (value === null) return
+    if (!live || value === null) return
     if (tick !== lastTick) {
       lastTick = tick
       if (history.length === 0) {

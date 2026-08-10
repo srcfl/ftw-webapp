@@ -86,11 +86,15 @@ export class SiteStore {
   #unsub: (() => void) | null = null
   #writer = new SnapshotWriter()
   #siteId: string | null = null
+  /** Invalidates cache reads started for an older home or a dead store. */
+  #startGeneration = 0
   #markedLive = false
   /** Set for good in destroy(). A dead store must not accept a carrier. */
   #destroyed = false
   /** Wall clock when the last frame arrived. Null until one does. */
   #lastFrameAtMs = $state<number | null>(null)
+  /** Start of the current attempt to obtain a fresh frame. */
+  #attemptStartedAtMs = $state(Date.now())
 
   /**
    * A short rolling history of the readings the Now view can draw live, kept
@@ -112,6 +116,10 @@ export class SiteStore {
   constructor(build: string) {
     this.#session = new Session({ build })
     this.#unsub = this.#session.subscribe((s) => {
+      const previousPhase = this.session.phase
+      if (previousPhase === 'streaming' && s.phase !== 'streaming') {
+        this.#attemptStartedAtMs = Date.now()
+      }
       // What counts as a reading arriving, and what only looks like one.
       //
       // A moved uptime is the sign a frame carries: ticks carry it even when
@@ -159,6 +167,9 @@ export class SiteStore {
    * read itself was already started by the inline script in index.html.
    */
   async start(siteId: string): Promise<void> {
+    if (this.#destroyed) return
+    const generation = ++this.#startGeneration
+
     // Repointed at a different home. The subscriber above tags every
     // streaming frame with #siteId, so the old session has to be gone before
     // the id moves — one frame in the gap and the old house is sealed to disk
@@ -171,10 +182,21 @@ export class SiteStore {
       this.cachedAtMs = null
       this.#markedLive = false
     }
+    if (this.#siteId !== siteId) this.#attemptStartedAtMs = Date.now()
     this.#siteId = siteId
 
-    const cached = (await takeBootSnapshot()) ?? (await loadSnapshot(siteId))
-    if (cached) {
+    // The inline boot read belongs to the home localStorage named when the
+    // document opened. A pairing can repoint this store while that read is
+    // still in flight, so both the row id and this attempt have to match before
+    // any bytes reach the session. Otherwise A's late cache paints as B.
+    const boot = await takeBootSnapshot()
+    if (!this.#isCurrentStart(generation, siteId)) return
+
+    const cached = boot?.siteId === siteId ? boot : await loadSnapshot(siteId)
+    if (!this.#isCurrentStart(generation, siteId)) return
+    if (cached?.siteId === siteId) {
+      // A sealed row whose payload names another home is corrupt. Refuse it
+      // here rather than trusting the IndexedDB key that led to it.
       this.#session.restore(sessionPatchFromSnapshot(cached))
       this.cachedAtMs = cached.savedAtMs
 
@@ -289,10 +311,20 @@ export class SiteStore {
    * the band says "Reaching your box" over an honest age.
    */
   get carrier(): CarrierState {
-    if (this.#lastFrameAtMs === null) {
-      return this.cachedAtMs !== null ? 'cache' : 'none'
+    if (this.session.phase === 'streaming' && this.#lastFrameAtMs !== null) {
+      return this.session.carrier
     }
-    return this.session.carrier
+    return this.cachedAtMs !== null ? 'cache' : 'none'
+  }
+
+  /** The last real frame, used to give the live dot one beat per frame. */
+  get lastFrameAtMs(): number | null {
+    return this.#lastFrameAtMs
+  }
+
+  /** Time spent waiting for the first fresh frame in this attempt. */
+  get connectionWaitMs(): number {
+    return Math.max(0, this.#now - this.#attemptStartedAtMs)
   }
 
   get srcState(): SourceState {
@@ -402,17 +434,22 @@ export class SiteStore {
     return permille === undefined ? null : Math.round(permille / 10)
   }
 
-  connect(carrier: Carrier): void {
+  connect(carrier: Carrier, expectedSiteId: string | null = this.#siteId): boolean {
     // A carrier can finish connecting after the store it was meant for is
-    // gone — sign out during a slow connect. Handing it to the session would
-    // start a live, self-reconnecting stream to the home this phone just
-    // left, unreferenced and unclosable. Closed rather than dropped, because
-    // a dropped carrier leaks its socket.
-    if (this.#destroyed) {
-      carrier.close()
-      return
+    // gone or has been repointed — sign out or pair B during a slow connect to
+    // A. Handing it to the session would either leak an unowned stream or put
+    // A's readings and controls under B's name. Closed rather than dropped,
+    // because a dropped carrier leaks its socket.
+    if (this.#destroyed || this.#siteId !== expectedSiteId) {
+      carrier.close('superseded connection')
+      return false
     }
     this.#session.connect(carrier)
+    return true
+  }
+
+  #isCurrentStart(generation: number, siteId: string): boolean {
+    return !this.#destroyed && generation === this.#startGeneration && siteId === this.#siteId
   }
 
   /** Persist before the page can be discarded. */
@@ -446,6 +483,7 @@ export class SiteStore {
 
   destroy(): void {
     this.#destroyed = true
+    this.#startGeneration++
     if (this.#ticker !== null) {
       clearInterval(this.#ticker)
       this.#ticker = null

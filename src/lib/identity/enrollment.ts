@@ -83,7 +83,8 @@ export class EnrollmentError extends Error {
 }
 
 const SCAN_AGAIN = 'That code did not read cleanly. Hold the phone steady and scan it again.'
-const WRONG_CODE = 'That is not an FTW pairing code. Scan the code on the box itself.'
+const WRONG_CODE =
+  "That is not an FTW pairing code. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan the QR shown there."
 const APP_TOO_OLD = 'This box needs a newer version of the app. Update the app, then scan again.'
 const BOX_TOO_OLD = 'This box needs a software update before it can pair. Update the box, then scan again.'
 

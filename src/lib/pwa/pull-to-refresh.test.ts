@@ -32,6 +32,7 @@ function mounted(refresh = vi.fn(() => new Promise<void>(() => {}))) {
 
 afterEach(() => {
   document.body.replaceChildren()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -74,6 +75,21 @@ describe('pull to refresh', () => {
 
     expect(view.refresh).not.toHaveBeenCalled()
     expect(view.surface.style.transform).toBe('translate3d(0, 0, 0)')
+    expect(view.indicator.dataset.state).toBe('settling')
+    view.stop()
+  })
+
+  it('settles quickly after an in-place refresh completes', async () => {
+    vi.useFakeTimers()
+    const view = mounted(vi.fn(() => Promise.resolve()))
+
+    touch(view.scroller, 'touchstart', [{ clientX: 100, clientY: 20 }])
+    touch(view.scroller, 'touchmove', [{ clientX: 102, clientY: 210 }])
+    touch(view.scroller, 'touchend', [])
+    await Promise.resolve()
+
+    expect(view.indicator.dataset.state).toBe('refreshing')
+    await vi.advanceTimersByTimeAsync(280)
     expect(view.indicator.dataset.state).toBe('settling')
     view.stop()
   })

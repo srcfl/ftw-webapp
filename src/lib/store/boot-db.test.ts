@@ -4,12 +4,13 @@ import 'fake-indexeddb/auto'
 
 /* The launch probe must never build the database.
  *
- * index.html opens 'ftw' at version 1 before the bundle parses, to paint the
- * last readings in the first frame. If that open CREATES the database — which
- * it does when none exists — it creates it empty, and db.ts opening the same
- * version afterwards gets no upgrade callback and therefore creates no object
- * stores. Every read and write is then broken for the life of the install,
- * and the user meets a pairing screen for a house they already paired.
+ * index.html opens 'ftw' without asking for a version before the bundle
+ * parses, to paint the last readings in the first frame. If that open CREATES
+ * the database — which it does when none exists — it creates it empty, and an
+ * app opening the same version afterwards gets no upgrade callback and
+ * therefore creates no object stores. Every read and write is then broken for
+ * the life of the install, and the user meets a pairing screen for a house
+ * they already paired.
  *
  * These tests drive the two opens in the order a cold launch does.
  */
@@ -17,7 +18,7 @@ import 'fake-indexeddb/auto'
 /** Exactly what the inline script in index.html does, aborting on upgrade. */
 function bootProbe(name: string): Promise<string[]> {
   return new Promise((resolve) => {
-    const req = indexedDB.open(name, 1)
+    const req = indexedDB.open(name)
     req.onerror = () => resolve([])
     req.onupgradeneeded = () => {
       try {
@@ -36,10 +37,10 @@ function bootProbe(name: string): Promise<string[]> {
   })
 }
 
-/** Stands in for db.ts: same name, same version, creates the schema. */
+/** Stands in for db.ts: same name, current version, creates the schema. */
 function appOpen(name: string): Promise<{ upgraded: boolean; stores: string[] }> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(name, 1)
+    const req = indexedDB.open(name, 2)
     let upgraded = false
     req.onupgradeneeded = () => {
       upgraded = true
@@ -78,5 +79,13 @@ describe('the launch probe and the app database', () => {
     const again = await appOpen(name)
     expect(again.upgraded, 'no second upgrade on a database that exists').toBe(false)
     expect(again.stores).toEqual(['sites', 'snapshot'])
+  })
+
+  it('opens the current schema instead of failing as an older version', async () => {
+    const name = `ftw-current-${Math.random().toString(36).slice(2)}`
+
+    await appOpen(name)
+
+    expect(await bootProbe(name)).toEqual(['sites', 'snapshot'])
   })
 })

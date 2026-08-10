@@ -101,6 +101,9 @@ describe('the Now screen', () => {
     const { rerender } = render(Now, { props: { site, active: false } })
     for (let i = 0; i < 100 && !flowEl(); i++) await vi.advanceTimersByTimeAsync(20)
     expect(flowEl()).not.toBeNull()
+    expect(flowEl()!.hasAttribute('static'), 'the hidden particle loop was still running').toBe(
+      true
+    )
 
     const fed = vi.spyOn(flowEl()!, 'setReadings')
 
@@ -114,5 +117,6 @@ describe('the Now screen', () => {
     await rerender({ active: true })
     await vi.advanceTimersByTimeAsync(20)
     expect(fed, 'coming back never caught the view up').toHaveBeenCalled()
+    expect(flowEl()!.hasAttribute('static'), 'the live view stayed frozen on return').toBe(false)
   })
 })

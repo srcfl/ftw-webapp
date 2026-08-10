@@ -1,8 +1,8 @@
-/* Development wiring: a simulated box, ticking in the browser.
+/* Demo wiring: a simulated box, ticking in the browser.
  *
- * Lets the whole client be built and demonstrated without hardware, a relay,
- * or a Pi on the desk. Tree-shaken out of production builds because nothing
- * in the shipping path imports it.
+ * Lets the whole client be tested and demonstrated without hardware, a relay,
+ * or a Pi on the desk. Production loads it only after someone chooses the
+ * public demo; it never sits on the path to the first frame.
  *
  * Fault switches are exposed on `window.ftwSim` so the failure states can be
  * driven by hand while looking at the screen. Most of what this app does is
@@ -47,10 +47,17 @@ export function attachSimulatedSite(store: SiteStore): SimHandle {
   store.ceilingW = 11_000
 
   const timer = setInterval(() => box.tick(1000), 1000)
+  let stopped = false
 
   const handle: SimHandle = {
     box,
-    stop: () => clearInterval(timer),
+    stop: () => {
+      if (stopped) return
+      stopped = true
+      clearInterval(timer)
+      carrier.close('simulator stopped')
+      if (globalThis.ftwSim === handle) globalThis.ftwSim = undefined
+    },
     fault: (patch) => {
       box.faults = { ...box.faults, ...patch }
     },

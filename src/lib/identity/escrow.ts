@@ -199,13 +199,21 @@ export type SaveOutcome =
 export async function saveEscrowCopy(
   store: VaultStore,
   wrapping: WrappingKey,
-  opts: EscrowOptions = {}
+  opts: EscrowOptions = {},
+  pendingHome?: RecoverableHome
 ): Promise<SaveOutcome> {
   const keys = wrapping.escrow
   if (!keys) return 'unsupported'
 
   try {
-    const homes = await escrowedHomes()
+    const marked = await escrowedHomes()
+    // Pairing has not marked its new home yet. Include it in this one write,
+    // then let the caller mark it only after the service confirms the copy.
+    // A crash can therefore leave a copy unmarked, but can never make the UI
+    // claim Sourceful holds one that did not land.
+    const homes = pendingHome
+      ? [...marked.filter((home) => home.siteId !== pendingHome.siteId), pendingHome]
+      : marked
     if (homes.length === 0) {
       // Every marked home is gone but the device key is still here. Leaving a
       // copy that opens nothing would offer the next fresh install an empty
@@ -380,7 +388,7 @@ export async function recoverFromEscrow(opts: EscrowOptions = {}): Promise<Recov
     throw new RecoveryBlobError(
       'the credential answered with no PRF output',
       'E_BLOB_LOCKED',
-      'This browser cannot unlock what your passkey saved. Try opening the app in Safari, or scan the code on your box.'
+      "This browser cannot unlock what your passkey saved. Try opening the app in Safari, or open your box's local dashboard and use Settings → FTW app → Show pairing code."
     )
   }
 
@@ -588,7 +596,7 @@ function refused(status: number): EscrowError {
   return new EscrowError(
     `the escrow answered ${status}`,
     'E_ESCROW_REFUSED',
-    'The saved copy could not be read. Scan the code on your box instead.'
+    "The saved copy could not be read. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR instead."
   )
 }
 

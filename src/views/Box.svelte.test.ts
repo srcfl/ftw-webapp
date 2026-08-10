@@ -210,11 +210,9 @@ describe('leaving, from the phone', () => {
 
 /* The spare key, and what it costs.
  *
- * This is the one thing on this screen that can be turned on, so the two
- * things worth pinning are that it says what it is in the words Sourceful is
- * held to, and that it does nothing whatever until someone asks. A screen that
- * quietly uploads a sealed copy is the same defect as a link that quietly
- * pairs, and it is harder to notice.
+ * Pairing saves the copy by default when PRF and the network are available.
+ * This block starts from the valid fallback state where no copy was saved. It
+ * pins Sourceful's claim and that the Box screen retries only after a tap.
  */
 describe('the sealed copy Sourceful can hold', () => {
   let mock: MockAuthenticator | null = null
@@ -267,7 +265,7 @@ describe('the sealed copy Sourceful can hold', () => {
     )
     // The product's sentence, word for word.
     expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toContain(
-      'sealed copy it cannot open, with an opaque id and nothing beside it'
+      'can hold that copy without opening it, with an opaque id and nothing beside it'
     )
     // And what it costs, on the same screen and before the button — the trade
     // is the passkey becoming enough on its own, and a screen that names only
@@ -278,7 +276,7 @@ describe('the sealed copy Sourceful can hold', () => {
     expect(said).not.toMatch(/we cannot ever/i)
   })
 
-  it('holds nothing, and asks nothing, until someone taps', async () => {
+  it('does not retry a missing copy until someone taps', async () => {
     await enrolledWithPasskey()
     const before = mock!.getCalls
     mounted()
@@ -287,14 +285,14 @@ describe('the sealed copy Sourceful can hold', () => {
     )
     await new Promise((r) => setTimeout(r, 20))
 
-    expect(calls, 'the screen uploaded a copy nobody asked for').toEqual([])
+    expect(calls, 'the screen retried a missing copy without a tap').toEqual([])
     expect(mock!.getCalls, 'the screen opened a passkey sheet on its own').toBe(before)
     const database = await db()
     expect((await database.get('sites', SITE_ID))?.escrow).toBeUndefined()
   })
 
-  it('signs out with no prompt and no request when nobody asked for a copy', async () => {
-    // The whole cost of never opting in, on the screen where it would show.
+  it('signs out with no prompt and no request when no copy was saved', async () => {
+    // Pairing can leave this state when PRF or the network is unavailable.
     await enrolledWithPasskey()
     const { left } = mounted()
     const before = mock!.getCalls

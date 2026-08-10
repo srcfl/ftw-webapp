@@ -30,6 +30,7 @@ import {
 import { CarrierBase, type Carrier, type CarrierStatus } from '$lib/carrier/carrier'
 import { encodeFrame, LANE_CONTROL } from '$lib/protocol/frame'
 import { SiteStore } from '$lib/state/site.svelte'
+import { buildEnrollmentUrl } from '$lib/identity/enrollment'
 
 // jsdom has no ResizeObserver, and the History chart measures its own box
 // with one. Nothing below depends on the width it would report.
@@ -69,6 +70,36 @@ vi.mock('$lib/state/connect', async (importOriginal) => {
         : Promise.reject(new Error('nothing answered')),
   }
 })
+
+function promiseGate<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => (resolve = done))
+  return { promise, resolve }
+}
+
+/** A carrier whose owner and close can be observed without opening a socket. */
+class TrackedCarrier extends CarrierBase implements Carrier {
+  readonly kind = 'relay' as const
+  readonly rttMs = null
+  status: CarrierStatus = { phase: 'connecting' }
+  attached = false
+  closed = false
+
+  send(): void {}
+
+  override onFrame(handler: (frame: Uint8Array) => void): () => void {
+    this.attached = true
+    return super.onFrame(handler)
+  }
+
+  close(reason = 'closed by test'): void {
+    if (this.closed) return
+    this.closed = true
+    this.status = { phase: 'closed', reason, retryable: false }
+    this.emitStatus(this.status)
+    this.clearHandlers()
+  }
+}
 
 const SITE_ID = 'sim-0001'
 
@@ -130,6 +161,113 @@ async function pairPhone(siteId: string) {
   localStorage.setItem('ftw.site', siteId)
 }
 
+describe('the public demo', () => {
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    history.replaceState(null, '', '/?pairing')
+    location.hash = ''
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+  })
+
+  afterEach(() => {
+    cleanup()
+    history.replaceState(null, '', '/')
+    vi.restoreAllMocks()
+  })
+
+  it('runs all four tabs in memory and exits without touching pairing data', async () => {
+    render(App)
+    ;(await screen.findByRole('button', { name: /try the live demo/i }, { timeout: 4_000 })).click()
+
+    await screen.findByText(/Live demo · simulated home/i, undefined, { timeout: 4_000 })
+    expect(screen.getAllByRole('button', { name: /^(now|plan|history|box)$/i })).toHaveLength(4)
+    expect(localStorage.getItem('ftw.site')).toBeNull()
+    expect(globalThis.ftwSim, 'the public demo exposed the development control').toBeUndefined()
+
+    ;(await screen.findByRole('button', { name: /^plan$/i })).click()
+    await screen.findByText(/How your home is run/i, undefined, { timeout: 4_000 })
+
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await screen.findByText(/Last 7 days/i, undefined, { timeout: 4_000 })
+
+    ;(await screen.findByRole('button', { name: /^box$/i })).click()
+    await screen.findByRole('heading', { name: /demo home/i }, { timeout: 4_000 })
+    expect(screen.queryByRole('button', { name: /^sign out$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /turn on notifications/i })).toBeNull()
+
+    ;(await screen.findByRole('button', { name: /^exit demo$/i })).click()
+    await screen.findByRole('heading', { name: /connect ftw/i }, { timeout: 4_000 })
+
+    const database = await db()
+    expect(await database.getAll('sites')).toEqual([])
+    expect(await database.getAll('snapshot')).toEqual([])
+    expect(await database.getAll('tiles')).toEqual([])
+    expect(localStorage.getItem('ftw.site')).toBeNull()
+  })
+})
+
+describe('switching homes while the first carrier is still being built', () => {
+  const HOME_A = 'home-a'
+
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+    await resetIdentity(openVaultStore())
+    await pairPhone(HOME_A)
+
+    const offered = buildEnrollmentUrl({
+      boxStaticPublic: new Uint8Array(32).fill(8),
+      pairingCode: new Uint8Array(16).fill(4),
+      rendezvousSecret: new Uint8Array(32).fill(5),
+      lanHint: '',
+    })
+    history.replaceState(null, '', `/p${new URL(offered).hash}`)
+  })
+
+  afterEach(() => {
+    seam.openCarrier = null
+    cleanup()
+    history.replaceState(null, '', '/')
+    vi.restoreAllMocks()
+  })
+
+  it('closes A when B resolves first and A resolves last', async () => {
+    const pending = new Map<string, ReturnType<typeof promiseGate<Carrier>>>()
+    seam.openCarrier = (siteId) => {
+      const gate = promiseGate<Carrier>()
+      pending.set(siteId, gate)
+      return gate.promise
+    }
+
+    render(App)
+    await vi.waitFor(() => expect(pending.has(HOME_A)).toBe(true), { timeout: 4_000 })
+
+    await screen.findByRole('heading', { name: /connect to a different box/i }, { timeout: 4_000 })
+    ;(await screen.findByRole('button', { name: /^connect [0-9a-f]{6}$/i })).click()
+
+    await vi.waitFor(() => expect(pending.size).toBe(2), { timeout: 4_000 })
+    const homeB = [...pending.keys()].find((id) => id !== HOME_A)
+    expect(homeB).toBeDefined()
+
+    const carrierB = new TrackedCarrier()
+    pending.get(homeB!)!.resolve(carrierB)
+    await vi.waitFor(() => expect(carrierB.attached).toBe(true))
+
+    const carrierA = new TrackedCarrier()
+    pending.get(HOME_A)!.resolve(carrierA)
+    await vi.waitFor(() => expect(carrierA.closed).toBe(true))
+
+    expect(carrierA.attached, 'A replaced B after the home switch').toBe(false)
+    expect(carrierB.closed, 'discarding A closed the current B carrier').toBe(false)
+  })
+})
+
 describe('signing out, from the phone', () => {
   beforeEach(async () => {
     vi.stubGlobal('localStorage', stubStorage())
@@ -153,7 +291,7 @@ describe('signing out, from the phone', () => {
 
     await confirmSignOut()
 
-    await screen.findByText(/Connect your box/i, undefined, { timeout: 4_000 })
+    await screen.findByText(/Connect FTW/i, undefined, { timeout: 4_000 })
     expect(await database.get('sites', SITE_ID)).toBeUndefined()
     expect(await database.get('snapshot', SITE_ID)).toBeUndefined()
     expect(await isEnrolled(openVaultStore()), 'the key outlived the home it opens').toBe(false)
@@ -180,7 +318,7 @@ describe('signing out, from the phone', () => {
     })
 
     await confirmSignOut()
-    await screen.findByText(/Connect your box/i, undefined, { timeout: 4_000 })
+    await screen.findByText(/Connect FTW/i, undefined, { timeout: 4_000 })
 
     // A sealed reading of the household this phone has just left, under a
     // cache key minted on demand to replace the one that went with it.
@@ -205,7 +343,7 @@ describe('signing out, from the phone', () => {
     await confirmSignOut()
 
     await screen.findByText(/still on this phone and still works/i, undefined, { timeout: 4_000 })
-    expect(screen.queryByText(/Connect your box/i)).toBeNull()
+    expect(screen.queryByText(/Connect FTW/i)).toBeNull()
     expect(await database.get('sites', SITE_ID)).toBeTruthy()
 
     // And the sentence on screen has to be true. Signing out stops the
@@ -260,6 +398,44 @@ describe('signing out, from the phone', () => {
       },
       { timeout: 4_000 }
     )
+  })
+
+  it('keeps one populated panel visible through first and rapid tab taps', async () => {
+    await houseOnScreen()
+    const visible = () =>
+      [...document.querySelectorAll<HTMLElement>('.view')].filter((view) => !view.hidden)
+    const expectOne = () => {
+      expect(visible(), 'the shell showed zero or two panels').toHaveLength(1)
+      expect(visible()[0]!.textContent?.trim(), 'the visible panel was empty').not.toBe('')
+    }
+
+    expectOne()
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    // The old panel stays until the first History chunk has loaded and the
+    // target has mounted hidden. There is no empty promise branch to paint.
+    expectOne()
+
+    ;(await screen.findByRole('button', { name: /^box$/i })).click()
+    await screen.findByText(/Your FTW box/i, undefined, { timeout: 4_000 })
+    expectOne()
+    expect(screen.getByRole('button', { name: /^box$/i }).getAttribute('aria-current')).toBe(
+      'page'
+    )
+  })
+
+  it('restores each tab scroll position', async () => {
+    await houseOnScreen()
+    const main = document.querySelector('main')!
+
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await screen.findByText(/Last 7 days/i, undefined, { timeout: 4_000 })
+    main.scrollTop = 355
+
+    ;(await screen.findByRole('button', { name: /^now$/i })).click()
+    await vi.waitFor(() => expect(main.scrollTop).toBe(0), { timeout: 4_000 })
+
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await vi.waitFor(() => expect(main.scrollTop).toBe(355), { timeout: 4_000 })
   })
 })
 
@@ -471,10 +647,10 @@ describe('the way back, for a phone that cannot get in', () => {
 
     await takeTheWayBack(/get this phone back in/i)
 
-    // The two ways in that work with no key: the code on the box, and the
+    // The two ways that work with no key: a new QR from the box dashboard and the
     // sealed copy a passkey opens.
-    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
-    expect(buttonSaying(/set this up before/i), 'the sealed copy was not offered').toBeDefined()
+    await screen.findByRole('button', { name: /scan the pairing qr/i }, { timeout: 4_000 })
+    expect(buttonSaying(/open with your passkey/i), 'the sealed copy was not offered').toBeDefined()
   })
 
   it('does not say it is reaching a box it can never reach', async () => {
@@ -504,9 +680,9 @@ describe('the way back, for a phone that cannot get in', () => {
     render(App)
     await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the pairing qr/i }, { timeout: 4_000 })
 
-    expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
+    expect(buttonSaying(/scan a new pairing qr/i)).toBeUndefined()
     expect(buttonSaying(/^\s*Open Home\s*$/), 'offered to open a home it holds no key for').toBeUndefined()
   })
 
@@ -526,12 +702,11 @@ describe('the way back, for a phone that cannot get in', () => {
     await takeTheWayBack(/won't let this phone in/i)
     await screen.findByText(/Welcome back/i, undefined, { timeout: 4_000 })
 
-    // Not the sealed copy: it puts back the same device key, which is the key
-    // this box has just refused. What works is the eight characters the box
-    // will read out to whoever is standing at it.
-    expect(buttonSaying(/set this up before/i), 'offered a copy of the key it was refused for').toBeUndefined()
-    buttonSaying(/won't let this phone in/i)!.click()
-    await screen.findByText(/Type the code from your box/i, undefined, { timeout: 4_000 })
+    // A passkey copy would put back the same key the box refused. The current
+    // box offers a fresh Settings QR, not a spoken code.
+    expect(buttonSaying(/open with your passkey/i), 'offered a copy of the key it was refused for').toBeUndefined()
+    expect(buttonSaying(/scan a new pairing qr/i)).toBeDefined()
+    expect(document.querySelector('input')).toBeNull()
   })
 
   it('reaches it from a box that has withdrawn this phone out loud', async () => {
@@ -564,14 +739,14 @@ describe('the way back, for a phone that cannot get in', () => {
       timeout: 4_000,
     })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the pairing qr/i }, { timeout: 4_000 })
 
     expect(
       buttonSaying(/^\s*Open Home\s*$/),
       'offered to open a home it cannot reach, which lands straight back here'
     ).toBeUndefined()
-    expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
-    expect(buttonSaying(/set this up before/i)).toBeDefined()
+    expect(buttonSaying(/scan a new pairing qr/i)).toBeUndefined()
+    expect(buttonSaying(/open with your passkey/i)).toBeDefined()
   })
 
   it('is a way back and not another dead end', async () => {
@@ -582,7 +757,7 @@ describe('the way back, for a phone that cannot get in', () => {
     render(App)
     await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the pairing qr/i }, { timeout: 4_000 })
 
     buttonSaying(/^\s*Not now\s*$/)!.click()
     await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
