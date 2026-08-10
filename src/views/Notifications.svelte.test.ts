@@ -148,6 +148,14 @@ describe('the notifications section', () => {
     expect(asked.applicationServerKey![0]).toBe(4)
     expect(box.api.pushSubscriptions).toEqual(['https://push.example/p/one'])
 
+    // The box is actually ON. A subscription with the master switch still
+    // off sends nothing and a test says "notifications disabled" — the exact
+    // hole a real phone fell into — so turning on flips the switch and puts
+    // the catalogue kinds on by default.
+    expect(box.api.pushEnabled, 'subscribed but the box stayed switched off').toBe(true)
+    expect(box.api.pushRules['charging.session_complete']).toBe(true)
+    expect(box.api.pushRules['charging.interrupted']).toBe(true)
+
     // And the section now offers what an enabled phone can do.
     expect(buttonSaying(/Send a test/)).toBeDefined()
     expect(buttonSaying(/Turn off notifications/)).toBeDefined()

@@ -198,6 +198,16 @@ export class NotifyStore {
         throw err
       }
 
+      // Turn the box on. A subscription alone is a phone the box CAN reach
+      // and a master switch still off — so nothing sends, and a test says
+      // "notifications disabled". Enabling here flips the switch and puts the
+      // catalogue kinds on by default, because turning notifications on and
+      // then hearing nothing is the wrong first impression; the toggles pare
+      // it back. Riding the step-up window the subscribe just opened, so no
+      // second prompt. Best-effort: the subscription stands even if this
+      // does not land, and the toggles can turn the box on later.
+      await this.#writeRules(Object.fromEntries(RULE_KINDS.map((k) => [k, true]))).catch(() => {})
+
       this.#remember()
       this.enabled = true
     } catch (err) {
@@ -282,32 +292,44 @@ export class NotifyStore {
     this.error = null
     this.testSent = false
     try {
-      if (this.#doc === null) await this.loadRules()
-      const doc = this.#doc
-      if (doc === null) {
-        this.error = "Your box didn't answer. Nothing has changed."
-        return false
-      }
-
-      const events = doc.events
-        .filter((rule) => RULE_KINDS.some((k) => k === rule.type) && rule.type in next)
-        .map((rule) => ({ ...rule, enabled: next[rule.type] === true }))
-
-      const wire = await callBox<unknown>(this.#site, {
-        method: 'PUT',
-        path: '/api/notifications/rules',
-        body: { enabled: true, events },
-      })
-      const stored = toDoc(wire)
-      if (stored) this.#applyDoc(stored)
-      this.#remember()
-      return true
-    } catch (err) {
-      this.#fail(err)
-      return false
+      return await this.#writeRules(next)
     } finally {
       this.busy = 'none'
     }
+  }
+
+  /**
+   * The write itself, without touching `busy` — so the enable flow, already
+   * busy, can turn the box on in the same breath as subscribing.
+   *
+   * `next` names which catalogue kinds are on; every entry the box carries
+   * goes out whole (flipped only on `enabled`), because the box replaces a
+   * rule wholesale and a partial one would wipe the thresholds it seeded.
+   * Kinds the box's document does not carry are not sent — an older box must
+   * not meet a kind it would refuse by name. The master switch goes on: a
+   * phone writing its notification rules is a phone asking to be notified.
+   */
+  async #writeRules(next: Record<string, boolean>): Promise<boolean> {
+    if (this.#doc === null) await this.loadRules()
+    const doc = this.#doc
+    if (doc === null) {
+      this.error = "Your box didn't answer. Nothing has changed."
+      return false
+    }
+
+    const events = doc.events
+      .filter((rule) => RULE_KINDS.some((k) => k === rule.type) && rule.type in next)
+      .map((rule) => ({ ...rule, enabled: next[rule.type] === true }))
+
+    const wire = await callBox<unknown>(this.#site, {
+      method: 'PUT',
+      path: '/api/notifications/rules',
+      body: { enabled: true, events },
+    })
+    const stored = toDoc(wire)
+    if (stored) this.#applyDoc(stored)
+    this.#remember()
+    return true
   }
 
   /** Ask the box to send one real push through the whole pipe. */
