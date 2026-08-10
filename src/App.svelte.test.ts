@@ -473,7 +473,7 @@ describe('the way back, for a phone that cannot get in', () => {
 
     // The two ways in that work with no key: the code on the box, and the
     // sealed copy a passkey opens.
-    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
     expect(buttonSaying(/set this up before/i), 'the sealed copy was not offered').toBeDefined()
   })
 
@@ -504,7 +504,7 @@ describe('the way back, for a phone that cannot get in', () => {
     render(App)
     await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
 
     expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
     expect(buttonSaying(/^\s*Open Home\s*$/), 'offered to open a home it holds no key for').toBeUndefined()
@@ -564,7 +564,7 @@ describe('the way back, for a phone that cannot get in', () => {
       timeout: 4_000,
     })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
 
     expect(
       buttonSaying(/^\s*Open Home\s*$/),
@@ -582,7 +582,7 @@ describe('the way back, for a phone that cannot get in', () => {
     render(App)
     await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
     await takeTheWayBack(/get this phone back in/i)
-    await screen.findByRole('button', { name: /scan code/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /scan the code/i }, { timeout: 4_000 })
 
     buttonSaying(/^\s*Not now\s*$/)!.click()
     await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })

@@ -9,6 +9,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { canScan, scanForEnrollment, ScanError, type ScanHandle } from '$lib/identity/scan'
+  import { currentEnvironment, isIosSafariTab } from '$lib/pwa/install'
   import { boxFingerprint, pairWithBox, type PairedSite } from '$lib/identity/pairing'
   import { EnrollmentError } from '$lib/identity/enrollment'
   import { BOX_CODE_CHARS, foldBoxCode, groupBoxCode } from '$lib/identity/boxcode'
@@ -39,6 +40,16 @@
   }
 
   let { onPaired, fragment = null, problem = null, dismiss = null }: Props = $props()
+
+  /**
+   * Running in an iOS browser tab rather than from the home screen.
+   *
+   * Decided once: neither answer can change without a new page load. Unlike
+   * the app-wide hint this is not shown once and then never again — someone
+   * setting up their home is exactly who needs to install first, and they
+   * may well come back to this screen more than once before they finish.
+   */
+  const inSafariTab = isIosSafariTab(currentEnvironment())
 
   type Stage = 'intro' | 'scanning' | 'typing' | 'pairing' | 'error' | 'recovering' | 'choosing'
 
@@ -395,6 +406,28 @@
       <p class="problem">{message}</p>
     {/if}
 
+    {#if inSafariTab}
+      <!-- Said here, on the screen someone actually lands on, and not as a
+           strip at the foot of the app. On iOS this is not a nicety: a tab's
+           storage is evicted after a week away, and notifications only reach
+           an installed app — so a phone that never installs loses its cache
+           on exactly the schedule that makes the app feel slow, and can
+           never be told its car has finished charging. iOS gives a page no
+           way to open the Share sheet, so naming the two taps is the whole
+           of what can honestly be done. -->
+      <div class="install">
+        <p class="install-title">Add FTW to your home screen first</p>
+        <p class="install-steps">
+          Tap <span class="key">Share</span>, then
+          <span class="key">Add to Home Screen</span>.
+        </p>
+        <p class="install-why">
+          It opens instantly, keeps your readings between visits, and is the
+          only way your box can notify you.
+        </p>
+      </div>
+    {/if}
+
     {#if canOpen}
       <button class="primary" onclick={() => onPaired({ siteId: known!.siteId } as PairedSite)}>
         Open {known?.label}
@@ -419,29 +452,40 @@
       </p>
     {/if}
 
-    {#if canScan()}
-      <!-- "Add another box" only where that is what it would do. From a home
-           this phone cannot open, the same button is how it gets back into
-           that same box, and calling it a second box would be a lie about
-           which house is on the other side of it. -->
-      <button class={canOpen ? 'quiet' : 'primary'} onclick={startScan}>
-        {canOpen ? 'Add another box' : 'Scan code'}
-      </button>
-    {/if}
-    <p class="hint">
-      Or point your phone's camera at the code. It opens the same link.
-    </p>
-
-    {#if !canOpen}
-      <!-- The other way in, for a phone whose storage is gone and whose
-           passkey is not. It is a button and never a check on arrival: asking
-           costs a Face ID prompt, and nothing may stand in front of the first
-           frame. Someone who never saved a copy sees no sheet at all — they
-           get told there is nothing, once, because they asked. -->
-      <button class="quiet" onclick={() => void recover()}>I've set this up before</button>
+    {#if canOpen}
+      {#if canScan()}
+        <!-- "Add another box" only where that is what it would do. From a home
+             this phone cannot open, the same button is how it gets back into
+             that same box, and calling it a second box would be a lie about
+             which house is on the other side of it. -->
+        <button class="quiet" onclick={startScan}>Add another box</button>
+      {/if}
+    {:else}
+      <!-- The two ways in, side by side and weighted the same, because for
+           somebody arriving they are the same size of question: is this box
+           new to me, or have I been here before? Making one a button and the
+           other a line of small text answered that question for them, and
+           answered it wrong for everyone coming back to a phone whose storage
+           was wiped. -->
+      <div class="ways">
+        {#if canScan()}
+          <button class="way" onclick={startScan}>
+            <span class="way-title">Scan the code on your box</span>
+            <span class="way-note">First time here. Two taps and you are in.</span>
+          </button>
+        {/if}
+        <!-- Asking costs a Face ID prompt, so it stays a thing someone
+             presses rather than a check on arrival: nothing may stand in
+             front of the first frame, and a passkey that never saved a copy
+             is told so once, because it asked. -->
+        <button class="way" onclick={() => void recover()}>
+          <span class="way-title">I've set this up before</span>
+          <span class="way-note">Open your home again with your passkey.</span>
+        </button>
+      </div>
       <p class="hint">
-        If you asked Sourceful to keep a sealed copy of your home, your passkey
-        opens it here.
+        Or point your phone's camera at the code on your box. It opens the
+        same link.
       </p>
     {/if}
 
@@ -543,6 +587,77 @@
 
   .primary:disabled {
     opacity: 0.4;
+  }
+
+  /* Said where someone lands, not at the foot of the app. It is an
+     instruction rather than a warning, so it carries the accent edge the
+     app uses for "here is the thing to do" and none of the alarm of a
+     problem. */
+  .install {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: 100%;
+    padding: var(--space-4);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius-md);
+  }
+
+  .install-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+  .install-steps {
+    font-size: 15px;
+    color: var(--fg-dim);
+  }
+
+  .install-why {
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .key {
+    color: var(--fg-label);
+    font-weight: 600;
+  }
+
+  /* The two doors in, weighted the same. Neither is the recommended one:
+     which fits depends on something only the person holding the phone
+     knows, so the screen asks rather than steers. */
+  .ways {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+  }
+
+  .way {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    width: 100%;
+    padding: var(--space-4);
+    text-align: left;
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+
+  .way-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+  .way-note {
+    font-size: 13px;
+    color: var(--fg-dim);
   }
 
   .viewfinder {

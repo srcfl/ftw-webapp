@@ -292,3 +292,69 @@ describe('typing a code the box read out', () => {
     expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
   })
 })
+
+/* The first thing anyone sees, and the two questions it has to answer.
+ *
+ * Someone landing on app.ftw.energy is deciding two things at once: whether
+ * to install, and which way in is theirs. The screen used to answer the
+ * first with a strip at the foot of the app shown once per device, and the
+ * second by making "scan" a button and "I've been here before" a line of
+ * small text — which reads as one real way in and one afterthought.
+ */
+describe('arriving for the first time', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.unstubAllGlobals()
+  })
+
+  function asIosSafariTab() {
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      standalone: false,
+      maxTouchPoints: 5,
+    })
+  }
+
+  it('offers both ways in as the same size of choice', async () => {
+    render(Pair, { props: { onPaired: vi.fn() } })
+
+    // Both are buttons a thumb lands on, not one button and one hint. The
+    // scan is only offered where a camera exists, so it is asserted through
+    // whichever of the two this environment can draw.
+    const before = await screen.findByRole('button', { name: /i've set this up before/i })
+    expect(before).toBeTruthy()
+
+    // And neither is dressed as the recommended one: the accent-filled
+    // primary belongs to a single obvious action, and here there is none.
+    expect(before.className).not.toMatch(/primary/)
+  })
+
+  it('says how to install, where someone lands rather than at the foot of the app', async () => {
+    asIosSafariTab()
+    render(Pair, { props: { onPaired: vi.fn() } })
+
+    const said = (document.body.textContent ?? '').replace(/\s+/g, ' ')
+    expect(said, 'no install instruction on the screen someone arrives at').toMatch(
+      /add ftw to your home screen/i
+    )
+    // The two taps, named — iOS gives a page no way to open the Share sheet,
+    // so naming them is the whole of what can honestly be done.
+    expect(said).toMatch(/share/i)
+    expect(said).toMatch(/add to home screen/i)
+    // And why, in terms of what the person gets rather than storage policy.
+    expect(said).toMatch(/notify|instantly|between visits/i)
+  })
+
+  it('says nothing about installing to a phone that already did', async () => {
+    // Standalone: the app is on the home screen, so the instruction would be
+    // telling someone to do a thing they have done.
+    vi.stubGlobal('navigator', { ...navigator, standalone: true, maxTouchPoints: 5 })
+    render(Pair, { props: { onPaired: vi.fn() } })
+
+    expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).not.toMatch(
+      /add to home screen/i
+    )
+  })
+})
