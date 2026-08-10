@@ -9,6 +9,7 @@
   chart and the chart's own leading edge are the same reading.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte'
   import LiveChart from '$lib/ui/LiveChart.svelte'
   import { formatPower } from '$lib/format/power'
   import { FID } from '$lib/format/explanation'
@@ -91,6 +92,13 @@
 
   const parts = $derived(plotValue === null ? null : formatPower(plotValue))
 
+  // The last couple of minutes the Now view has been collecting, mapped to
+  // the plot value, so the line opens already drawn. Read once at mount —
+  // untracked so it does not re-run as the buffer grows.
+  const seed = untrack(() =>
+    site.recentField(spec.fid).map((s) => ({ t: s.t, v: spec.signed ? s.v : Math.abs(s.v) }))
+  )
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
   }
@@ -116,7 +124,7 @@
     <p class="sub">{spec.words(spec.signed ? (raw ?? 0) : Math.abs(raw ?? 0))}{live ? '' : ' · last known'}</p>
 
     <div class="chart">
-      <LiveChart value={plotValue} {tick} signed={spec.signed} color={spec.color} {live} />
+      <LiveChart value={plotValue} {tick} signed={spec.signed} color={spec.color} {live} {seed} />
     </div>
     <p class="axis">last two minutes</p>
   {/if}

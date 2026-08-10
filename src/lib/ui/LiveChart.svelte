@@ -27,9 +27,12 @@
     color: string
     /** Whether the stream is live right now. A quiet stream stops moving. */
     live: boolean
+    /** Recent (time, plot-value) samples to open already drawn, oldest first.
+     *  Read once on mount; changes afterward arrive as `value`/`tick`. */
+    seed?: { t: number; v: number }[]
   }
 
-  let { value, tick, signed, color, live }: Props = $props()
+  let { value, tick, signed, color, live, seed = [] }: Props = $props()
 
   const WINDOW_MS = 120_000
   const EASE_MS = 600
@@ -177,6 +180,29 @@
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
+  })
+
+  // Open already drawn: lay the recent samples down as history so the line
+  // arrives with a couple of minutes behind it rather than a blank right
+  // edge. Once only, on mount — everything after is a live frame.
+  let seeded = false
+  $effect(() => {
+    if (seeded || seed.length === 0) return
+    seeded = true
+    for (const p of seed) history.push({ t: p.t, v: p.v })
+    const last = seed[seed.length - 1]!
+    displayV = last.v
+    prevV = last.v
+    targetV = last.v
+    transitionAt = last.t
+    let lo = signed ? -1 : 0
+    let hi = 1
+    for (const p of seed) {
+      if (p.v < lo) lo = p.v
+      if (p.v > hi) hi = p.v
+    }
+    minY = lo * 1.05
+    maxY = hi * 1.05
   })
 
   // A real frame — value and a fresh tick — starts a new ease. Silence (the

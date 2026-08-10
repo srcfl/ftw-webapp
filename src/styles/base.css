@@ -41,8 +41,10 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 
-  /* Standalone PWAs sit under the status bar and over the home indicator. */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  /* The safe-area insets live on the fixed shell (.app in App.svelte), not
+     here: <body> only backstops the colour behind it. A fixed shell ignores
+     body padding anyway, and pinning the insets to the shell is what lets it
+     fill the real screen on an installed iOS PWA. */
 }
 
 /* No text selection on chrome and controls — it reads as native. Content

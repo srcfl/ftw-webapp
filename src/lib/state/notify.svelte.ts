@@ -76,6 +76,16 @@ export class NotifyStore {
   /** The browser holds a live subscription for this app. */
   enabled = $state(false)
 
+  /**
+   * The box's master switch, as its rules document last reported it.
+   *
+   * Orthogonal to `enabled`: a phone can hold a subscription while the box's
+   * engine is off — the state an early build left behind, where nothing
+   * sends and a test says "notifications disabled". The section reconciles
+   * it so a subscribed phone whose box drifted off is turned back on.
+   */
+  boxEnabled = $state(false)
+
   /** The box answered E_UNKNOWN_OP: it has no notification routes yet. */
   oldBox = $state(false)
 
@@ -104,6 +114,7 @@ export class NotifyStore {
 
   #applyDoc(doc: RulesDoc): void {
     this.#doc = doc
+    this.boxEnabled = doc.enabled
     const next = allOff()
     for (const rule of doc.events) {
       if (rule.type in next) next[rule.type] = rule.enabled
@@ -339,6 +350,13 @@ export class NotifyStore {
     this.error = null
     this.testSent = false
     try {
+      // A test only sends if the box's engine is on, and a phone can hold a
+      // subscription while the box drifted off (an early build left exactly
+      // that). So make sure the switch is on before asking — the box would
+      // otherwise answer "notifications disabled" and the test would look
+      // broken when it is only switched off. Rides the step-up window, so no
+      // extra prompt when the ceremony is recent.
+      if (!this.boxEnabled) await this.#writeRules(this.rules)
       await callBox<unknown>(this.#site, { method: 'POST', path: '/api/notifications/test' })
       this.testSent = true
     } catch (err) {

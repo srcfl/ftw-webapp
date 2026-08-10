@@ -56,6 +56,9 @@ const NOW_FIDS: readonly Fid[] = [
  */
 const STREAM_QUIET_AFTER_MS = 3_000
 
+/** How much recent history the live line keeps to open already drawn. */
+const RECENT_WINDOW_MS = 130_000
+
 /**
  * The sources behind the readings on the Now view, named by the box.
  *
@@ -88,6 +91,15 @@ export class SiteStore {
   #destroyed = false
   /** Wall clock when the last frame arrived. Null until one does. */
   #lastFrameAtMs = $state<number | null>(null)
+
+  /**
+   * A short rolling history of the readings the Now view can draw live, kept
+   * while the session streams so a live line opens already drawn rather than
+   * building from a blank right edge. Plain state, not reactive: it is read
+   * once when a panel opens, not watched. Two minutes and change — the live
+   * chart's own window — and capped by time so it cannot grow without bound.
+   */
+  #recent: { t: number; v: Record<number, number> }[] = []
 
   session = $state<SessionState>(new Session({ build: 'boot' }).state)
 
@@ -122,7 +134,9 @@ export class SiteStore {
         s.phase === 'streaming' &&
         (this.session.phase !== 'streaming' || s.uptimeMs !== this.session.uptimeMs)
       ) {
-        this.#lastFrameAtMs = Date.now()
+        const now = Date.now()
+        this.#lastFrameAtMs = now
+        this.#recordRecent(s.fields, now)
       }
       this.session = s
 
@@ -404,6 +418,30 @@ export class SiteStore {
   /** Persist before the page can be discarded. */
   async persistNow(): Promise<void> {
     await this.#writer.flushNow()
+  }
+
+  /** Keep one frame's Now readings, and drop anything past the window. */
+  #recordRecent(fields: ReadonlyMap<number, number>, now: number): void {
+    const v: Record<number, number> = {}
+    for (const fid of NOW_FIDS) {
+      const x = fields.get(fid)
+      if (x !== undefined) v[fid] = x
+    }
+    this.#recent.push({ t: now, v })
+    const cutoff = now - RECENT_WINDOW_MS
+    while (this.#recent.length > 0 && this.#recent[0]!.t < cutoff) this.#recent.shift()
+  }
+
+  /**
+   * The recent samples for one field, oldest first — what a live line seeds
+   * from so it opens already drawn. Empty before the first frame, and never
+   * a reason to draw: a panel with no seed just starts from the right edge
+   * the way it did before.
+   */
+  recentField(fid: number): { t: number; v: number }[] {
+    const out: { t: number; v: number }[] = []
+    for (const r of this.#recent) if (fid in r.v) out.push({ t: r.t, v: r.v[fid]! })
+    return out
   }
 
   destroy(): void {
