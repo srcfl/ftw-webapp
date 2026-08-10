@@ -1,18 +1,15 @@
-/* Whether the system has already kept this window out of the home indicator.
+/* Whether WebKit made an installed window shorter than its screen.
  *
- * An installed iOS web app is laid out short of the screen: the window, the
- * visual viewport and everything in them end above the home indicator, and
- * `env(safe-area-inset-bottom)` goes on reporting the inset anyway. Honour it
- * there and the same strip is reserved twice — once by iOS outside the web
- * view, once by us inside it — which is a band of empty bar at the bottom of
- * the app and the reason it looked like dead space.
+ * An installed iOS web app can be laid out short of the screen: the window,
+ * visual viewport and fixed containing block all end before the screen does.
+ * The shell uses the class this module sets to select WebKit's full `100vh`
+ * size while keeping important controls inside the reported safe area.
  *
- * Measured rather than assumed: 812 of an 846-point screen, with the inset
- * still reading 34px. So the test is exactly that — a standalone iOS window
- * whose height falls short of the screen by about the inset it claims. Every
- * other case (a Safari tab, Android, a desktop, an installed app whose window
- * really does reach the bottom) is left alone, because there the inset is the
- * only thing keeping the tab bar off the indicator.
+ * Measured rather than assumed: 812 of an 874-point screen, with the bottom
+ * inset still reading 34px. So the test is exactly that — a standalone iOS
+ * window whose height falls short of its screen while reporting an inset.
+ * Every other case (a Safari tab, Android, a desktop, an installed app whose
+ * window reaches the bottom) keeps the normal fixed shell.
  */
 
 /** How much shorter than the screen counts as "the system took it". */

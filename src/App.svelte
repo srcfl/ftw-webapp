@@ -15,6 +15,7 @@
   import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router } from '$lib/state/route.svelte'
+  import { refreshApp, serviceWorker } from '$lib/pwa/service-worker.svelte'
 
   // Replaced wholesale when someone signs out. `$state.raw` rather than
   // `$state`, because what changes is which store the views read, never a
@@ -161,6 +162,11 @@
   /** Whatever is feeding the store: the development simulator, or nothing. */
   let stopFeed: (() => void) | undefined
 
+  /** The three DOM layers moved directly by the installed app's pull gesture. */
+  let scrollPane: HTMLElement
+  let pullSurface: HTMLElement
+  let pullIndicator: HTMLElement
+
   /** Development starts on the simulated box unless a real one is paired. */
   const useSimulator = import.meta.env.DEV && (!initialSiteId || initialSiteId === SIM_SITE_ID)
 
@@ -201,6 +207,39 @@
     }
     document.addEventListener('visibilitychange', onHide)
     const unlisten = router.listen()
+    const nav = navigator as Navigator & { standalone?: boolean }
+    // These flags exist only in the Vite development build. They make the
+    // two touch-only states renderable in a desktop browser review.
+    const preview = import.meta.env.DEV ? new URLSearchParams(location.search) : null
+    const installed =
+      nav.standalone === true ||
+      window.matchMedia?.('(display-mode: standalone)').matches === true ||
+      preview?.has('standalone') === true
+    if (preview?.has('update-ready')) serviceWorker.waiting = true
+    let mounted = true
+    let stopPull: (() => void) | undefined
+    // Not on the first-frame path. The gesture is installed from its cached
+    // chunk just after mount, and Safari tabs keep their own native gesture.
+    if (installed) {
+      void import('$lib/pwa/pull-to-refresh').then(({ attachPullToRefresh }) => {
+        if (!mounted) return
+        stopPull = attachPullToRefresh({
+          scroller: scrollPane,
+          surface: pullSurface,
+          indicator: pullIndicator,
+          refresh: refreshApp,
+        })
+        if (preview?.has('pull-ready')) {
+          const fire = (type: string, x: number, y: number) => {
+            const event = new Event(type, { bubbles: true, cancelable: true })
+            Object.defineProperty(event, 'touches', { value: [{ clientX: x, clientY: y }] })
+            scrollPane.dispatchEvent(event)
+          }
+          fire('touchstart', 201, 80)
+          fire('touchmove', 202, 270)
+        }
+      })
+    }
 
     if (useSimulator) {
       siteId = SIM_SITE_ID
@@ -216,6 +255,8 @@
     return () => {
       document.removeEventListener('visibilitychange', onHide)
       unlisten()
+      mounted = false
+      stopPull?.()
       stopFeed?.()
       site.destroy()
     }
@@ -366,7 +407,14 @@
 
   <UpdateLine />
 
-  <main>
+  <main bind:this={scrollPane}>
+    <div class="pull-refresh" data-state="idle" aria-hidden="true" bind:this={pullIndicator}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5"></circle>
+      </svg>
+    </div>
+
+    <div class="pull-surface" bind:this={pullSurface}>
     {#if resolvingSite && !pairingFragment}
       <!-- A local read, so this is a frame or two. Deliberately quiet: it is
            not a spinner for a network call, it is the app checking what it
@@ -444,6 +492,7 @@
         </div>
       {/if}
     {/if}
+    </div>
   </main>
 
   <!-- Four screens, so four buttons. The hash already works and the back
@@ -509,14 +558,9 @@
   /* The shell is exactly one screen, and the view inside it scrolls — the
      tab bar stays put and `main` scrolls inside itself.
 
-     Anchored with `position: fixed; inset: 0`, not a height. An installed
-     iOS PWA with a translucent status bar mismeasures dvh: `100dvh` came
-     back short of the real screen, so the shell ended above the bottom and
-     left a black band of unpainted screen under the tab bar. `inset: 0`
-     pins all four edges to the actual layout viewport, which iOS reports
-     correctly, so the shell fills the screen with no arithmetic to get
-     wrong. The insets live here now: the top padding reserves the notch,
-     the tab bar reserves the home indicator, and <body> no longer pads. */
+     Anchored with `position: fixed; inset: 0`, not a dynamic viewport unit.
+     The insets live here: the top padding reserves the notch, the tab bar
+     reserves the home indicator, and <body> only paints the backstop. */
   .app {
     position: fixed;
     inset: 0;
@@ -526,10 +570,95 @@
     background: var(--surface);
   }
 
+  /* WebKit can make the fixed containing block one top inset shorter in an
+     installed app with a translucent status bar. `100vh` still names the
+     whole installed screen there, so let the shell extend past that short
+     block. The class is set before first paint only for that measured case. */
+  :global(html.reserved-by-the-os) .app {
+    bottom: auto;
+    height: 100vh;
+  }
+
   main {
+    position: relative;
     flex: 1;
     overflow-y: auto;
     overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Only these two layers move during a pull. Touchmove writes their
+     compositor transforms directly, so no reading or view rerenders while a
+     finger is down. */
+  .pull-surface {
+    min-height: 100%;
+    transition: transform var(--motion-base) var(--ease);
+  }
+
+  :global(.pull-surface[data-pulling='true']) {
+    transition: none;
+  }
+
+  .pull-refresh {
+    position: absolute;
+    top: var(--space-2);
+    left: 50%;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surface-elevated);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(-50%, -28px, 0) scale(0.78);
+    transition:
+      transform var(--motion-base) var(--ease),
+      opacity var(--motion-fast) var(--ease);
+    will-change: transform, opacity;
+  }
+
+  :global(.pull-refresh[data-state='pulling']),
+  :global(.pull-refresh[data-state='ready']) {
+    transition: none;
+  }
+
+  :global(.pull-refresh[data-state='ready']) {
+    border-color: var(--accent-strong);
+  }
+
+  .pull-refresh svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: 38 16;
+    transform: rotate(var(--pull-turn, 0deg));
+  }
+
+  :global(.pull-refresh[data-state='ready'] svg),
+  :global(.pull-refresh[data-state='refreshing'] svg) {
+    stroke: var(--accent);
+  }
+
+  :global(.pull-refresh[data-state='refreshing'] svg) {
+    animation: pull-spin 620ms linear infinite;
+  }
+
+  @keyframes pull-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.pull-refresh[data-state='refreshing'] svg) {
+      animation: none;
+    }
   }
 
   /* At the bottom because that is where a thumb is, and above the home
@@ -549,30 +678,14 @@
        keeps the ordinary padding and one with an indicator clears it
        exactly.
 
-       Except where the system has already done it. Measured on Fredrik's
-       installed app: window, visual viewport, shell and bar all end at 812
-       while env(safe-area-inset-bottom) still reports 34px — iOS keeps a
-       standalone web view out of the indicator's zone AND goes on reporting
-       the inset, so honouring it there reserves the same strip twice and
-       leaves an empty band inside the bar. `html.reserved-by-the-os` is set
-       at startup for exactly that case and nothing else; every other phone,
-       tab and platform keeps the clearance it needs. */
+       The full-height standalone override paints behind the indicator, so
+       this inset remains the clearance for the buttons. */
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
-    /* The one line that says "bar". Everything else about it is the same
-       surface as the app, on purpose: below an installed app's web view
-       there is a strip of screen iOS paints and no CSS here can reach, and
-       it carries this colour. A bar in a different shade would end at that
-       strip in a visible seam; the same shade runs into it, so the bottom
-       of the app is one surface with a rule drawn across it. */
+    /* The one line that says "bar". Everything else uses the app surface so
+       the bar, the full-height shell and the area behind the home indicator
+       read as one surface. */
     border-top: 1px solid var(--line);
     background: var(--surface);
-  }
-
-  /* Where the system already cleared the indicator, the labels go all the
-     way down to meet the strip below — nothing between the bar and the edge
-     of what we are allowed to paint. See the note above the padding. */
-  :global(html.reserved-by-the-os) nav {
-    padding-bottom: 0;
   }
 
   nav button {

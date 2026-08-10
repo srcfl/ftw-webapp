@@ -17,12 +17,34 @@
 class ServiceWorkerState {
   /** A newer build is installed and about to take over. */
   waiting = $state(false)
+
+  /** The user asked the parked build to take over. */
+  applying = $state(false)
 }
 
 export const serviceWorker = new ServiceWorkerState()
 
 /** Set once the page has asked a worker to skip, so the reload fires once. */
 let asked = false
+
+/** The registration watched by the page, and used by pull-to-refresh. */
+let currentRegistration: ServiceWorkerRegistration | null = null
+/** The worker announced as ready; kept even before registration.waiting updates. */
+let parkedWorker: ServiceWorker | null = null
+
+/** Install the one reload listener before any path can request a handover. */
+let reloadArmed = false
+let reloaded = false
+
+function armReload(): void {
+  if (reloadArmed || !('serviceWorker' in navigator)) return
+  reloadArmed = true
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded) return
+    reloaded = true
+    location.reload()
+  })
+}
 
 export async function registerServiceWorker(): Promise<void> {
   // The worker is emitted by the build, so in development there is nothing at
@@ -33,17 +55,8 @@ export async function registerServiceWorker(): Promise<void> {
 
   try {
     const registration = await navigator.serviceWorker.register('/sw.js')
-
-    // The new worker taking control is the cue to reload — once, into the
-    // build it just activated. Guarded so a controllerchange from anything
-    // else cannot loop the page.
-    let reloaded = false
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloaded) return
-      reloaded = true
-      location.reload()
-    })
-
+    currentRegistration = registration
+    armReload()
     watch(registration)
   } catch {
     // No worker means no offline launch, and nothing else. Every other path in
@@ -79,14 +92,92 @@ function watch(registration: ServiceWorkerRegistration): void {
  * build and nothing to replace — would announce itself as a pending update.
  */
 function announce(worker: ServiceWorker | null): void {
-  if (worker && navigator.serviceWorker.controller) serviceWorker.waiting = true
+  if (worker && navigator.serviceWorker.controller) {
+    parkedWorker = worker
+    serviceWorker.waiting = true
+  }
+}
+
+/** Ask the already downloaded build to take over, then reload exactly once. */
+export function applyAppUpdate(): boolean {
+  const worker = currentRegistration?.waiting ?? parkedWorker
+  if (!worker || !navigator.serviceWorker.controller) return false
+
+  requestTakeover(worker)
+  return true
+}
+
+function requestTakeover(worker: ServiceWorker): void {
+  serviceWorker.waiting = true
+  serviceWorker.applying = true
+  armReload()
+  if (!asked) {
+    asked = true
+    worker.postMessage({ type: 'skip-waiting' })
+  }
+}
+
+/**
+ * Check for a new build, use it when one is ready, or reload this build.
+ *
+ * This is the action behind the installed app's pull gesture. The update
+ * check comes first so a deliberate refresh never returns to a build the
+ * service worker has already replaced on the server. A normal reload remains
+ * the fallback: the running worker serves its own complete cached build, so
+ * the shell and its chunks still cannot be mixed.
+ */
+export async function refreshApp(): Promise<void> {
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration =
+        currentRegistration ?? (await navigator.serviceWorker.getRegistration()) ?? null
+      if (registration) {
+        currentRegistration = registration
+        armReload()
+
+        if (!registration.waiting) await registration.update()
+        const worker = registration.waiting ?? (await waitForInstall(registration.installing))
+        if (worker && navigator.serviceWorker.controller) {
+          announce(worker)
+          requestTakeover(worker)
+          return
+        }
+      }
+    } catch {
+      // Offline is a valid refresh. The current worker has a complete shell.
+    }
+  }
+
+  location.reload()
+}
+
+/** Wait briefly for a worker found by update() to finish installing. */
+async function waitForInstall(worker: ServiceWorker | null): Promise<ServiceWorker | null> {
+  if (!worker) return null
+  if (worker.state === 'installed') return worker
+  if (worker.state === 'redundant') return null
+
+  return await new Promise((resolve) => {
+    let done = false
+    const finish = (value: ServiceWorker | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timeout)
+      worker.removeEventListener('statechange', changed)
+      resolve(value)
+    }
+    const changed = () => {
+      if (worker.state === 'installed') finish(worker)
+      else if (worker.state === 'redundant') finish(null)
+    }
+    const timeout = setTimeout(() => finish(null), 2_000)
+    worker.addEventListener('statechange', changed)
+  })
 }
 
 /** Note the parked build, and ask it to take over now. */
 function land(worker: ServiceWorker | null): void {
   announce(worker)
-  if (worker && navigator.serviceWorker.controller && !asked) {
-    asked = true
-    worker.postMessage({ type: 'skip-waiting' })
-  }
+  if (!worker || !navigator.serviceWorker.controller) return
+  requestTakeover(worker)
 }
