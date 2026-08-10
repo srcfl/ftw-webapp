@@ -1,21 +1,28 @@
-/* Registering the service worker, and noticing when a newer build is waiting.
+/* Registering the service worker, and landing a newer build the app is holding.
  *
  * Registration is deliberately late — after `load` — because installing a
  * worker fetches the whole shell again, and the first launch has better things
  * to do with the radio. Nothing here is on the path to the first frame.
  *
- * `waiting` means a newer build is downloaded, verified and parked. It takes
- * over on its own at the next launch with no page left open (see src/sw.ts),
- * so this is information, not a task: there is nothing for the user to press
- * and nothing that breaks if they ignore it.
+ * `waiting` means a newer build is downloaded, verified and parked. The worker
+ * alone would take over at the next launch with no page left open, but an
+ * installed iOS app is never quite closed (see src/sw.ts), so the app asks for
+ * the handover at a safe moment — when it is freshly loaded or when it goes to
+ * the background — and reloads the instant the new worker controls the page.
+ * The reload is a whole navigation, so no build's shell ever meets another's
+ * chunks. A parked build that installs mid-session is not forced on a page
+ * someone is reading: it lands when they next leave or reopen.
  */
 
 class ServiceWorkerState {
-  /** A newer build is installed and will start at the next clean launch. */
+  /** A newer build is installed and about to take over. */
   waiting = $state(false)
 }
 
 export const serviceWorker = new ServiceWorkerState()
+
+/** Set once the page has asked a worker to skip, so the reload fires once. */
+let asked = false
 
 export async function registerServiceWorker(): Promise<void> {
   // The worker is emitted by the build, so in development there is nothing at
@@ -26,6 +33,17 @@ export async function registerServiceWorker(): Promise<void> {
 
   try {
     const registration = await navigator.serviceWorker.register('/sw.js')
+
+    // The new worker taking control is the cue to reload — once, into the
+    // build it just activated. Guarded so a controllerchange from anything
+    // else cannot loop the page.
+    let reloaded = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return
+      reloaded = true
+      location.reload()
+    })
+
     watch(registration)
   } catch {
     // No worker means no offline launch, and nothing else. Every other path in
@@ -35,8 +53,9 @@ export async function registerServiceWorker(): Promise<void> {
 }
 
 function watch(registration: ServiceWorkerRegistration): void {
-  // Parked by an earlier visit that ended before the app was closed.
-  announce(registration.waiting)
+  // Parked by an earlier visit — this launch is exactly the safe moment to
+  // land it, before the user has touched anything.
+  land(registration.waiting)
 
   registration.addEventListener('updatefound', () => {
     const worker = registration.installing
@@ -44,6 +63,13 @@ function watch(registration: ServiceWorkerRegistration): void {
     worker.addEventListener('statechange', () => {
       if (worker.state === 'installed') announce(worker)
     })
+  })
+
+  // Leaving the app is the other safe moment: hand over while the page is
+  // hidden, so the reload happens off-screen and the next look is the new
+  // build with no flash.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') land(registration.waiting)
   })
 }
 
@@ -54,4 +80,13 @@ function watch(registration: ServiceWorkerRegistration): void {
  */
 function announce(worker: ServiceWorker | null): void {
   if (worker && navigator.serviceWorker.controller) serviceWorker.waiting = true
+}
+
+/** Note the parked build, and ask it to take over now. */
+function land(worker: ServiceWorker | null): void {
+  announce(worker)
+  if (worker && navigator.serviceWorker.controller && !asked) {
+    asked = true
+    worker.postMessage({ type: 'skip-waiting' })
+  }
 }

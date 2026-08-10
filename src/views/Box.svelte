@@ -63,7 +63,7 @@
 
   let { site, leave, stuck = false }: Props = $props()
 
-  type Stage = 'idle' | 'confirming' | 'leaving' | 'stuck' | 'copy-kept'
+  type Stage = 'idle' | 'confirming' | 'leaving' | 'stuck'
   // Read once at construction, on purpose: the shell's word is about how
   // this instance opens, not a value to follow afterwards.
   // svelte-ignore state_referenced_locally
@@ -180,27 +180,18 @@
   )
 
   /**
-   * Take the sealed copy away, then leave.
+   * Sign out: this phone forgets its key and stops showing the home.
    *
-   * In that order, and it is not a detail. A copy that outlives a sign-out
-   * offers the next launch the home its owner just left, which would make
-   * signing out a lie — and once the phone is signed out this screen is gone,
-   * so there is no later moment at which anyone could be told. It costs
-   * nothing at all for a household that never asked for a copy.
+   * The sealed copy is left exactly where it is. It is locked to this
+   * household's passkey — only that passkey derives the id and the key that
+   * open it — so keeping it across a sign-out is the way back, not a leak:
+   * whoever holds the phone next cannot open it without the passkey, and its
+   * owner can. Removing it is its own deliberate act — the sealed-copy switch
+   * above — the way deleting an account is not a side effect of logging out
+   * of it. This used to empty the copy here, which quietly undid the whole
+   * point of holding one.
    */
   async function signOut() {
-    stage = 'leaving'
-    try {
-      const { removeEscrowCopy } = await import('$lib/identity/escrow')
-      const outcome = await removeEscrowCopy()
-      if (outcome !== 'removed' && outcome !== 'nothing-to-remove') {
-        stage = 'copy-kept'
-        return
-      }
-    } catch {
-      stage = 'copy-kept'
-      return
-    }
     await finishSignOut()
   }
 
@@ -306,9 +297,16 @@
       from your box — it keeps running and keeps every reading.
     </p>
     {#if copyKept}
-      <p>The sealed copy Sourceful holds is emptied first.</p>
+      <!-- The copy stays, so coming back is the passkey, not the box code.
+           Removing it is the switch above, on purpose and not here. -->
+      <p>
+        The sealed copy stays, so you can open this home again with your
+        passkey. To remove it instead, turn off the sealed copy above before you
+        sign out.
+      </p>
+    {:else}
+      <p>To come back you need to scan the code on the box itself.</p>
     {/if}
-    <p>To come back you need to scan the code on the box itself.</p>
     <!-- What to check, not what is certainly there. A device key that never
          finished pairing was never recorded, and a phone removed on the box
          already is gone from it — in both cases "your box will still list this
@@ -324,19 +322,6 @@
   {:else if stage === 'leaving'}
     <h2>Signing out</h2>
     <p>Clearing this home from this phone.</p>
-  {:else if stage === 'copy-kept'}
-    <!-- Said before the sign-out rather than after, because after it this
-         screen is gone and nobody could be told. The copy is still out there
-         and this phone still holds the home, so both offers are honest. -->
-    <h2>The sealed copy is still there</h2>
-    <p>
-      This phone could not reach the copy Sourceful is holding, so it is still
-      out there and a new phone could still open this home with your passkey.
-    </p>
-    <p>You are not signed out yet. Nothing on this phone has changed.</p>
-    <button class="danger" onclick={() => void signOut()}>Try again</button>
-    <button class="quiet" onclick={() => void finishSignOut()}>Sign out anyway</button>
-    <button class="quiet" onclick={() => (stage = 'idle')}>Cancel</button>
   {:else if stage === 'stuck'}
     <h2>That didn't finish</h2>
     <p>

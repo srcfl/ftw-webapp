@@ -303,10 +303,11 @@ describe('the sealed copy Sourceful can hold', () => {
     expect(calls, 'signing out reached for a copy that was never made').toEqual([])
   })
 
-  it('empties the copy before it lets go of the home', async () => {
-    // Order, not merely both. Once the phone is signed out this screen is
-    // gone, so a copy left behind could never be reported to anyone — it would
-    // simply hand the home back on the next launch.
+  it('leaves the sealed copy where it is, and never reaches for it', async () => {
+    // The change Fredrik asked for. A sign-out is this phone forgetting its
+    // key, not deleting the way back: the copy is locked to the passkey, so
+    // keeping it lets its owner return and hands nothing to anyone else.
+    // Removing it is the switch above, its own deliberate act.
     await enrolledWithPasskey()
     const database = await db()
     const row = (await database.get('sites', SITE_ID)) as StoredSite
@@ -322,17 +323,23 @@ describe('the sealed copy Sourceful can hold', () => {
 
     ;(await screen.findByRole('button', { name: /^sign out$/i })).click()
     await new Promise((r) => setTimeout(r, 20))
-    expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
-      /sealed copy Sourceful holds is emptied first/i
-    )
+    // The confirmation tells the truth: the copy stays, the passkey brings it
+    // back, and removing it is the switch above.
+    const said = (document.body.textContent ?? '').replace(/\s+/g, ' ')
+    expect(said).toMatch(/sealed copy stays/i)
+    expect(said).not.toMatch(/emptied first/i)
+
     screen.getAllByRole('button', { name: /^sign out$/i }).at(-1)!.click()
     await vi.waitFor(() => expect(left).toHaveBeenCalled())
 
-    expect(calls[0], 'the home was let go of before the copy was reached for').toBe('fetch')
-    expect(calls).toContain('leave')
+    // The escrow was never touched — no request left the phone.
+    expect(calls, 'signing out reached for the sealed copy it must not touch').toEqual(['leave'])
   })
 
-  it('says the copy is still out there rather than signing out quietly', async () => {
+  it('signs out even when the escrow could not be reached, because it never tries', async () => {
+    // The old flow blocked a sign-out on emptying the copy, so an offline
+    // phone could not leave. Now the copy is not in the path at all: the
+    // sign-out completes whatever the network is doing.
     await enrolledWithPasskey()
     const database = await db()
     const row = (await database.get('sites', SITE_ID)) as StoredSite
@@ -349,15 +356,8 @@ describe('the sealed copy Sourceful can hold', () => {
     await new Promise((r) => setTimeout(r, 20))
     screen.getAllByRole('button', { name: /^sign out$/i }).at(-1)!.click()
 
-    await vi.waitFor(() =>
-      expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
-        /sealed copy is still there/i
-      )
-    )
-    expect(left, 'signed out while a copy of the home was still out there').not.toHaveBeenCalled()
-    expect(await database.get('sites', SITE_ID), 'cleared the home anyway').toBeTruthy()
-    // And a way past it, because a phone that cannot be signed out is worse
-    // than a copy the screen has named.
-    expect(screen.getByRole('button', { name: /sign out anyway/i })).toBeTruthy()
+    await vi.waitFor(() => expect(left).toHaveBeenCalled())
+    // No fetch was ever attempted — the escrow is not in the sign-out path.
+    expect(calls, 'an offline sign-out still reached for the copy').toEqual([])
   })
 })
