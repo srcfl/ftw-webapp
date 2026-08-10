@@ -68,7 +68,7 @@ describe('the charger behind its bubble', () => {
     expect(sheet!.textContent).not.toMatch(/-\d/)
   })
 
-  it('ignores taps on every other planet', async () => {
+  it('does not open the charger for every other planet', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
 
@@ -81,7 +81,9 @@ describe('the charger behind its bubble', () => {
       .dispatchEvent(new CustomEvent('ftw-planet-click', { detail: { role: 'battery' } }))
     await vi.advanceTimersByTimeAsync(100)
 
-    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    // The battery opens its live line, not the charger's controls.
+    const sheet = document.querySelector('[role="dialog"]')
+    expect(sheet?.getAttribute('aria-label')).not.toBe('EV charger')
   })
 
   it('closes on Escape and on the backdrop', async () => {
