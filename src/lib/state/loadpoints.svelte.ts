@@ -12,7 +12,10 @@
  */
 
 import { callBox, BoxApiError } from './box-api'
+import { commandHelp } from '$lib/format/command'
 import { toLoadpoint, type Loadpoint, type WireLoadpoint } from '$lib/format/ev'
+import { OP_LOADPOINT_HOLD, type CmdResult } from '$lib/protocol/messages'
+import { CommandError } from '$lib/protocol/session'
 import type { SiteStore } from './site.svelte'
 
 /** One stretch the optimiser intends to charge in. */
@@ -89,12 +92,86 @@ export class LoadpointsStore {
   /** A sentence, never a code. Null when there is nothing to say. */
   error = $state<string | null>(null)
 
+  /**
+   * The fate of the last charge command, for the panel to say honestly.
+   *
+   * The setMode lifecycle, borrowed whole: `sending` while the door is
+   * asked, `applied` when the charger read back, `unconfirmed` when the box
+   * took it and the hardware has not said so, `failed` with a sentence.
+   * It settles back to idle on its own so a stale outcome does not sit on
+   * screen for the life of the panel.
+   */
+  command = $state<
+    | { kind: 'idle' }
+    | { kind: 'sending' }
+    | { kind: 'applied'; holding: boolean }
+    | { kind: 'unconfirmed' }
+    | { kind: 'failed'; help: string }
+  >({ kind: 'idle' })
+
   #site: SiteStore
   /** Guards a slow answer against a panel that already asked again. */
   #token = 0
+  #settle: ReturnType<typeof setTimeout> | null = null
 
   constructor(site: SiteStore) {
     this.#site = site
+  }
+
+  destroy(): void {
+    if (this.#settle) clearTimeout(this.#settle)
+    this.#settle = null
+  }
+
+  /**
+   * Charge now: a manual hold at the charger's own ceiling.
+   *
+   * The box revalidates against fresh state and answers; nothing here
+   * pretends. On any settled outcome the charger is reread, because a hold
+   * changes what `/api/loadpoints` says and the panel must say the same.
+   */
+  async chargeNow(lp: Loadpoint): Promise<void> {
+    await this.#send(lp, { id: lp.id, power_w: lp.maxChargeW ?? 0 }, true)
+  }
+
+  /** Release the hold. The plan takes back over. */
+  async stopCharging(lp: Loadpoint): Promise<void> {
+    await this.#send(lp, { id: lp.id, clear: true }, false)
+  }
+
+  async #send(lp: Loadpoint, args: Record<string, unknown>, holding: boolean): Promise<void> {
+    if (this.command.kind === 'sending') return
+    if (this.#settle) clearTimeout(this.#settle)
+    this.command = { kind: 'sending' }
+
+    try {
+      const result: CmdResult = await this.#site.command(OP_LOADPOINT_HOLD, args)
+      switch (result.state) {
+        case 'applied':
+          this.command = { kind: 'applied', holding }
+          break
+        case 'unconfirmed':
+          this.command = { kind: 'unconfirmed' }
+          break
+        default:
+          this.command = { kind: 'failed', help: commandHelp(result) }
+      }
+    } catch (err) {
+      this.command = {
+        kind: 'failed',
+        help: err instanceof CommandError ? err.help : "That didn't go through. Try again.",
+      }
+    }
+
+    // Whatever the outcome, the box's account of the charger is the truth
+    // to repaint from — even a refusal can follow a change someone else
+    // made. A failed reread keeps the sentence already on screen.
+    void this.load().catch(() => {})
+
+    this.#settle = setTimeout(() => {
+      this.command = { kind: 'idle' }
+      this.#settle = null
+    }, 6_000)
   }
 
   /**

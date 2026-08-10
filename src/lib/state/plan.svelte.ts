@@ -9,6 +9,7 @@
 import type { Plan, SiteMode, CmdResult, ModeInfo } from '$lib/protocol/messages'
 import { OP_SET_MODE } from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
+import { commandHelp } from '$lib/format/command'
 import { CAP_PLAN_DISPATCH, SCOPE_MODE_WRITE } from '$lib/protocol/contract'
 import type { SiteStore } from './site.svelte'
 import { FID } from '$lib/format/explanation'
@@ -225,7 +226,7 @@ export class PlanStore {
           this.command = { kind: 'unconfirmed', mode }
           break
         default:
-          this.command = { kind: 'failed', help: helpFor(result) }
+          this.command = { kind: 'failed', help: commandHelp(result) }
       }
     } catch (err) {
       this.command = {
@@ -255,20 +256,3 @@ export class PlanStore {
   }
 }
 
-/** Stable codes in, sentences out. The box never writes prose. */
-function helpFor(result: CmdResult): string {
-  switch (result.error?.code) {
-    case 'E_PRECONDITION':
-      return 'Your home changed while that was sending. Have another go.'
-    case 'E_CONFLICT':
-      return 'Something else changed the setting first. Try again.'
-    case 'E_SCOPE_DENIED':
-      return "You don't have permission to change how this home runs."
-    case 'E_CMD_EXPIRED':
-      return 'That took too long to reach your box. Try again.'
-    case 'E_BOOTING':
-      return 'Your box is still starting. Give it a minute.'
-    default:
-      return "That didn't go through. Try again."
-  }
-}

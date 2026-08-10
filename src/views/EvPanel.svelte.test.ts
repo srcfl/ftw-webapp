@@ -13,6 +13,7 @@ import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import { ROLE_VIEWER } from '$lib/protocol/messages'
+import { FID } from '$lib/format/explanation'
 import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
 
 // The ceremony, played by a hand. The sim's configure tier refuses without
@@ -280,6 +281,117 @@ describe('the charger behind its bubble', () => {
     // No sentence claims a schedule; the offer to set one takes its place.
     expect(document.body.textContent).not.toContain('Ready by')
     expect(document.body.textContent).toContain('Set a charging schedule')
+  })
+
+  it('charges now through the door, and the whole household says so', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+
+    const chargeNow = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Charge now'
+    )!
+    expect(chargeNow, 'no way to charge now for an owner with a plugged car').toBeDefined()
+    chargeNow.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    // The panel repainted from the box: the hold is on at the charger's own
+    // ceiling, the button turned into its opposite, and the sentence says
+    // what happens now.
+    expect(document.body.textContent).toMatch(/Charging at 11 kW/)
+    expect(
+      [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Stop charging')
+    ).toBe(true)
+    expect(document.body.textContent).toContain('the plan takes back over')
+
+    // And the 1 Hz stream tells the same story — one household, whichever
+    // surface asks.
+    box.tick()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(site.session.fields.get(FID.EV_W)).toBe(11000)
+  })
+
+  it('stops the hold and hands the charger back to the plan', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Charge now')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Stop charging')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(document.body.textContent).toContain('the plan decides again')
+    expect(
+      [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Charge now')
+    ).toBe(true)
+  })
+
+  it('never draws the button for a viewer', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now(), role: ROLE_VIEWER })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(
+      [...document.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    ).not.toContain('Charge now')
+  })
+
+  it('reports a refusal in a sentence and repaints from the box', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+
+    box.faults = { ...box.faults, failPreconditions: true }
+    ;[...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === 'Charge now')!
+      .click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(document.body.textContent).toContain('Your home changed while that was sending')
+    // Nothing moved: the charger still reads as the plan's, not held.
+    expect(
+      [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Charge now')
+    ).toBe(true)
   })
 
   it('keeps its facts through a drop and asks again on its own when the wire returns', async () => {
