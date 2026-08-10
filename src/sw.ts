@@ -12,15 +12,17 @@
  * — from a cache that has moved underneath it. The failure is silent and
  * unreproducible, and it looks to the user like the app broke.
  *
- * So a new build installs quietly, waits, and takes over at the next launch
- * with no live client left. Every request a page makes is answered from the
- * cache belonging to the worker that page was loaded by. Old caches are dropped
- * in `activate`, which by that point cannot run while anyone is still reading
- * from them.
- *
- * The cost is that an update is one launch late. For a home screen app that is
- * opened and dismissed several times a day, that is minutes — and it is paid in
- * exchange for never shipping a half-updated UI.
+ * So a new build installs quietly and waits. It takes over on its own at the
+ * next launch with no live client left — but an installed iOS app is never
+ * that: the OS keeps the page alive in the app switcher across a swipe-away,
+ * so "no live client left" can be days off, and the user sits on a build that
+ * has long since been replaced. The client asks for the handover instead, at a
+ * moment when nothing is mid-flight: it messages `skip-waiting` only while the
+ * page is hidden or being freshly loaded, and reloads the instant the new
+ * worker takes control. That reload is a whole navigation, so the page still
+ * never runs one build's shell against another's chunks — atomicity is kept,
+ * the handover is just asked for rather than waited out. Old caches are dropped
+ * in `activate`, which by then cannot run while anyone is still reading them.
  *
  * ## What is cached
  *
@@ -59,6 +61,13 @@ sw.addEventListener('activate', (event) => {
       }
     })()
   )
+})
+
+// The client asks for the handover when nothing is mid-flight. Honoured only
+// here, never on install, so a waiting build still never jumps a live page on
+// its own — the page decides the moment, and reloads the instant this lands.
+sw.addEventListener('message', (event) => {
+  if ((event.data as { type?: unknown } | null)?.type === 'skip-waiting') void sw.skipWaiting()
 })
 
 sw.addEventListener('fetch', (event) => {
