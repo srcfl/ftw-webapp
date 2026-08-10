@@ -506,20 +506,24 @@
     display: none;
   }
 
-  /* The shell is exactly one screen, and the view inside it scrolls.
-     `min-height` let the shell grow past the screen instead, so the document
-     took the scrolling, `main` never scrolled inside itself, and the tab bar
-     was pushed below the fold on any view with more than a screenful in it.
-     Sized from the viewport with dvh — not `height: 100%`, because the mount
-     target between <body> and here carries no height, so a percentage chain
-     collapses to the content height and the tab bar floats up the screen.
-     Minus the top inset because <body> already reserves that for the notch;
-     a shell sized to the whole viewport would hang off the bottom by exactly
-     that much. */
+  /* The shell is exactly one screen, and the view inside it scrolls — the
+     tab bar stays put and `main` scrolls inside itself.
+
+     Anchored with `position: fixed; inset: 0`, not a height. An installed
+     iOS PWA with a translucent status bar mismeasures dvh: `100dvh` came
+     back short of the real screen, so the shell ended above the bottom and
+     left a black band of unpainted screen under the tab bar. `inset: 0`
+     pins all four edges to the actual layout viewport, which iOS reports
+     correctly, so the shell fills the screen with no arithmetic to get
+     wrong. The insets live here now: the top padding reserves the notch,
+     the tab bar reserves the home indicator, and <body> no longer pads. */
   .app {
+    position: fixed;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    height: calc(100dvh - env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    background: var(--surface);
   }
 
   main {
