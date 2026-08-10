@@ -211,7 +211,7 @@
 </script>
 
 <section class="box">
-  <h1>Your box</h1>
+  <h1>Your FTW Box</h1>
   <!-- Only once it can be named. A dash held the space while the key was
        being read, which reads as "your box has no name" rather than as a
        screen still filling in — and it is the first thing on the screen. -->
