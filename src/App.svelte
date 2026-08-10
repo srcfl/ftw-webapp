@@ -510,6 +510,9 @@
      `min-height` let the shell grow past the screen instead, so the document
      took the scrolling, `main` never scrolled inside itself, and the tab bar
      was pushed below the fold on any view with more than a screenful in it.
+     Sized from the viewport with dvh — not `height: 100%`, because the mount
+     target between <body> and here carries no height, so a percentage chain
+     collapses to the content height and the tab bar floats up the screen.
      Minus the top inset because <body> already reserves that for the notch;
      a shell sized to the whole viewport would hang off the bottom by exactly
      that much. */

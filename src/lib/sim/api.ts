@@ -357,6 +357,11 @@ export class SimApi {
     }
   }
 
+  /** The master switch as this box holds it, for a test to look at. */
+  get pushEnabled(): boolean {
+    return (this.#pushRules ?? this.#seededRules()).enabled
+  }
+
   get testPushes(): number {
     return this.#testPushes
   }
