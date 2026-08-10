@@ -1,7 +1,8 @@
 /* The service worker.
  *
- * Two jobs, and deliberately nothing else: open the app without a network,
- * and never mix two builds while doing it.
+ * Three jobs, and deliberately nothing else: open the app without a network,
+ * never mix two builds while doing it, and put the box's pushes on the lock
+ * screen exactly as they arrived.
  *
  * ## Atomicity
  *
@@ -92,3 +93,43 @@ async function fromCache(path: string, request: Request): Promise<Response> {
   const cache = await caches.open(CACHE)
   return (await cache.match(path)) ?? fetch(request)
 }
+
+/* ## Push
+ *
+ * The payload arrives already rendered by the box — title and body from
+ * contract/push-catalogue.yaml, the one place push sentences are written —
+ * and is shown verbatim. Nothing is decided here: a worker that rewrites
+ * prose is a second copy of the catalogue, and it would rot.
+ *
+ * Every push shows a notification, whatever arrived. Safari withdraws the
+ * subscription from a worker it catches swallowing a push, so a payload
+ * this handler cannot read still shows the app's one generic sentence —
+ * never nothing.
+ */
+
+sw.addEventListener('push', (event) => {
+  let title = 'Something happened at home'
+  let body = 'Open the app to see what.'
+  try {
+    const payload = event.data?.json() as { title?: unknown; body?: unknown } | null
+    if (payload && typeof payload.title === 'string' && payload.title !== '') {
+      title = payload.title
+      body = typeof payload.body === 'string' ? payload.body : ''
+    }
+  } catch {
+    /* Not the JSON it claimed to be. The generic sentence stands. */
+  }
+  event.waitUntil(sw.registration.showNotification(title, { body }))
+})
+
+sw.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  event.waitUntil(
+    (async () => {
+      // The app is one screen, so any open client is the right one to front.
+      const open = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      if (open[0]) await open[0].focus()
+      else await sw.clients.openWindow('/')
+    })()
+  )
+})

@@ -166,3 +166,83 @@ describe('when the cache has been evicted', () => {
     })
   })
 })
+
+describe('a push from the box', () => {
+  /* The payload arrives already rendered — the box holds the catalogue and
+   * fills the placeholders, because a push must read as a sentence when this
+   * app is not running to write one. What this worker owes in return is
+   * showing it verbatim, and showing SOMETHING for every push: Safari
+   * withdraws the subscription from a worker it catches staying silent.
+   */
+
+  it('shows the box’s sentence exactly as it arrived', async () => {
+    const worker = await activate('a1')
+
+    await worker.push(
+      JSON.stringify({
+        kind: 'charging.session_complete',
+        title: 'Car charged',
+        body: '38.4 kWh delivered — ready to go.',
+      })
+    )
+
+    expect(worker.shown).toEqual([
+      { title: 'Car charged', body: '38.4 kWh delivered — ready to go.' },
+    ])
+  })
+
+  it('still shows a notification when the payload is not readable', async () => {
+    const worker = await activate('a1')
+
+    await worker.push('not json at all {')
+
+    expect(worker.shown, 'a silent push costs the subscription on Safari').toHaveLength(1)
+    expect(worker.shown[0]!.title).not.toBe('')
+  })
+
+  it('still shows a notification when the push carries nothing at all', async () => {
+    const worker = await activate('a1')
+
+    await worker.push(null)
+
+    expect(worker.shown).toHaveLength(1)
+  })
+
+  it('never invents prose: a payload without a title gets the generic sentence', async () => {
+    // Half a payload is not a sentence. Showing a body under a made-up title
+    // would be this worker writing push prose, which only the catalogue may.
+    const worker = await activate('a1')
+
+    await worker.push(JSON.stringify({ kind: 'update.installed', body: 'Now running v9.' }))
+
+    expect(worker.shown).toHaveLength(1)
+    expect(worker.shown[0]!.body).not.toContain('Now running v9.')
+  })
+})
+
+describe('tapping a notification', () => {
+  it('fronts the app when a window is already open', async () => {
+    const worker = await activate('a1')
+    const open = {
+      focused: false,
+      focus: async () => {
+        open.focused = true
+      },
+    }
+    worker.windows = [open]
+
+    const closed = await worker.clickNotification()
+
+    expect(closed).toBe(true)
+    expect(open.focused).toBe(true)
+    expect(worker.opened, 'opened a second copy of a running app').toEqual([])
+  })
+
+  it('opens the app when nothing is open', async () => {
+    const worker = await activate('a1')
+
+    await worker.clickNotification()
+
+    expect(worker.opened).toEqual(['/'])
+  })
+})

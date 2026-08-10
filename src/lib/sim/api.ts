@@ -32,6 +32,23 @@ import { OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/m
 import { roleHasScope } from '$lib/protocol/contract'
 import { wireBytes } from '$lib/protocol/frame'
 import { buildEnrollmentUrl } from '$lib/identity/enrollment'
+import { encodeBase64url } from '$lib/identity/base64url'
+/**
+ * The rule types the box's notifications engine knows — the catalogue kinds
+ * plus the engine's own older events. The box's list, not the app's: an app
+ * that names a type outside this meets a 400 naming it, which is the trap
+ * that keeps a newer app from silently seeding rules an old box never had.
+ */
+const RULE_TYPES = [
+  'driver_offline',
+  'driver_recovered',
+  'update_available',
+  'fuse_over_limit',
+  'concurrent_drivers_offline',
+  'charging.session_complete',
+  'charging.interrupted',
+  'update.installed',
+]
 
 /**
  * How much a route costs before it runs. Four, not three.
@@ -117,6 +134,17 @@ const ROUTES: Record<string, RouteFacts> = {
   'DELETE /api/loadpoints/{id}/manual_hold': { tier: 'actuate' },
   'POST /api/loadpoints/{id}/battery_boost': { tier: 'actuate' },
   'DELETE /api/loadpoints/{id}/battery_boost': { tier: 'actuate' },
+
+  // Push. The vapid key is public by design, and what the box has sent is a
+  // record like any history; everything that changes what a phone hears —
+  // where to send, which kinds, a test through the pipe — is configuration.
+  'GET /api/notifications/vapid': { tier: 'read' },
+  'GET /api/notifications/history': { tier: 'read' },
+  'GET /api/notifications/rules': { tier: 'read' },
+  'POST /api/notifications/subscriptions': { tier: 'configure' },
+  'DELETE /api/notifications/subscriptions/{id}': { tier: 'configure' },
+  'PUT /api/notifications/rules': { tier: 'configure' },
+  'POST /api/notifications/test': { tier: 'configure' },
 
   // At the box, in the house. A credential, a whole file, or a person needed
   // in the room.
@@ -216,6 +244,16 @@ const PAIRING_TTL_MS = 10 * 60_000
 /** How finely a replayed day is integrated. 96 samples is a quarter-hour. */
 const DAILY_STEP_MS = 15 * 60_000
 
+/**
+ * The box's vapid public key: an uncompressed P-256 point, base64url. Fixed
+ * nonsense bytes rather than a real key — nothing in this tree verifies a
+ * push signature, and a value that changed per run would make every test's
+ * subscription an accident of ordering.
+ */
+const SIM_VAPID_PUBLIC = encodeBase64url(
+  new Uint8Array([4, ...Array.from({ length: 64 }, (_, i) => i + 1)])
+)
+
 const text = new TextEncoder()
 
 function forbidden(): ApiAnswer {
@@ -245,6 +283,22 @@ export class SimApi {
     recurring: true,
   }
 
+  /**
+   * Where this box sends pushes, keyed by endpoint the way the box keys
+   * them: posting the same endpoint twice is the same phone re-registering
+   * and answers the same id, never a second row.
+   */
+  #pushSubscriptions = new Map<string, { id: string }>()
+  #nextPushId = 1
+  /**
+   * The rules document, exactly as the box stores it: null until first
+   * touched, then the full seeded set. The box's defaults are DISABLED —
+   * sparse by design — and each PUT entry replaces its type's whole rule.
+   */
+  #pushRules: { enabled: boolean; events: Record<string, unknown>[] } | null = null
+  /** How many test pushes were asked for, for a test to look at. */
+  #testPushes = 0
+
   constructor(opts: SimApiOptions) {
     this.#opts = opts
     const now = opts.now()
@@ -266,6 +320,45 @@ export class SimApi {
 
   get devices(): readonly SimDevice[] {
     return this.#devices
+  }
+
+  /** The push rows this box would send to, for a test to look at. */
+  get pushSubscriptions(): readonly string[] {
+    return [...this.#pushSubscriptions.keys()]
+  }
+
+  /** kind -> on as this box stores it, with unset kinds at their default. */
+  get pushRules(): Record<string, boolean> {
+    const doc = this.#pushRules ?? this.#seededRules()
+    return Object.fromEntries(
+      doc.events.map((e) => [String(e['type']), e['enabled'] === true])
+    )
+  }
+
+  /**
+   * The default rule set, every kind disabled, exactly as the box seeds it.
+   * The thresholds exist so a partial PUT entry would visibly wipe them —
+   * the trap the app's whole-entry rule guards against.
+   */
+  #seededRules(): { enabled: boolean; events: Record<string, unknown>[] } {
+    return {
+      enabled: false,
+      events: RULE_TYPES.map((type) => ({
+        type,
+        enabled: false,
+        threshold_s: 300,
+        threshold_n: 0,
+        priority: 3,
+        tags: '',
+        title_template: '',
+        body_template: '',
+        cooldown_s: 3600,
+      })),
+    }
+  }
+
+  get testPushes(): number {
+    return this.#testPushes
   }
 
   /**
@@ -367,6 +460,28 @@ export class SimApi {
     if (route === 'DELETE /api/loadpoints/{id}/schedule') {
       return this.#clearSchedule(matched.params['id'] ?? '')
     }
+
+    if (route === 'GET /api/notifications/vapid') {
+      // Public by design — it is in every push request the box signs — and
+      // fixed, the way a box's is fixed: rotating it would orphan every
+      // subscription made under the old one.
+      return json(200, { public_key: SIM_VAPID_PUBLIC })
+    }
+    if (route === 'POST /api/notifications/subscriptions') {
+      return this.#pushSubscribe(req.body)
+    }
+    if (route === 'DELETE /api/notifications/subscriptions/{id}') {
+      return this.#pushUnsubscribe(matched.params['id'] ?? '')
+    }
+    if (route === 'PUT /api/notifications/rules') return this.#putPushRules(req.body)
+    if (route === 'GET /api/notifications/rules') return this.#getPushRules()
+    if (route === 'POST /api/notifications/test') {
+      // Sent to every stored row, and zero rows is zero sends rather than a
+      // fault: the box answers what it did, not what it wishes it could.
+      this.#testPushes += 1
+      return json(200, { status: 'sent', to: this.#pushSubscriptions.size })
+    }
+    if (route === 'GET /api/notifications/history') return this.#pushHistory()
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year
@@ -517,6 +632,115 @@ export class SimApi {
     if (id !== 'carport') return json(404, { error: 'loadpoint not found' })
     this.#schedule = null
     return json(200, { ok: true })
+  }
+
+  /**
+   * Store where to send this phone's pushes, as the box stores it: upserted
+   * by endpoint, so a phone re-registering after an eviction gets its own
+   * row back rather than a twin the box would post to twice.
+   */
+  #pushSubscribe(body: Uint8Array | null): ApiAnswer {
+    const asked = jsonBody(body)
+    const endpoint = typeof asked['endpoint'] === 'string' ? asked['endpoint'] : ''
+    const keys =
+      typeof asked['keys'] === 'object' && asked['keys'] !== null
+        ? (asked['keys'] as Record<string, unknown>)
+        : {}
+    if (
+      endpoint === '' ||
+      typeof keys['p256dh'] !== 'string' ||
+      keys['p256dh'] === '' ||
+      typeof keys['auth'] !== 'string' ||
+      keys['auth'] === ''
+    ) {
+      return json(400, { error: 'a subscription needs an endpoint and both keys' })
+    }
+
+    let row = this.#pushSubscriptions.get(endpoint)
+    if (!row) {
+      row = { id: `push-${this.#nextPushId++}` }
+      this.#pushSubscriptions.set(endpoint, row)
+    }
+    return json(200, { id: row.id })
+  }
+
+  #pushUnsubscribe(id: string): ApiAnswer {
+    for (const [endpoint, row] of this.#pushSubscriptions) {
+      if (row.id !== id) continue
+      this.#pushSubscriptions.delete(endpoint)
+      return json(200, { status: 'removed' })
+    }
+    return json(404, { error: 'that phone is not subscribed' })
+  }
+
+  /**
+   * Which kinds to send, merged the way the box merges: only the kinds the
+   * body names change, so an app that knows four kinds cannot silently turn
+   * a fifth back on by saving. The answer is the whole stored document.
+   */
+  #putPushRules(body: Uint8Array | null): ApiAnswer {
+    const asked = jsonBody(body)
+    // First touch seeds the full disabled default set, exactly as the box
+    // does — so even an empty PUT answers with every rule there is.
+    const doc = this.#pushRules ?? this.#seededRules()
+
+    const events = asked['events']
+    if (events !== undefined && !Array.isArray(events)) {
+      return json(400, { error: 'events must be a list of rules' })
+    }
+    for (const entry of events ?? []) {
+      if (typeof entry !== 'object' || entry === null) {
+        return json(400, { error: 'events must be a list of rules' })
+      }
+      const rule = entry as Record<string, unknown>
+      const type = rule['type']
+      if (typeof type !== 'string' || !RULE_TYPES.includes(type)) {
+        return json(400, { error: `unknown rule type: ${String(type)}` })
+      }
+      if (typeof rule['enabled'] !== 'boolean') {
+        return json(400, { error: `rule for ${type} must say enabled` })
+      }
+      // Wholesale, as the box replaces it. A partial entry visibly wipes
+      // the seeded thresholds, which is the behaviour the app must respect
+      // by always sending whole entries.
+      const at = doc.events.findIndex((e) => e['type'] === type)
+      doc.events[at === -1 ? doc.events.length : at] = { ...rule }
+    }
+    if (asked['enabled'] !== undefined) doc.enabled = asked['enabled'] === true
+
+    this.#pushRules = doc
+    return json(200, { enabled: doc.enabled, events: doc.events })
+  }
+
+  /** The effective document, rendered without writing — a GET that writes lies. */
+  #getPushRules(): ApiAnswer {
+    const doc = this.#pushRules ?? this.#seededRules()
+    return json(200, { enabled: doc.enabled, events: doc.events })
+  }
+
+  /**
+   * What this box has sent, newest first, exactly as it went out: rendered
+   * title and body, because that is what was shown and the record of an
+   * interruption is the interruption's own words.
+   */
+  #pushHistory(): ApiAnswer {
+    const now = this.#opts.now()
+    return json(200, {
+      events: [
+        {
+          kind: 'charging.session_complete',
+          title: 'Car charged',
+          body: '38.4 kWh delivered — ready to go.',
+          at_ms: now - 11 * 3_600_000,
+        },
+        {
+          kind: 'update.installed',
+          title: 'Your box updated itself',
+          body: 'Now running v2026.31.2. Everything came back on its own.',
+          at_ms: now - 2 * DAY_MS,
+        },
+      ],
+    })
   }
 
   /**

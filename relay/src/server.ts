@@ -27,8 +27,14 @@
  */
 
 import { WebSocketServer, type WebSocket, type RawData } from 'ws'
-import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http'
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+  type Server as HttpServer,
+} from 'node:http'
 import { currentEpoch } from './epoch.ts'
+import { Deadman, rowError } from './deadman.ts'
 import { AttemptCounter, TokenBucket } from './limits.ts'
 import {
   CLOSE_BAD_JOIN,
@@ -77,6 +83,18 @@ export interface RelayOptions {
   trustProxy?: boolean
   /** How long an epoch rotation is spread over. Five minutes by default. */
   rotateSpreadMs?: number
+  /**
+   * Where the dead man's switch rows live. Empty disables the switch and
+   * with it the relay's only persisted state — see relay/README.md's claim
+   * table before judging that trade.
+   */
+  deadmanPath?: string
+  /** Test seam: how a fired switch posts. Production uses fetch. */
+  deadmanPost?: (
+    endpoint: string,
+    body: Uint8Array,
+    headers: Record<string, string>
+  ) => Promise<{ status: number }>
 }
 
 export interface RoomInspection {
@@ -92,6 +110,8 @@ export interface RelayInspection {
   framesRouted: number
   bytesRouted: number
   heartbeats: number
+  /** Counts only. The rows themselves never appear on any surface. */
+  deadman: { rows: number; claimed: number; armed: number }
 }
 
 type Role = 'box' | 'app'
@@ -106,6 +126,8 @@ interface Peer {
   linked: boolean
   /** Kept only to decrement the per-address count on close. */
   address?: string
+  /** Dead-man ids this socket spoke for. Released together on close. */
+  claims?: Set<string>
 }
 
 interface Room {
@@ -192,7 +214,7 @@ export class RelayServer {
   #rooms = new Map<string, Room>()
   #attempts: AttemptCounter
   #timer: ReturnType<typeof setInterval>
-  #opts: Required<Omit<RelayOptions, 'port' | 'host'>>
+  #opts: Required<Omit<RelayOptions, 'port' | 'host' | 'deadmanPath' | 'deadmanPost'>>
   #epoch: number
   #rotateStartedAtMs: number | null = null
   #sockets = 0
@@ -201,6 +223,7 @@ export class RelayServer {
   #framesRouted = 0
   #bytesRouted = 0
   #heartbeats = 0
+  #deadman: Deadman
 
   private constructor(wss: WebSocketServer, opts: RelayOptions, http: HttpServer) {
     this.#wss = wss
@@ -226,6 +249,12 @@ export class RelayServer {
       { limit: this.#opts.attemptLimit, windowMs: this.#opts.attemptWindowMs },
       now
     )
+    this.#deadman = new Deadman({
+      path: opts.deadmanPath ?? '',
+      now: this.#opts.now,
+      log: this.#opts.log,
+      ...(opts.deadmanPost ? { post: opts.deadmanPost } : {}),
+    })
 
     this.#wss.on('connection', (socket, req) => this.#onConnection(socket, req))
 
@@ -244,12 +273,17 @@ export class RelayServer {
     // The answer is deliberately empty. Room counts or handles here would
     // hand an observer the household identifier the whole design exists to
     // withhold, and a health check is exactly the endpoint nobody guards.
+    // Bound after the instance exists; the callback below outlives this
+    // function, so the reference heals itself the moment start() resolves.
+    let deadmanRoutes: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null
+
     const http = createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/healthz/')) {
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
         res.end('ok\n')
         return
       }
+      if (deadmanRoutes?.(req, res)) return
       res.writeHead(426, { 'content-type': 'text/plain' })
       res.end('upgrade required\n')
     })
@@ -276,7 +310,9 @@ export class RelayServer {
         wss.on('error', (err) => log(`relay: websocket error after start: ${String(err)}`))
         http.on('error', (err) => log(`relay: http error after start: ${String(err)}`))
 
-        resolve(new RelayServer(wss, opts, http))
+        const relay = new RelayServer(wss, opts, http)
+        deadmanRoutes = (req, res) => relay.#serveDeadman(req, res)
+        resolve(relay)
       })
     })
   }
@@ -314,6 +350,7 @@ export class RelayServer {
       framesRouted: this.#framesRouted,
       bytesRouted: this.#bytesRouted,
       heartbeats: this.#heartbeats,
+      deadman: this.#deadman.inspect(),
     }
   }
 
@@ -421,8 +458,20 @@ export class RelayServer {
 
   #onMessage(peer: Peer, room: Room, data: RawData, isBinary: boolean): void {
     if (!isBinary) {
-      // Peers have nothing to say to the relay. Refusing text keeps the
-      // routing path free of anything the relay would have to interpret.
+      // Peers have almost nothing to say to the relay. The one exception is
+      // the uplink's dead-man claim — one word and an opaque id — which
+      // never enters the routing path: it is consumed here, whole, and no
+      // byte of it reaches any other peer. Everything else stays refused,
+      // which is what keeps the routing path free of interpretation.
+      if (peer.role === 'box') {
+        const text = data.toString()
+        if (/^deadman [0-9a-f]{32}$/.test(text)) {
+          const id = text.slice('deadman '.length)
+          ;(peer.claims ??= new Set()).add(id)
+          this.#deadman.claim(id)
+          return
+        }
+      }
       peer.socket.close(CLOSE_BAD_JOIN, 'binary only')
       return
     }
@@ -459,6 +508,11 @@ export class RelayServer {
 
   #onClose(handle: string, room: Room, peer: Peer): void {
     this.#sockets -= 1
+    if (peer.claims) {
+      // The countdown starts at the moment nobody is holding the switch.
+      for (const id of peer.claims) this.#deadman.release(id)
+      delete peer.claims
+    }
     if (peer.address !== undefined) {
       const left = (this.#perAddress.get(peer.address) ?? 1) - 1
       if (left > 0) this.#perAddress.set(peer.address, left)
@@ -489,6 +543,7 @@ export class RelayServer {
   }
 
   #beat(): void {
+    this.#deadman.beat()
     for (const room of this.#rooms.values()) {
       for (const peer of peers(room)) {
         if (!peer.alive) {
@@ -552,6 +607,77 @@ export class RelayServer {
         `frames=${this.#framesRouted} bytes=${this.#bytesRouted}`
     )
   }
+
+  /**
+   * The dead man rows' own door: POST upserts, DELETE withdraws.
+   *
+   * Plain HTTP beside /healthz rather than words on the socket, so the
+   * routing path stays uninterpreted and the row — the one thing here with
+   * a body — never shares a channel with room traffic. The id is the
+   * bearer capability: 128 bits the box derived from a secret this service
+   * never sees, so guessing one is guessing the secret's HMAC.
+   */
+  #serveDeadman(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = req.url ?? ''
+    if (req.method === 'POST' && (url === '/deadman' || url === '/deadman/')) {
+      collectBody(req, 16_384)
+        .then((body) => {
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(body.toString('utf8'))
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end('{"error":"a JSON object"}')
+            return
+          }
+          const fault = rowError(parsed)
+          if (fault) {
+            res.writeHead(fault === 'ct too large' ? 413 : 400, {
+              'content-type': 'application/json',
+            })
+            res.end(JSON.stringify({ error: fault }))
+            return
+          }
+          this.#deadman.put(parsed as Record<string, unknown>)
+          res.writeHead(204)
+          res.end()
+        })
+        .catch(() => {
+          res.writeHead(413, { 'content-type': 'application/json' })
+          res.end('{"error":"too large"}')
+        })
+      return true
+    }
+
+    const withdraw = url.match(/^\/deadman\/([0-9a-f]{32})$/)
+    if (req.method === 'DELETE' && withdraw) {
+      this.#deadman.remove(withdraw[1]!)
+      res.writeHead(204)
+      res.end()
+      return true
+    }
+
+    return false
+  }
+}
+
+/** Read a request body, bounded. Rejects past the cap instead of buffering. */
+function collectBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > maxBytes) {
+        req.destroy()
+        reject(new Error('too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
 }
 
 function peers(room: Room): Peer[] {
