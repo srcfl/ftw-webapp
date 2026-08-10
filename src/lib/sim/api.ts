@@ -200,6 +200,11 @@ export interface SimApiOptions {
   ceilingW: number
   /** This session's own device id, so its row can be marked. */
   deviceId?: string
+  /**
+   * What the door has done to the charger, read live from the box. The
+   * loadpoints answer must describe the same household the stream does.
+   */
+  loadpointState?: () => { holdW: number | null; boostActive: boolean }
 }
 
 const DAY_MS = 86_400_000
@@ -426,6 +431,10 @@ export class SimApi {
   #loadpoints(): ApiAnswer {
     const now = this.#opts.now()
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
+    // What the door has done overrides what the generator would do — the
+    // stream applies the same override, so both surfaces tell one story.
+    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
 
@@ -450,7 +459,7 @@ export class SimApi {
           id: 'carport',
           driver_name: 'easee',
           plugged_in: pluggedIn,
-          current_power_w: r.evW,
+          current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
           target_soc_pct: 84,
           updated_at_ms: now,
@@ -459,8 +468,10 @@ export class SimApi {
           max_charge_w: 11000,
           phases: 3,
           voltage_v: 230,
-          manual_active: false,
-          battery_boost: { state: 'inactive', active: false },
+          manual_active: door.holdW !== null,
+          battery_boost: door.boostActive
+            ? { state: 'active', active: true }
+            : { state: 'inactive', active: false },
           surplus_only: false,
           ...(this.#schedule ? { schedule: this.#schedule } : {}),
         },

@@ -23,6 +23,7 @@ export interface WireLoadpoint {
   target_soc_pct?: unknown
   updated_at_ms?: unknown
   soc_source?: unknown
+  max_charge_w?: unknown
   manual_active?: unknown
   surplus_only?: unknown
   battery_boost?: { state?: unknown; active?: unknown }
@@ -45,6 +46,8 @@ export interface Loadpoint {
   targetSocPct: number | null
   /** What this session has delivered, in watt-hours. */
   sessionWh: number
+  /** The charger's ceiling, for a charge-now hold. Null when unreported. */
+  maxChargeW: number | null
   manualActive: boolean
   surplusOnly: boolean
   boostActive: boolean
@@ -70,6 +73,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     socPct: num(w.current_soc_pct),
     targetSocPct: num(w.target_soc_pct),
     sessionWh: Math.max(0, Math.round(num(w.delivered_wh_session) ?? 0)),
+    maxChargeW: num(w.max_charge_w),
     manualActive: w.manual_active === true,
     surplusOnly: w.surplus_only === true,
     boostActive: w.battery_boost?.active === true,

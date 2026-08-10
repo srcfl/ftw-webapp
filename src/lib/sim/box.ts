@@ -42,6 +42,8 @@ import {
   API_MAX_BYTES,
   OP_SET_MODE,
   OP_BATTERY_HOLD,
+  OP_LOADPOINT_HOLD,
+  OP_LOADPOINT_BOOST,
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
@@ -236,6 +238,8 @@ const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
 const OP_SCOPES: Record<string, string> = {
   [OP_SET_MODE]: 'ftw.mode.write',
   [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_HOLD]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
 }
 
 const CAPS = [
@@ -308,6 +312,10 @@ export class SimBox {
   #socPermille = 620
   #seq = 0
   #controlRev = 1
+  /** The operator's manual charge hold, set through the door. Null when none. */
+  #evHold: { powerW: number } | null = null
+  /** The battery-boost lease, set through the door. Null when none. */
+  #evBoost: { expiresAtMs: number } | null = null
   #subscribed = false
   #negotiatedProto = PROTO_MAX
   #bucket: 256 | 512 = 512
@@ -346,6 +354,12 @@ export class SimBox {
       house: this.house,
       now: this.#now,
       ceilingW: this.#ceilingW,
+      // The API answers about the same charger the door commands: one
+      // household, whichever surface asks.
+      loadpointState: () => ({
+        holdW: this.#evHold?.powerW ?? null,
+        boostActive: this.#evBoost !== null,
+      }),
     })
   }
 
@@ -426,11 +440,29 @@ export class SimBox {
     }
   }
 
+  /**
+   * One moment of the house, with the operator's holds applied.
+   *
+   * A manual charge hold replaces what the generator would have the car
+   * draw, in the same reading every consumer sees — the 1 Hz stream, the
+   * snapshot, and the API's loadpoints answer must describe one household,
+   * or the panel would say "charging at 11 kW" beside a still hero.
+   */
+  #sample(): Reading {
+    const reading = sample(this.house, this.#now(), this.#socPermille, this.#ceilingW)
+    if (this.#evHold) {
+      const held = { ...reading, evW: this.#evHold.powerW }
+      held.gridW = reading.gridW - reading.evW + held.evW
+      return held
+    }
+    return reading
+  }
+
   /** Advance one telemetry step. The driver of the simulation. */
   tick(stepMs = 1000): void {
     if (!this.#subscribed || this.faults.booting) return
 
-    const reading = sample(this.house, this.#now(), this.#socPermille, this.#ceilingW)
+    const reading = this.#sample()
     this.#socPermille = stepSoc(this.house, this.#socPermille, reading.batteryW, stepMs)
     this.#lastReading = reading
 
@@ -555,7 +587,7 @@ export class SimBox {
     this.#lastSent.clear()
     this.#lastSourcesJson = JSON.stringify(this.#sources())
 
-    const reading = sample(this.house, this.#now(), this.#socPermille, this.#ceilingW)
+    const reading = this.#sample()
     this.#lastReading = reading
 
     const fields: Record<string, number> = {
@@ -597,6 +629,14 @@ export class SimBox {
     }
 
     // Before the expiry, the revision, the guards and the site's own state.
+    // An op the box has never heard of is refused by name, exactly as the
+    // box refuses it — falling through to some default behaviour would let
+    // an app typo pass every test here and fail against every real box.
+    if (!(cmd.op in OP_SCOPES)) {
+      this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
+      return
+    }
+
     // A grant that does not carry the scope is not a command that failed a
     // precondition — it is one that was never this caller's to make, and
     // nothing downstream should get the chance to act on it.
@@ -658,6 +698,63 @@ export class SimBox {
     if (cmd.op === OP_SET_MODE) {
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: MODE_KEYS.indexOf(this.#mode),
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // The charger's two ops, box conventions throughout: clearing is its
+    // own signal because 0 W is a valid pause hold, an unknown loadpoint is
+    // a bad argument, and the readback reports what the charger holds now.
+    if (cmd.op === OP_LOADPOINT_HOLD) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      if (cmd.args['clear'] === true) {
+        this.#evHold = null
+      } else {
+        const w = typeof cmd.args['power_w'] === 'number' ? cmd.args['power_w'] : 0
+        if (w < 0) {
+          this.#cmdResult(cmd.cmdId, 'rejected', {
+            code: 'E_UNKNOWN_OP',
+            args: { field: 'power_w' },
+          })
+          return
+        }
+        this.#evHold = { powerW: Math.round(w) }
+      }
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evHold?.powerW ?? 0,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    if (cmd.op === OP_LOADPOINT_BOOST) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      if (cmd.args['cancel'] === true) {
+        this.#evBoost = null
+      } else {
+        const durS = cmd.args['duration_s']
+        if (typeof durS !== 'number' || durS <= 0) {
+          this.#cmdResult(cmd.cmdId, 'rejected', {
+            code: 'E_UNKNOWN_OP',
+            args: { field: 'duration_s' },
+          })
+          return
+        }
+        this.#evBoost = { expiresAtMs: this.#now() + durS * 1000 }
+      }
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evBoost ? 1 : 0,
         src: 'core',
         uptimeMs: this.uptimeMs,
       })

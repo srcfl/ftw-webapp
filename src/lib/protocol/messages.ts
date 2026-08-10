@@ -475,6 +475,8 @@ export function carriesOverSession(contentType: string | undefined): boolean {
  */
 export const OP_SET_MODE = 'site.mode.set'
 export const OP_BATTERY_HOLD = 'battery.hold'
+export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
+export const OP_LOADPOINT_BOOST = 'loadpoint.boost'
 
 export interface Guard {
   fid: Fid

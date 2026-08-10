@@ -8,7 +8,7 @@
   Round two puts an editor under the schedule line; nothing here commands.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { untrack, onDestroy } from 'svelte'
   import { LoadpointsStore } from '$lib/state/loadpoints.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
   import { callBox, BoxApiError } from '$lib/state/box-api'
@@ -33,6 +33,7 @@
   let { site, onclose }: Props = $props()
 
   const store = new LoadpointsStore(untrack(() => site))
+  onDestroy(() => store.destroy())
 
   // Fresh while open: the ask name carries a minute epoch, so askWhenLive
   // re-asks as the window ages — the same rule History and Energy follow.
@@ -172,6 +173,44 @@
 
         {#if lp.boostActive}
           <p class="badge">Battery boost is on — the house battery is helping the car.</p>
+        {/if}
+
+        <!-- The door, not the panel, decides: the button expresses intent
+             with an expiry, and the box revalidates before anything moves.
+             Hidden from viewers as presentation — the box's refusal is the
+             actual gate. Absent when the bay is empty, because "charge now"
+             with no cable is a promise nobody can keep. -->
+        {#if site.canConfigure && lp.pluggedIn}
+          <div class="actions">
+            {#if lp.manualActive}
+              <button
+                class="quiet outline"
+                disabled={store.command.kind === 'sending'}
+                onclick={() => void store.stopCharging(lp)}
+              >
+                Stop charging
+              </button>
+            {:else}
+              <button
+                class="primary"
+                disabled={store.command.kind === 'sending'}
+                onclick={() => void store.chargeNow(lp)}
+              >
+                {store.command.kind === 'sending' ? 'Asking your box…' : 'Charge now'}
+              </button>
+            {/if}
+          </div>
+          {#if store.command.kind === 'applied'}
+            <p class="hint">
+              {store.command.holding
+                ? 'Charging at full power. Stop it and the plan takes back over.'
+                : 'Stopped — the plan decides again.'}
+            </p>
+          {:else if store.command.kind === 'unconfirmed'}
+            <p class="hint">Your box took it. The charger hasn't confirmed yet.</p>
+          {:else if store.command.kind === 'failed'}
+            <p class="hint">{store.command.help}</p>
+          {/if}
         {/if}
 
         {#if draft?.lpId === lp.id}
