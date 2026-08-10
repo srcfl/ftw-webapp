@@ -19,10 +19,6 @@
   color-scheme: dark;
 
   /* ----- Surfaces, dark (default) ----- */
-  /* TEMPORARY, for the black-band probe in the Box tab: env() cannot be
-     read from script, so it is parked on a property that can. Removed with
-     the probe. */
-  --probe-inset-bottom: env(safe-area-inset-bottom, 0px);
   --surface: #0d0d0d;
   --surface-sunken: #101010;
   --surface-raised: #161616;

@@ -547,7 +547,16 @@
        stack into a strip of empty bar that reads as dead space on a phone.
        max() takes whichever is larger, so a device without an indicator
        keeps the ordinary padding and one with an indicator clears it
-       exactly. */
+       exactly.
+
+       Except where the system has already done it. Measured on Fredrik's
+       installed app: window, visual viewport, shell and bar all end at 812
+       while env(safe-area-inset-bottom) still reports 34px — iOS keeps a
+       standalone web view out of the indicator's zone AND goes on reporting
+       the inset, so honouring it there reserves the same strip twice and
+       leaves an empty band inside the bar. `html.reserved-by-the-os` is set
+       at startup for exactly that case and nothing else; every other phone,
+       tab and platform keeps the clearance it needs. */
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
     /* Raised, not sunken. Sunken is #101010 against the shell's #0d0d0d —
@@ -557,6 +566,11 @@
        app) reads as a band of dead black rather than as part of a bar. A
        surface you can see is what makes that space belong to something. */
     background: var(--surface-raised);
+  }
+
+  /* The strip the system already reserved. See the note above the padding. */
+  :global(html.reserved-by-the-os) nav {
+    padding-bottom: var(--space-2);
   }
 
   nav button {

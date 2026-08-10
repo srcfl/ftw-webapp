@@ -166,36 +166,6 @@
     }
   }
 
-  /**
-   * TEMPORARY. Where the screen ends, and where the app thinks it ends.
-   *
-   * Four rounds of theory have not settled the black band under the tab bar,
-   * and every measurement so far has been mine on a desktop browser, which
-   * has no notch, no home indicator and no standalone window. These are the
-   * five numbers that tell the three remaining stories apart: the shell
-   * stopping short, the tab bar stopping short, or the web view itself being
-   * inset by iOS — in which case no CSS can reach it. Comes straight back out
-   * once it has been read once.
-   */
-  let probe = $state('measuring…')
-  $effect(() => {
-    const read = () => {
-      const app = document.querySelector('.app')?.getBoundingClientRect()
-      const nav = document.querySelector('nav')?.getBoundingClientRect()
-      const vv = window.visualViewport
-      const inset = getComputedStyle(document.documentElement)
-        .getPropertyValue('--probe-inset-bottom')
-        .trim()
-      probe =
-        `win ${Math.round(window.innerHeight)} · vis ${Math.round(vv?.height ?? 0)} · ` +
-        `app ${Math.round(app?.bottom ?? 0)} · nav ${Math.round(nav?.bottom ?? 0)} · ` +
-        `inset ${inset || '?'} · sa ${(navigator as Navigator & { standalone?: boolean }).standalone === true ? 'yes' : 'no'}`
-    }
-    read()
-    const t = setInterval(read, 1000)
-    return () => clearInterval(t)
-  })
-
   const build = $derived(site.session.box?.build ?? null)
   const timeZone = $derived(site.session.box?.tz ?? null)
 
@@ -250,12 +220,6 @@
       <span class="num">{name}</span>
     </p>
   {/if}
-
-  <!-- TEMPORARY. A measurement, not a feature: four rounds of guessing at a
-       black band under the tab bar have not settled where it comes from, and
-       nothing about it can be measured from here. Read once off the phone
-       that shows it, then this comes straight back out. -->
-  <p class="probe num">{probe}</p>
 
   <dl>
     {#if build}
@@ -396,16 +360,6 @@
     font-size: 28px;
     letter-spacing: -0.01em;
     color: var(--fg);
-  }
-
-  /* TEMPORARY, with the probe above. */
-  .probe {
-    font-size: 11px;
-    line-height: 1.6;
-    color: var(--fg-muted);
-    border: 1px dashed var(--line);
-    border-radius: var(--radius-xs);
-    padding: var(--space-2);
   }
 
   h2 {
