@@ -537,8 +537,18 @@
   nav {
     display: flex;
     gap: var(--space-1);
+    /* Pinned to the bottom of the shell whatever happens above it. `main`
+       already grows to fill, so this is a belt: if anything ever stops it
+       growing, the tab bar still sits on the bottom edge rather than
+       floating up and leaving a band of bare shell under it. */
+    margin-top: auto;
     padding: var(--space-2) var(--space-3);
-    padding-bottom: calc(var(--space-2) + env(safe-area-inset-bottom));
+    /* The home indicator's clearance, not that plus our own padding: the two
+       stack into a strip of empty bar that reads as dead space on a phone.
+       max() takes whichever is larger, so a device without an indicator
+       keeps the ordinary padding and one with an indicator clears it
+       exactly. */
+    padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
     border-top: 1px solid var(--line-soft);
     background: var(--surface-sunken);
   }
