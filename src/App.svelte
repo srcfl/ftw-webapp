@@ -558,19 +558,21 @@
        at startup for exactly that case and nothing else; every other phone,
        tab and platform keeps the clearance it needs. */
     padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+    /* The one line that says "bar". Everything else about it is the same
+       surface as the app, on purpose: below an installed app's web view
+       there is a strip of screen iOS paints and no CSS here can reach, and
+       it carries this colour. A bar in a different shade would end at that
+       strip in a visible seam; the same shade runs into it, so the bottom
+       of the app is one surface with a rule drawn across it. */
     border-top: 1px solid var(--line);
-    /* Raised, not sunken. Sunken is #101010 against the shell's #0d0d0d —
-       three steps apart, which on a phone's black screen is no difference at
-       all: the labels read as floating over nothing, and the bar's lower half
-       (its own padding, plus the home indicator's clearance on an installed
-       app) reads as a band of dead black rather than as part of a bar. A
-       surface you can see is what makes that space belong to something. */
-    background: var(--surface-raised);
+    background: var(--surface);
   }
 
-  /* The strip the system already reserved. See the note above the padding. */
+  /* Where the system already cleared the indicator, the labels go all the
+     way down to meet the strip below — nothing between the bar and the edge
+     of what we are allowed to paint. See the note above the padding. */
   :global(html.reserved-by-the-os) nav {
-    padding-bottom: var(--space-2);
+    padding-bottom: 0;
   }
 
   nav button {
