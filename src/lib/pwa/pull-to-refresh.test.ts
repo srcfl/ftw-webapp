@@ -36,6 +36,14 @@ afterEach(() => {
 })
 
 describe('pull to refresh', () => {
+  it('warms the moving layer before the first touch and releases it on teardown', () => {
+    const view = mounted()
+
+    expect(view.surface.style.willChange).toBe('transform')
+    view.stop()
+    expect(view.surface.style.willChange).toBe('')
+  })
+
   it('follows a downward pull and refreshes only after release past the detent', () => {
     const view = mounted()
 
@@ -51,7 +59,7 @@ describe('pull to refresh', () => {
 
     expect(view.refresh).toHaveBeenCalledOnce()
     expect(view.indicator.dataset.state).toBe('refreshing')
-    expect(view.surface.style.transform).toContain('48px')
+    expect(view.surface.style.transform).toContain('44px')
     view.stop()
   })
 
@@ -95,7 +103,8 @@ describe('pull to refresh', () => {
   it('adds resistance and never lets the surface run away from the finger', () => {
     expect(resistedPull(0)).toBe(0)
     expect(resistedPull(40)).toBeGreaterThan(0)
+    expect(resistedPull(80), 'an ordinary thumb pull should cross the detent').toBeGreaterThan(56)
     expect(resistedPull(200)).toBeGreaterThan(resistedPull(40))
-    expect(resistedPull(10_000)).toBeLessThanOrEqual(92)
+    expect(resistedPull(10_000)).toBeLessThanOrEqual(104)
   })
 })

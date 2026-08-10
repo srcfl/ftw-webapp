@@ -24,8 +24,7 @@ html {
 
   /* The backstop colour behind everything. Without it html is transparent
      and an installed PWA shows WebKit's black wherever body does not reach
-     to the pixel — the safe-area insets under a black-translucent status
-     bar, the hair of difference between 100dvh and 100%, the moment of a
+     to the pixel — at a safe-area edge, between viewport units, or during a
      rotation. That black reads as dead space around the app. Painting html
      the surface colour means any such gap is the app's own background, not
      a hole in it. */

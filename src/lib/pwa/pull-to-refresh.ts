@@ -11,10 +11,10 @@
  */
 
 const INTENT_PX = 6
-const THRESHOLD_PX = 60
-const MAX_PX = 92
-const RESISTANCE_PX = 112
-const HOLD_PX = 48
+const THRESHOLD_PX = 56
+const MAX_PX = 104
+const RESISTANCE_PX = 96
+const HOLD_PX = 44
 
 type Refresh = () => void | Promise<void>
 
@@ -48,6 +48,11 @@ export function attachPullToRefresh({
   let armed = false
   let settleTimer: ReturnType<typeof setTimeout> | undefined
 
+  // The dynamic chunk arrives after mount, so this does not tax the first
+  // frame. Keeping the one dashboard layer warm avoids paying its promotion
+  // cost on the first touchmove, which is exactly where a hitch is felt.
+  surface.style.willChange = 'transform'
+
   const start = (event: TouchEvent) => {
     if (event.touches.length !== 1 || scroller.scrollTop > 0) return
     const touch = event.touches[0]
@@ -59,7 +64,6 @@ export function attachPullToRefresh({
     tracking = true
     locked = false
     armed = false
-    surface.style.willChange = 'transform'
   }
 
   const move = (event: TouchEvent) => {
@@ -145,9 +149,10 @@ export function attachPullToRefresh({
 
   const paint = (distance: number, ready: boolean) => {
     const progress = Math.min(1, distance / THRESHOLD_PX)
-    surface.dataset.pulling = 'true'
+    if (surface.dataset.pulling !== 'true') surface.dataset.pulling = 'true'
     surface.style.transform = `translate3d(0, ${distance.toFixed(2)}px, 0)`
-    indicator.dataset.state = ready ? 'ready' : 'pulling'
+    const nextState = ready ? 'ready' : 'pulling'
+    if (indicator.dataset.state !== nextState) indicator.dataset.state = nextState
     indicator.style.opacity = String(Math.max(0, Math.min(1, (distance - 8) / 28)))
     indicator.style.transform = `translate3d(-50%, ${(distance * 0.55 - 28).toFixed(2)}px, 0) scale(${(
       0.78 + progress * 0.22
@@ -172,7 +177,6 @@ export function attachPullToRefresh({
 
   const clearPull = () => {
     surface.style.removeProperty('transform')
-    surface.style.removeProperty('will-change')
     surface.removeAttribute('data-pulling')
     indicator.style.removeProperty('opacity')
     indicator.style.removeProperty('transform')
@@ -194,5 +198,6 @@ export function attachPullToRefresh({
     scroller.removeEventListener('touchend', end)
     scroller.removeEventListener('touchcancel', cancel)
     clearPull()
+    surface.style.removeProperty('will-change')
   }
 }

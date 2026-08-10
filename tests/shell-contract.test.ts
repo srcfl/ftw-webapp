@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const shell = readFileSync('src/App.svelte', 'utf8')
+const document = readFileSync('index.html', 'utf8')
 
 /** The `<style>` block, so a comment elsewhere cannot satisfy a check. */
 function css(): string {
@@ -75,13 +76,14 @@ describe('the shell fits any screen', () => {
     expect(nav, 'a bar with no visible edge is not a bar').toMatch(/border-top:/)
   })
 
-  it('fills the installed iOS screen when its fixed viewport is short', () => {
-    // On the measured phone, inset: 0 stopped 62px above the screen edge.
-    // WebKit still exposes the full installed screen as 100vh, so the shell
-    // uses that height only for the short standalone case.
-    const reserved = rule(':global(html.reserved-by-the-os) .app')
-    expect(reserved).toMatch(/bottom:\s*auto/)
-    expect(reserved).toMatch(/height:\s*100vh/)
+  it('uses the iOS status mode whose viewport reaches the bottom', () => {
+    // WebKit bug 236445 makes black-translucent shift and clip the bottom of
+    // a standalone app by the top safe-area inset. The opaque black bar is
+    // the same visible colour here and gives the app the usable viewport.
+    expect(document).toMatch(
+      /name="apple-mobile-web-app-status-bar-style"\s+content="black"/
+    )
+    expect(document).not.toMatch(/content="black-translucent"/)
   })
 
   it('reserves the notch on the shell, so the bar is free to reach the edge', () => {

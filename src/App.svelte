@@ -570,15 +570,6 @@
     background: var(--surface);
   }
 
-  /* WebKit can make the fixed containing block one top inset shorter in an
-     installed app with a translucent status bar. `100vh` still names the
-     whole installed screen there, so let the shell extend past that short
-     block. The class is set before first paint only for that measured case. */
-  :global(html.reserved-by-the-os) .app {
-    bottom: auto;
-    height: 100vh;
-  }
-
   main {
     position: relative;
     flex: 1;
