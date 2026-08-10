@@ -9,9 +9,10 @@
  *   an old genuine blob cannot be put back, neither by the service refusing
  *     the write nor by the service lying about which version it is holding;
  *   a phone with nothing on it comes back with the passkey alone, as the same
- *     device the box already trusts;
- *   and a household that never turned this on pays nothing at all — no
- *     prompt, no request, no row.
+ *     device the box already trusts — and, since Fredrik's change, does so
+ *     without ever finding a switch: pairing holds the copy by default;
+ *   and a passkey that cannot seal one — a device with no PRF — pays nothing
+ *     at all, no prompt, no request, no row.
  *
  * The keychain outlives the install here, the way a synced passkey does, and
  * the storage does not. That is the whole situation this feature exists for.
@@ -138,20 +139,40 @@ function enrollmentUrl(): string {
   })
 }
 
-/** Pair, the way the pairing screen does. Returns the site id. */
+/**
+ * Pair, the way the pairing screen does — through the mock escrow, so the
+ * copy pairing now holds by default lands in the test's own service. The
+ * seal is awaited here (the app never does) so a test sees a settled world.
+ */
 async function pair(): Promise<string> {
-  const { site } = await pairWithBox(enrollmentUrl())
+  const { site, sealed } = await pairWithBox(enrollmentUrl(), { escrow: wired() })
+  await sealed
   return site.siteId
 }
 
 const unlock = (): Promise<WrappingKey> => unlockWrappingKey(openVaultStore())
 
-/** Pair, say yes to the offer, and let the copy be written. */
+/**
+ * Pair and write exactly one copy — version 1. Pairs by hand so the single
+ * opt-in save is the first write, which is what the version-mechanics tests
+ * narrate; the automatic-copy default is proved on its own, above.
+ */
 async function pairAndOptIn(): Promise<string> {
-  const siteId = await pair()
+  const siteId = await pairByHand()
   await markEscrowed(siteId, true)
   expect(await saveEscrowCopy(openVaultStore(), await unlock(), wired())).toBe('saved')
   return siteId
+}
+
+/**
+ * Pair without the automatic copy, for tests that drive the escrow by hand
+ * and need to start from an empty one — the save/replay/version mechanics,
+ * where an automatic v1 would only shift every number under test.
+ */
+async function pairByHand(): Promise<string> {
+  const { site, sealed } = await pairWithBox(enrollmentUrl(), { escrow: wired(), holdCopy: false })
+  await sealed
+  return site.siteId
 }
 
 function findBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
@@ -398,7 +419,7 @@ describe('a phone with nothing on it', () => {
   it('is told there is nothing held, rather than shown an error', async () => {
     // The ordinary answer for a passkey that never escrowed anything. Shown as
     // a failure it sends someone hunting for a fault that is not there.
-    await pair()
+    await pairByHand()
     await wipeThisDevice()
 
     await expect(recoverFromEscrow(wired())).resolves.toEqual([])
@@ -412,7 +433,7 @@ describe('a phone with nothing on it', () => {
     // seed, and therefore a different lookup id. There is nothing under it.
     mock.uninstall()
     mock = installMockAuthenticator({ keychain: newKeychain() })
-    await pair()
+    await pairByHand()
 
     await expect(recoverFromEscrow(wired())).resolves.toEqual([])
   })
@@ -469,7 +490,7 @@ describe('what the wire gives away', () => {
     // A read that finds none: another account's keychain, so another id.
     mock.uninstall()
     mock = installMockAuthenticator({ keychain: newKeychain() })
-    await pair()
+    await pairByHand()
     expect(await recoverFromEscrow(wire())).toEqual([])
 
     // And a clear, which is a read and a write of zero bytes.
@@ -494,31 +515,31 @@ describe('what the wire gives away', () => {
   })
 })
 
-describe('a household that never turned it on', () => {
-  it('has no row anywhere, and never had a request made for it', async () => {
-    await pair()
+describe('a copy held by default', () => {
+  it('is sealed by pairing alone, with no second prompt, and opens on a fresh phone', async () => {
+    // The change Fredrik asked for: the way back exists from the first
+    // device without anyone finding a switch. Pairing is one passkey
+    // ceremony, and the copy rides that same unlocked key — the prompt
+    // count after pairing is exactly the pairing's own.
+    const promptsBefore = mock.createCalls + mock.getCalls
+    const siteId = await pair()
 
-    expect(await escrowedHomes()).toEqual([])
-    expect(service.rows()).toEqual([])
-    expect(service.requests, 'a household that opted out was still asked about').toBe(0)
+    expect(await escrowedHomes(), 'pairing did not hold a copy by default').not.toEqual([])
+    expect(service.rows()[0]!.blob.length).toBe(RECOVERY_BLOB_MAX_BYTES)
+    expect(
+      mock.createCalls + mock.getCalls - promptsBefore,
+      'the automatic copy cost a second passkey prompt'
+    ).toBe(1)
+
+    // And it is a real way back: a wiped phone recovers with the passkey
+    // alone, having opted into nothing.
+    await wipeThisDevice()
+    const back = await recoverFromEscrow(wired())
+    expect(back.map((h) => h.siteId)).toEqual([siteId])
   })
 
-  it('signs out with no passkey prompt and no request', async () => {
-    // The whole cost of never opting in. Someone who did not ask for this must
-    // be exactly where they were before it existed — and a sign-out that
-    // prompts for Face ID to remove a copy that does not exist is the most
-    // likely way for that to stop being true.
-    await pair()
-    const promptsBefore = mock.getCalls
-
-    expect(await removeEscrowCopy(wired())).toBe('nothing-to-remove')
-
-    expect(mock.getCalls, 'signing out asked for a passkey it did not need').toBe(promptsBefore)
-    expect(service.requests, 'signing out reached for a copy that was never made').toBe(0)
-  })
-
-  it('empties the copy for a household that did turn it on', async () => {
-    await pairAndOptIn()
+  it('empties on sign-out', async () => {
+    const siteId = await pair()
     expect(service.rows()[0]!.blob.length).toBe(RECOVERY_BLOB_MAX_BYTES)
 
     expect(await removeEscrowCopy(wired())).toBe('removed')
@@ -529,7 +550,37 @@ describe('a household that never turned it on', () => {
     const [row] = service.rows()
     expect(row!.blob.length).toBe(0)
     expect(row!.ver).toBe(2)
+    void siteId
     await wipeThisDevice()
     await expect(recoverFromEscrow(wired())).resolves.toEqual([])
+  })
+})
+
+describe('a passkey that cannot seal a copy', () => {
+  it('holds nothing, and was never asked to', async () => {
+    // A device with no PRF derives no escrow id, on purpose — a copy sealed
+    // under a key that sits unwrapped on disk is one anyone holding the
+    // phone could upload. So the whole feature stays off for it, silently:
+    // no row, no request, exactly where it was before the escrow existed.
+    mock.prf = 'none'
+    keychain.current = newKeychain()
+
+    await pair()
+
+    expect(await escrowedHomes()).toEqual([])
+    expect(service.rows()).toEqual([])
+    expect(service.requests, 'a phone that cannot seal was still asked about').toBe(0)
+  })
+
+  it('signs out with no passkey prompt and no request', async () => {
+    mock.prf = 'none'
+    keychain.current = newKeychain()
+    await pair()
+    const promptsBefore = mock.getCalls
+
+    expect(await removeEscrowCopy(wired())).toBe('nothing-to-remove')
+
+    expect(mock.getCalls, 'signing out asked for a passkey it did not need').toBe(promptsBefore)
+    expect(service.requests, 'signing out reached for a copy that was never made').toBe(0)
   })
 })

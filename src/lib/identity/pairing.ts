@@ -31,6 +31,7 @@ import {
   deviceKey,
   isEnrolled,
   type VaultStore,
+  type WrappingKey,
 } from './vault'
 import type { KeyPair } from '$lib/crypto/noise'
 import { db, requestPersistence, type StoredSite } from '$lib/store/db'
@@ -71,6 +72,12 @@ export async function siteIdFor(boxStaticKey: Uint8Array): Promise<string> {
 export interface PairResult {
   site: PairedSite
   deviceStatic: KeyPair
+  /**
+   * The background seal of the spare copy. The app never awaits it — the
+   * house shows at once and the copy catches up — but a test can, to see
+   * that pairing holds a copy by default.
+   */
+  sealed: Promise<void>
 }
 
 export interface PairOptions {
@@ -78,6 +85,12 @@ export interface PairOptions {
   store?: VaultStore
   /** Shown on the passkey prompt. */
   label?: string
+  /** Where the sealed copy goes. Injected by tests; the default is the real
+   *  escrow. */
+  escrow?: import('./escrow').EscrowOptions
+  /** Hold a sealed copy by default. Off only for tests that drive the escrow
+   *  by hand and need to start from an empty one. */
+  holdCopy?: boolean
 }
 
 /**
@@ -117,6 +130,18 @@ export async function pairWithBox(
 
   await storeSite(site)
 
+  // Hold a sealed copy from the first device, without anyone finding a
+  // switch. The way back should exist by default, and for an escrow
+  // Sourceful cannot open — opaque id, nothing beside it — holding it costs
+  // the household nothing. In the background, so it never delays the house,
+  // and self-correcting: a write that does not land leaves the home
+  // unmarked rather than claiming a copy that is not there. The BOX screen
+  // is the off switch.
+  const sealed =
+    opts.holdCopy === false
+      ? Promise.resolve()
+      : holdSealedCopy(store, wrapping, siteId, opts.escrow)
+
   // Asked for only once there is something worth keeping. Prompting on a
   // first launch that has no data yet is a question about nothing.
   void requestPersistence()
@@ -124,6 +149,47 @@ export async function pairWithBox(
   return {
     site,
     deviceStatic: { secretKey: new Uint8Array(0), publicKey: device.publicKey },
+    sealed,
+  }
+}
+
+/**
+ * Put the just-paired home in the escrow, by default.
+ *
+ * The wrapping key is the one the pairing ceremony already unlocked, so
+ * this adds no prompt. A device with no PRF seals nothing — the local
+ * fallback derives no escrow id, on purpose, because a copy sealed under a
+ * key that sits unwrapped on disk is one anyone holding the phone could
+ * upload. Everything is best-effort: pairing has already succeeded, and a
+ * spare copy that could not be written is not a reason to undo it. The mark
+ * follows the write, so the BOX screen never says a copy is held when it is
+ * not. Dynamically imported to keep escrow's crypto out of the pairing
+ * chunk, and because escrow imports this file.
+ */
+async function holdSealedCopy(
+  store: VaultStore,
+  wrapping: WrappingKey,
+  siteId: string,
+  escrow?: import('./escrow').EscrowOptions
+) {
+  if (!wrapping.escrow) return
+  try {
+    const { markEscrowed, saveEscrowCopy } = await import('./escrow')
+    await markEscrowed(siteId, true)
+    if ((await saveEscrowCopy(store, wrapping, escrow ?? {})) !== 'saved') {
+      await markEscrowed(siteId, false)
+    }
+  } catch {
+    // Offline, a dismissed prompt, a disk that refused — the home stays
+    // exactly as it paired, minus a spare copy it can make next time the
+    // BOX screen is opened. Never surfaced here: pairing already worked.
+    try {
+      const { markEscrowed } = await import('./escrow')
+      await markEscrowed(siteId, false)
+    } catch {
+      // The mark is this device's belief about a copy; a stale one costs a
+      // wrong word on the BOX screen and is put right by the next attempt.
+    }
   }
 }
 
