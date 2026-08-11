@@ -89,7 +89,6 @@ describe('a stream returning from phone sleep', () => {
     const box = new SimBox({ now: () => Date.now() })
     const carrier = new WakeableLoopback(box, { latencyMs: 0 })
     const site = new SiteStore('test')
-    await site.start('home-a')
     site.connect(carrier)
     await vi.advanceTimersByTimeAsync(100)
     expect(site.session.phase).toBe('streaming')
@@ -111,7 +110,6 @@ describe('a stream returning from phone sleep', () => {
     const box = new SimBox({ now: () => Date.now() })
     const carrier = new WakeableLoopback(box, { latencyMs: 0 })
     const site = new SiteStore('test')
-    await site.start('home-a')
     site.connect(carrier)
     await vi.advanceTimersByTimeAsync(100)
     expect(site.session.phase).toBe('streaming')
@@ -134,7 +132,6 @@ describe('a stream returning from phone sleep', () => {
     const box = new SimBox({ now: () => Date.now() })
     const carrier = new WakeableLoopback(box, { latencyMs: 0 })
     const site = new SiteStore('test')
-    await site.start('home-a')
     site.connect(carrier)
     await vi.advanceTimersByTimeAsync(100)
     carrier.wakeCalls = 0
