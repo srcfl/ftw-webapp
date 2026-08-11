@@ -109,20 +109,12 @@ jobs:
       - name: Frame size does not track what happened in the house
         run: npx vitest run tests/relay-constant-shape.test.ts src/lib/protocol/frame.test.ts
 
-      # The simulator must not reach a shipped bundle: it would let an app
-      # show plausible readings with no box behind them.
-      #
-      # Source maps are excluded on purpose. They do name the simulator, and
-      # they are published deliberately: the privacy claim rests on this build
-      # being auditable against its source, and a map is what makes that
-      # possible without trusting our word for it.
-      - name: No simulator in the production build
-        run: |
-          if grep -rlE "simulated-site|SimBox|mulberry32" --include='*.js' dist/assets/ 2>/dev/null; then
-            echo "the box simulator reached the production bundle"
-            exit 1
-          fi
-          echo "clean"
+      # The public demo ships on purpose, but it must stay behind import() so
+      # no real home downloads it on launch. This test walks the production
+      # manifest's static imports and also proves the demo is one dynamic
+      # entry, available from the service worker only after someone asks.
+      - name: Public demo stays out of the launch bundle
+        run: npx vitest run tests/entry-bundle.test.ts
 
       # A budget, not a guideline. The first frame is the product, and a
       # bundle that grows without anyone noticing is how it stops being.
