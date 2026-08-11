@@ -26,7 +26,10 @@ import { addLinkCount, markLinkPhase } from '$lib/perf/link'
  * The box answers a refused handshake with silence rather than a rejection,
  * so this is the only thing that distinguishes "not yet" from "never".
  */
-const HANDSHAKE_DEADLINE_MS = 12_000
+export const HANDSHAKE_DEADLINE_MS = 12_000
+
+/** A foreground user should never wait out the ordinary retry window. */
+export const FOREGROUND_HANDSHAKE_DEADLINE_MS = 3_000
 
 /**
  * Retry pacing for a handshake that timed out on a healthy socket.
@@ -97,6 +100,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   #deadline: ReturnType<typeof setTimeout> | undefined
   #retry: ReturnType<typeof setTimeout> | undefined
   #attempt = 0
+  /** Use the short deadline for the first handshake after a phone wakes. */
+  #foregroundAttempt = false
   #log: ((line: string) => void) | undefined
 
   /** Kept so each reconnection can start a fresh handshake from the same input. */
@@ -149,18 +154,36 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     }
   }
 
+  /**
+   * Abandon any session the browser may have frozen and start a fresh one.
+   *
+   * The inner carrier decides whether its socket also needs replacing. A
+   * carrier without a wake hook can still retry Noise on its open path.
+   */
+  wake(): void {
+    if (this.#closed) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+
+    this.#attempt = 0
+    this.#foregroundAttempt = true
+    this.#resetSession()
+    this.#clearRetry()
+    this.#setStatus({ phase: 'closed', reason: 'reconnecting after wake', retryable: true })
+
+    this.#inner.wake?.()
+    if (this.#inner.status.phase === 'open') this.#beginHandshake()
+  }
+
   close(reason = 'closed by client'): void {
     if (this.#closed) return
     this.#closed = true
 
-    clearTimeout(this.#deadline)
+    this.#clearDeadline()
     this.#clearRetry()
     for (const u of this.#unsub) u()
     this.#unsub = []
 
-    this.#transport?.close()
-    this.#transport = null
-    this.#handshake = null
+    this.#resetSession()
 
     this.#inner.close(reason)
     this.#setStatus({ phase: 'closed', reason, retryable: false })
@@ -183,9 +206,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     // which is also why split() must never be called twice. A pending retry
     // is cancelled too — its socket is gone, and the reconnect ends in an
     // 'open' that starts a fresh handshake at once.
-    this.#transport?.close()
-    this.#transport = null
-    this.#awaitingReply = false
+    this.#resetSession()
     this.#clearRetry()
     this.#setStatus(s)
   }
@@ -196,7 +217,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     // A fresh handshake per connection. Reusing the old one would mint a
     // second cipher pair from the same chaining key — the same key at nonce
     // zero twice, which breaks ChaCha20-Poly1305 outright.
-    this.#handshake = HandshakeState.initiator(this.#seed)
+    const handshake = HandshakeState.initiator(this.#seed)
+    this.#handshake = handshake
 
     this.#awaitingReply = true
     this.#setStatus({ phase: 'connecting' })
@@ -205,16 +227,26 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
     // reply would confirm a box is on this handle. So silence needs its own
     // ending, or a revoked phone sits on "Reaching your box" forever with the
     // socket wide open and no reconnect ever firing.
-    clearTimeout(this.#deadline)
+    this.#clearDeadline()
+    const deadlineMs = this.#foregroundAttempt
+      ? FOREGROUND_HANDSHAKE_DEADLINE_MS
+      : HANDSHAKE_DEADLINE_MS
+    this.#foregroundAttempt = false
     this.#deadline = setTimeout(() => {
       if (this.#closed || !this.#awaitingReply) return
       this.#fail('the box did not answer', true)
-    }, HANDSHAKE_DEADLINE_MS)
+    }, deadlineMs)
 
-    this.#handshake
+    handshake
       .writeMessage(this.#payload)
-      .then((msg) => this.#inner.send(msg))
-      .catch((err) => this.#fail(err instanceof NoiseError ? err.message : 'handshake failed'))
+      .then((msg) => {
+        if (this.#closed || this.#handshake !== handshake || !this.#awaitingReply) return
+        this.#inner.send(msg)
+      })
+      .catch((err) => {
+        if (this.#closed || this.#handshake !== handshake) return
+        this.#fail(err instanceof NoiseError ? err.message : 'handshake failed')
+      })
   }
 
   #onInnerFrame(bytes: Uint8Array): void {
@@ -262,6 +294,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
       .then(() => {
         // Guard against a close landing while the DH was in flight.
         if (this.#closed || this.#handshake !== handshake) return
+        this.#clearDeadline()
         this.#transport = new NoiseTransport(handshake.split())
         this.#awaitingReply = false
         this.#handshake = null
@@ -287,9 +320,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
 
   #fail(reason: string, retryable = true): void {
     if (this.#closed) return
-    this.#transport?.close()
-    this.#transport = null
-    this.#awaitingReply = false
+    this.#resetSession()
     this.#setStatus({ phase: 'closed', reason, retryable })
 
     // A retryable failure on a socket that still stands is retried from here,
@@ -309,5 +340,18 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   #clearRetry(): void {
     clearTimeout(this.#retry)
     this.#retry = undefined
+  }
+
+  #clearDeadline(): void {
+    clearTimeout(this.#deadline)
+    this.#deadline = undefined
+  }
+
+  #resetSession(): void {
+    this.#clearDeadline()
+    this.#transport?.close()
+    this.#transport = null
+    this.#handshake = null
+    this.#awaitingReply = false
   }
 }

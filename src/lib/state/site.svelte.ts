@@ -27,6 +27,7 @@ import {
   SnapshotWriter,
 } from '$lib/store/snapshot'
 import { requestPersistence } from '$lib/store/db'
+import { markLinkPhase } from '$lib/perf/link'
 
 /**
  * Fields the Now view draws. Their sources drive the freshness band.
@@ -55,6 +56,9 @@ const NOW_FIDS: readonly Fid[] = [
  * where there is none. Past a couple of beats the silence is real.
  */
 const STREAM_QUIET_AFTER_MS = 3_000
+
+/** How long a foreground stream gets to prove its old socket still works. */
+export const FOREGROUND_FRAME_DEADLINE_MS = 2_500
 
 /** How much recent history the live line keeps to open already drawn. */
 const RECENT_WINDOW_MS = 130_000
@@ -95,6 +99,9 @@ export class SiteStore {
   #lastFrameAtMs = $state<number | null>(null)
   /** Start of the current attempt to obtain a fresh frame. */
   #attemptStartedAtMs = $state(Date.now())
+  #resumeTimer: ReturnType<typeof setTimeout> | null = null
+  #resumeWaiting = false
+  #resumeStartedAtMs = 0
 
   /**
    * A short rolling history of the readings the Now view can draw live, kept
@@ -150,6 +157,7 @@ export class SiteStore {
       ) {
         const now = Date.now()
         this.#lastFrameAtMs = now
+        this.#finishResume(now)
         this.#recordRecent(s.fields, now)
       }
       this.session = s
@@ -184,6 +192,7 @@ export class SiteStore {
     // new home's cache restores exactly as on a launch. A launch and a
     // same-home restart take neither branch.
     if (this.#siteId !== null && this.#siteId !== siteId) {
+      this.#cancelResume()
       this.#session.close()
       this.#lastFrameAtMs = null
       this.cachedAtMs = null
@@ -226,8 +235,35 @@ export class SiteStore {
 
   /** Keep transport cadence and view refresh work in step with the document. */
   setVisible(visible: boolean): void {
+    const wasVisible = this.documentVisible
     this.documentVisible = visible
     this.#session.setTelemetryHz(visible ? 1 : 0.2)
+
+    if (!visible) {
+      this.#cancelResume()
+      return
+    }
+    if (!wasVisible) this.#beginResume('visible')
+  }
+
+  /** A restored page may wake without a matching visibility transition. */
+  pageShown(): void {
+    if (!this.documentVisible || this.#resumeWaiting) return
+    const lastFrameAtMs = this.#lastFrameAtMs
+    if (
+      this.session.phase === 'streaming' &&
+      lastFrameAtMs !== null &&
+      Date.now() - lastFrameAtMs < FOREGROUND_FRAME_DEADLINE_MS
+    ) {
+      return
+    }
+    this.#beginResume('pageshow')
+  }
+
+  /** A new network path should replace the old one without waiting for it. */
+  networkOnline(): void {
+    if (!this.documentVisible) return
+    this.#beginResume('online', true)
   }
 
   /**
@@ -458,7 +494,61 @@ export class SiteStore {
       return false
     }
     this.#session.connect(carrier)
+    // A visible launch is foreground work too. Mark the first Noise attempt
+    // as short and keep the same frame watchdog used after phone sleep.
+    if (this.documentVisible) this.#beginResume('connect', true)
     return true
+  }
+
+  #beginResume(reason: 'connect' | 'visible' | 'pageshow' | 'online', immediate = false): void {
+    if (this.#destroyed || !this.documentVisible) return
+
+    this.#clearResumeTimer()
+    this.#resumeWaiting = true
+    this.#resumeStartedAtMs = Date.now()
+    markLinkPhase('resume-start', { reason })
+
+    if (immediate || this.session.phase !== 'streaming' || this.#lastFrameAtMs === null) {
+      this.#redialAfterResume(reason)
+    }
+
+    const frameAtStart = this.#lastFrameAtMs
+    this.#resumeTimer = setTimeout(() => {
+      this.#resumeTimer = null
+      if (
+        this.#destroyed ||
+        !this.documentVisible ||
+        this.#lastFrameAtMs !== frameAtStart
+      ) {
+        return
+      }
+      this.#redialAfterResume(reason)
+    }, FOREGROUND_FRAME_DEADLINE_MS)
+  }
+
+  #redialAfterResume(reason: 'connect' | 'visible' | 'pageshow' | 'online'): void {
+    if (!this.#session.wake()) return
+    markLinkPhase('resume-redial', {
+      reason,
+      waitedMs: Math.max(0, Date.now() - this.#resumeStartedAtMs),
+    })
+  }
+
+  #finishResume(now: number): void {
+    if (!this.#resumeWaiting) return
+    this.#clearResumeTimer()
+    this.#resumeWaiting = false
+    markLinkPhase('resume-live', { waitedMs: Math.max(0, now - this.#resumeStartedAtMs) })
+  }
+
+  #clearResumeTimer(): void {
+    if (this.#resumeTimer !== null) clearTimeout(this.#resumeTimer)
+    this.#resumeTimer = null
+  }
+
+  #cancelResume(): void {
+    this.#clearResumeTimer()
+    this.#resumeWaiting = false
   }
 
   #isCurrentStart(generation: number, siteId: string): boolean {
@@ -497,6 +587,7 @@ export class SiteStore {
   destroy(): void {
     this.#destroyed = true
     this.#startGeneration++
+    this.#cancelResume()
     if (this.#ticker !== null) {
       clearInterval(this.#ticker)
       this.#ticker = null

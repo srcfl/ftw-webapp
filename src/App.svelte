@@ -368,6 +368,10 @@
     }
     onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
+    const onOnline = () => site.networkOnline()
+    const onPageShow = () => site.pageShown()
+    window.addEventListener('online', onOnline)
+    window.addEventListener('pageshow', onPageShow)
     const unlisten = router.listen()
     const nav = navigator as Navigator & { standalone?: boolean }
     // These flags exist only in the Vite development build. They make the
@@ -423,6 +427,8 @@
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('pageshow', onPageShow)
       unlisten()
       mounted = false
       cancelAnimationFrame(warmFrame)

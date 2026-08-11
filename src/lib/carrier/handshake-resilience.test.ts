@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { NoiseCarrier } from './noise'
+import { FOREGROUND_HANDSHAKE_DEADLINE_MS, NoiseCarrier } from './noise'
 import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import { generateKeyPair, HandshakeState } from '$lib/crypto/noise'
 import { NoiseTransport } from '$lib/crypto/transport'
@@ -20,6 +20,7 @@ import { linkCounters, resetLinkCounters } from '$lib/perf/link'
 class FakeInner extends CarrierBase implements Carrier {
   readonly kind: CarrierState = 'relay'
   readonly sent: Uint8Array[] = []
+  wakeCalls = 0
   #status: CarrierStatus = { phase: 'connecting' }
 
   get rttMs(): number | null {
@@ -33,6 +34,11 @@ class FakeInner extends CarrierBase implements Carrier {
   }
   close(): void {
     this.#status = { phase: 'closed', reason: 'test', retryable: true }
+    this.emitStatus(this.#status)
+  }
+  wake(): void {
+    this.wakeCalls += 1
+    this.#status = { phase: 'connecting' }
     this.emitStatus(this.#status)
   }
   open(): void {
@@ -143,6 +149,35 @@ describe('a handshake meeting somebody else’s frames', () => {
     const boxTransport = new NoiseTransport(responder.split())
     inner.deliver(boxTransport.encrypt(Uint8Array.from([7, 7, 7])))
     expect(heard).toEqual([Uint8Array.from([7, 7, 7])])
+  })
+
+  it('cuts off a sleeping handshake and uses the short foreground deadline', async () => {
+    const { inner, carrier, seen } = carrierUnderTest()
+    inner.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(inner.sent).toHaveLength(1)
+
+    // The ordinary attempt still has seven seconds left. Foregrounding must
+    // not inherit that wait or its later retry backoff.
+    await vi.advanceTimersByTimeAsync(5_000)
+    carrier.wake()
+    expect(inner.wakeCalls).toBe(1)
+
+    inner.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(inner.sent).toHaveLength(2)
+    const closedAfterWake = seen.filter((s) => s.phase === 'closed').length
+
+    await vi.advanceTimersByTimeAsync(FOREGROUND_HANDSHAKE_DEADLINE_MS - 1)
+    expect(seen.filter((s) => s.phase === 'closed')).toHaveLength(closedAfterWake)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(seen.at(-1)).toEqual({
+      phase: 'closed',
+      reason: 'the box did not answer',
+      retryable: true,
+    })
+    carrier.close()
   })
 
   it('drops foreign transport frames without logging or disturbing its own stream', async () => {

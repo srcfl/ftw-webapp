@@ -296,4 +296,29 @@ describe('backing off from a relay that accepts and then drops', () => {
     })
     carrier.close()
   })
+
+  it('replaces an apparently open socket once when the app wakes', () => {
+    const carrier = new RelayCarrier({
+      url: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 0,
+    })
+    const sleeping = StubSocket.all.at(-1)!
+    sleeping.accept()
+    expect(carrier.status.phase).toBe('open')
+
+    carrier.wake()
+
+    expect(sleeping.readyState).toBe(3)
+    expect(StubSocket.all).toHaveLength(2)
+    expect(carrier.status.phase).toBe('connecting')
+
+    // The shell and the relay both hear the same lifecycle event. The second
+    // wake keeps the dial that has just started instead of replacing it too.
+    carrier.wake()
+    expect(StubSocket.all).toHaveLength(2)
+
+    carrier.close()
+  })
 })
