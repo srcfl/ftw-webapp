@@ -66,7 +66,7 @@ describe('a history window the wire cut short', () => {
     // "No history yet", which is a statement about the household's records
     // made out of a request that never came back. A house with ten years on
     // its box reads the same sentence.
-    expect(document.querySelector('canvas')).toBeNull()
+    expect(document.querySelector('.frame canvas')).toBeNull()
     expect(document.body.textContent, 'a lost answer was reported as an empty house').not.toMatch(
       /no history yet|nothing recorded/i
     )
@@ -78,7 +78,7 @@ describe('a history window the wire cut short', () => {
     expect(site.session.phase).toBe('streaming')
     expect(asked.mock.calls.length, 'nothing asked again once the box was back').toBeGreaterThan(1)
     expect(
-      document.querySelector('canvas'),
+      document.querySelector('.frame canvas'),
       'the chart stayed empty against a box that was answering'
     ).not.toBeNull()
     expect(document.body.textContent).not.toMatch(/out of reach/i)
@@ -110,7 +110,7 @@ describe('a history window the wire cut short', () => {
     await vi.advanceTimersByTimeAsync(21_000)
 
     expect(site.session.phase).toBe('streaming')
-    expect(document.querySelector('canvas')).toBeNull()
+    expect(document.querySelector('.frame canvas')).toBeNull()
     expect(document.body.textContent, 'a lost answer was reported as an empty house').not.toMatch(
       /no history yet|nothing recorded/i
     )
@@ -121,7 +121,7 @@ describe('a history window the wire cut short', () => {
 
     expect(asked.mock.calls.length, 'nothing ever asked again').toBeGreaterThan(1)
     expect(
-      document.querySelector('canvas'),
+      document.querySelector('.frame canvas'),
       'the chart stayed empty against a box that was answering'
     ).not.toBeNull()
     expect(document.body.textContent).not.toMatch(/out of reach/i)
@@ -354,5 +354,46 @@ describe('a history window the wire cut short', () => {
     // whose readings are still drawn.
     const spans = asked.mock.calls.at(-1)?.[0]
     expect(spans && spans.toMs - spans.fromMs).toBeGreaterThan(3 * 24 * 60 * 60_000)
+  })
+
+  it('does not refresh a kept view until that view is visible again', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    const asked = vi.spyOn(site, 'history')
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 0 }))
+    const { rerender } = render(History, { props: { site, active: false } })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(site.session.phase).toBe('streaming')
+    expect(asked, 'a hidden History panel asked the box').not.toHaveBeenCalled()
+
+    await rerender({ site, active: true })
+    for (let i = 0; i < 50 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(asked, 'History did not catch up when shown').toHaveBeenCalledTimes(1)
+  })
+
+  it('does not refresh while the whole document is hidden', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    site.setVisible(false)
+    const asked = vi.spyOn(site, 'history')
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 0 }))
+    render(History, { props: { site, active: true } })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(site.session.phase).toBe('streaming')
+    expect(asked, 'a background document asked the box').not.toHaveBeenCalled()
+
+    site.setVisible(true)
+    for (let i = 0; i < 50 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(asked, 'the foreground document did not catch up').toHaveBeenCalledTimes(1)
   })
 })

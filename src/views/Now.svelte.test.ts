@@ -17,6 +17,7 @@ import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
+import { decodeFrame } from '$lib/protocol/frame'
 
 /** Fixed so the simulated house is the same every run. */
 const NOON = new Date(2026, 6, 15, 12, 0, 0).getTime()
@@ -118,5 +119,40 @@ describe('the Now screen', () => {
     await vi.advanceTimersByTimeAsync(20)
     expect(fed, 'coming back never caught the view up').toHaveBeenCalled()
     expect(flowEl()!.hasAttribute('static'), 'the live view stayed frozen on return').toBe(false)
+  })
+
+  it('does not rebuild the diagram for an unchanged cadence tick', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const types: string[] = []
+    box.onFrame((frame) => types.push(decodeFrame(frame).envelope.t))
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    render(Now, { props: { site, active: true } })
+    for (let i = 0; i < 100 && (!flowEl() || site.session.phase !== 'streaming'); i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    await vi.advanceTimersByTimeAsync(20)
+
+    const fed = vi.spyOn(flowEl()!, 'setReadings')
+    vi.setSystemTime(NOON)
+    box.tick(0)
+    await vi.advanceTimersByTimeAsync(100)
+    fed.mockClear()
+    types.length = 0
+
+    vi.setSystemTime(NOON)
+    box.tick(0)
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(types, 'the simulator sent changed readings, so this is not a tick').toEqual(['tick'])
+    expect(fed, 'an unchanged 1 Hz tick rebuilt the full shadow DOM').not.toHaveBeenCalled()
+
+    vi.setSystemTime(NOON + 3_600_000)
+    box.tick()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(fed, 'a changed reading did not reach the diagram').toHaveBeenCalledTimes(1)
   })
 })

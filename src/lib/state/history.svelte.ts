@@ -84,6 +84,8 @@ export class HistoryStore {
   #site: SiteStore
   /** Guards against a slow reply for a range the user already moved off. */
   #token = 0
+  /** At most one full tile assembly per display frame. */
+  #paintFrame: number | null = null
 
   constructor(site: SiteStore) {
     this.#site = site
@@ -125,6 +127,7 @@ export class HistoryStore {
    */
   async load(): Promise<void> {
     const token = ++this.#token
+    this.#cancelPaint()
     const spec = RANGES[this.range]
     const siteId = this.#site.siteId
 
@@ -168,7 +171,7 @@ export class HistoryStore {
           if (token !== this.#token) return
           tiles.set(chunk.tileId, chunk)
           if (siteId) void saveTile(siteId, chunk)
-          show()
+          this.#schedulePaint(token, show)
         }
       )
 
@@ -177,13 +180,17 @@ export class HistoryStore {
       this.resActual = end.resActual
       this.gaps = end.gaps
       this.loaded = true
-      show()
+      this.#flushPaint(token, show)
 
       if (siteId) void pruneTiles(siteId, toMs)
     } catch (err) {
       // A reply for a range the user has already moved off is not this
       // range's news, and it is not a reason to ask for this one again.
       if (token !== this.#token) return
+      // Keep any chunks that did arrive, but assemble them once rather than
+      // once per chunk on the way into this failure.
+      if (tiles.size > 0) this.#flushPaint(token, show)
+      else this.#cancelPaint()
       // What happens now, not what broke inside. The cached chart stays up.
       //
       // Both sentences are about the WIRE. "No history yet" was about the
@@ -203,5 +210,29 @@ export class HistoryStore {
         this.lockedDomain = null
       }
     }
+  }
+
+  destroy(): void {
+    this.#token += 1
+    this.#cancelPaint()
+  }
+
+  #schedulePaint(token: number, paint: () => SeriesFrame): void {
+    if (this.#paintFrame !== null) return
+    this.#paintFrame = requestAnimationFrame(() => {
+      this.#paintFrame = null
+      if (token === this.#token) paint()
+    })
+  }
+
+  #flushPaint(token: number, paint: () => SeriesFrame): void {
+    this.#cancelPaint()
+    if (token === this.#token) paint()
+  }
+
+  #cancelPaint(): void {
+    if (this.#paintFrame === null) return
+    cancelAnimationFrame(this.#paintFrame)
+    this.#paintFrame = null
   }
 }

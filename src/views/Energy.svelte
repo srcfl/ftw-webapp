@@ -27,9 +27,10 @@
 
   interface Props {
     site: SiteStore
+    active?: boolean
   }
 
-  let { site }: Props = $props()
+  let { site, active = true }: Props = $props()
 
   /** From contract/registry.yaml. Absent means this box has no passthrough. */
   const CAP_PASSTHROUGH = 'api.passthrough'
@@ -80,6 +81,7 @@
    * fresh one without the name having to change; askWhenLive gives that.
    */
   const wanted = $derived.by(() => {
+    if (!active || !site.documentVisible) return null
     if (!site.session.caps.has(CAP_PASSTHROUGH)) return null
     const at = new Date(nowMs)
     return `energy ${energy.range} ${at.toDateString()} ${at.getHours()}`
@@ -90,7 +92,7 @@
   // A box that stops advertising the passthrough stops being asked, and what
   // is on screen came from a route this box no longer offers. Show none.
   $effect(() => {
-    if (wanted === null) energy.days = []
+    if (!site.session.caps.has(CAP_PASSTHROUGH)) energy.days = []
   })
 
   const totals = $derived(energy.totals)

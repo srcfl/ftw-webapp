@@ -55,6 +55,7 @@ import {
 import { ROLE_SCOPES } from './contract'
 import type { Carrier } from '$lib/carrier/carrier'
 import type { CarrierState, Fid, Source, SourceState } from './types'
+import { linkCounters, markLinkPhase } from '$lib/perf/link'
 
 export type SessionPhase =
   | 'idle'
@@ -368,6 +369,10 @@ export class Session {
   #listeners = new Set<(s: SessionState) => void>()
   #lastSeq = 0
   #bucket: 256 | 512 = 512
+  /** The newest requested cadence, including changes while hello is in flight. */
+  #subscription: Sub
+  /** The subscription carried by the last hello, if any. */
+  #helloSub: Sub | null = null
   #nextRequestId = 1
   #pendingHistory = new Map<number, PendingHistory>()
   #pendingPlan = new Map<number, PendingPlan>()
@@ -382,6 +387,7 @@ export class Session {
   constructor(opts: SessionOptions) {
     this.#opts = opts
     this.#bucket = opts.sub?.bucket ?? 512
+    this.#subscription = opts.sub ? { ...opts.sub } : { bucket: this.#bucket, hz: 1 }
   }
 
   get state(): SessionState {
@@ -432,6 +438,7 @@ export class Session {
   /** Attach a carrier and start the handshake. Replaces any current one. */
   connect(carrier: Carrier): void {
     this.#detach()
+    markLinkPhase('connect-start')
     // The replacement starts out unopened. Keep the readings, but drop the
     // old transport claim now rather than leaving the session in `streaming`
     // until the new socket opens. Pull-to-refresh and any other in-place
@@ -475,6 +482,22 @@ export class Session {
   close(): void {
     this.#detach()
     this.#patch({ phase: 'idle', carrier: 'none' })
+  }
+
+  /**
+   * Match lane 0 to whether anybody can see it.
+   *
+   * The box keeps the bucket fixed and changes only the documented cadence.
+   * Repeating `sub` is additive and safe against old boxes; they may answer
+   * with a fresh snapshot, while a current box only updates its timer.
+   */
+  setTelemetryHz(hz: Sub['hz']): void {
+    if (this.#subscription.hz === hz) return
+    this.#subscription = { ...this.#subscription, hz }
+
+    if (this.#state.phase === 'subscribing' || this.#state.phase === 'streaming') {
+      this.#sendSub()
+    }
   }
 
   /** Age of a source's last successful reading, in ms of box uptime. */
@@ -713,14 +736,21 @@ export class Session {
     // Any hello supersedes a retry waiting to send one — a reconnect asks the
     // same question, and two hellos in flight would earn two answers.
     clearTimeout(this.#bootRetry)
+    const sub = { ...this.#subscription }
+    this.#helloSub = sub
     this.#send({
       t: 'hello',
       b: {
         proto: { min: PROTO_MIN, max: PROTO_MAX },
         app: { build: this.#opts.build, ua: 'pwa' as const },
         locales: this.#opts.locales ?? ['en'],
+        sub,
       },
     })
+  }
+
+  #sendSub(): void {
+    this.#send({ t: 'sub', b: { ...this.#subscription } })
   }
 
   #onFrame(bytes: Uint8Array): void {
@@ -801,6 +831,7 @@ export class Session {
   }
 
   #onHelloOk(b: HelloOk): void {
+    markLinkPhase('hello-ok', { inlineSubscribed: b.subscribed === true })
     this.#patch({
       proto: b.proto,
       mode: b.mode,
@@ -838,10 +869,25 @@ export class Session {
     }
 
     this.#patch({ phase: 'subscribing' })
-    this.#send({ t: 'sub', b: this.#opts.sub ?? { bucket: this.#bucket, hz: 1 } })
+    if (b.subscribed) {
+      // Visibility can change while hello crosses the relay. The accepted
+      // cadence is the one carried by that hello; send only if the latest ask
+      // has moved since then.
+      if (
+        !this.#helloSub ||
+        this.#helloSub.bucket !== this.#subscription.bucket ||
+        this.#helloSub.hz !== this.#subscription.hz
+      ) {
+        this.#sendSub()
+      }
+      return
+    }
+    // Old box: it ignored hello.sub and needs the original second exchange.
+    this.#sendSub()
   }
 
   #onSnap(b: Snap): void {
+    markLinkPhase('snapshot', linkCounters())
     const fields = new Map<Fid, number>()
     for (const [fid, v] of Object.entries(b.fields)) fields.set(Number(fid), v)
 

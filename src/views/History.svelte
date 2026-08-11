@@ -12,7 +12,7 @@
   Loaded on demand, so none of this sits on the path to the first frame.
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
   import Energy from '$views/Energy.svelte'
   import { axisOf, ticksOf, type Domain, type Trace } from '$lib/ui/chart'
@@ -24,14 +24,17 @@
 
   interface Props {
     site: SiteStore
+    /** Kept mounted by the shell, but only the visible panel refreshes. */
+    active?: boolean
   }
 
-  let { site }: Props = $props()
+  let { site, active = true }: Props = $props()
 
   // The site store is one long-lived object, not a value that changes. Reading
   // it once at construction is the intent, so say so rather than leaving a
   // warning for the next person to wonder about.
   const history = new HistoryStore(untrack(() => site))
+  onDestroy(() => history.destroy())
 
   // Colour carries meaning here and comes from tokens.css, never from a hex
   // value written into a component.
@@ -67,7 +70,10 @@
   // everything held.
   askWhenLive(
     untrack(() => site),
-    () => `${history.range} ${Math.floor(nowMs / 300_000)}`,
+    () =>
+      active && site.documentVisible
+        ? `${history.range} ${Math.floor(nowMs / 300_000)}`
+        : null,
     () => history.load()
   )
 
@@ -188,7 +194,7 @@
   <!-- What the house used, made, bought and sold, day by day. First because
        it is the question people open this screen with; the power trace under
        it answers a different and narrower one. -->
-  <Energy {site} />
+  <Energy {site} {active} />
 
   <hr />
 

@@ -4,6 +4,7 @@ import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import { generateKeyPair, HandshakeState } from '$lib/crypto/noise'
 import { NoiseTransport } from '$lib/crypto/transport'
 import type { CarrierState } from '$lib/protocol/types'
+import { linkCounters, resetLinkCounters } from '$lib/perf/link'
 
 /* A stray frame during the handshake must not end the carrier.
  *
@@ -43,10 +44,9 @@ class FakeInner extends CarrierBase implements Carrier {
   }
 }
 
-function carrierUnderTest() {
+function carrierUnderTest(box = generateKeyPair()) {
   const inner = new FakeInner()
   const app = generateKeyPair()
-  const box = generateKeyPair()
   const carrier = new NoiseCarrier({
     inner,
     staticKey: app,
@@ -58,7 +58,10 @@ function carrierUnderTest() {
 }
 
 describe('a handshake meeting somebody else’s frames', () => {
-  beforeEach(() => vi.useFakeTimers())
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetLinkCounters()
+  })
   afterEach(() => vi.useRealTimers())
 
   it('ignores a telemetry-sized frame instead of dying on it', async () => {
@@ -140,5 +143,48 @@ describe('a handshake meeting somebody else’s frames', () => {
     const boxTransport = new NoiseTransport(responder.split())
     inner.deliver(boxTransport.encrypt(Uint8Array.from([7, 7, 7])))
     expect(heard).toEqual([Uint8Array.from([7, 7, 7])])
+  })
+
+  it('drops foreign transport frames without logging or disturbing its own stream', async () => {
+    const sharedBox = generateKeyPair()
+    const { inner, carrier } = carrierUnderTest(sharedBox)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const marked = vi.spyOn(performance, 'mark')
+
+    inner.open()
+    await vi.advanceTimersByTimeAsync(10)
+    const responder = HandshakeState.responder({ staticKey: sharedBox })
+    await responder.readMessage(inner.sent[0]!)
+    inner.deliver(await responder.writeMessage())
+    await vi.advanceTimersByTimeAsync(10)
+
+    // A second phone, with its own Noise session to the same box. The relay
+    // sends the box's reply and transport frames to both phones.
+    const other = carrierUnderTest(sharedBox)
+    other.inner.open()
+    await vi.advanceTimersByTimeAsync(10)
+    const otherResponder = HandshakeState.responder({ staticKey: sharedBox })
+    await otherResponder.readMessage(other.inner.sent[0]!)
+    other.inner.deliver(await otherResponder.writeMessage())
+    await vi.advanceTimersByTimeAsync(10)
+
+    const heard: Uint8Array[] = []
+    carrier.onFrame((frame) => heard.push(frame))
+    const boxTransport = new NoiseTransport(responder.split())
+    const otherBoxTransport = new NoiseTransport(otherResponder.split())
+    const own = boxTransport.encrypt(Uint8Array.from([1, 2, 3]))
+    const foreign = otherBoxTransport.encrypt(Uint8Array.from([9, 9, 9]))
+
+    // Auth, bad shape and replay are all normal on a shared relay room.
+    inner.deliver(foreign)
+    inner.deliver(new Uint8Array(3))
+    inner.deliver(own)
+    inner.deliver(own)
+
+    expect(carrier.status.phase).toBe('open')
+    expect(heard).toEqual([Uint8Array.from([1, 2, 3])])
+    expect(logged).not.toHaveBeenCalled()
+    expect(marked).toHaveBeenCalledWith('ftw:noise-open', undefined)
+    expect(linkCounters()).toMatchObject({ noiseAcceptedFrames: 1, noiseForeignFrames: 3 })
   })
 })

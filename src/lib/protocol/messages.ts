@@ -28,6 +28,13 @@ export interface Hello {
   proto: { min: number; max: number }
   app: { build: string; ua: 'pwa' }
   locales: string[]
+  /**
+   * Start telemetry with the handshake when the box supports it.
+   *
+   * Optional in both directions: an older box ignores this and the app sends
+   * the ordinary `sub` after `hello_ok`.
+   */
+  sub?: Sub
 }
 
 /**
@@ -88,6 +95,8 @@ export interface HelloOk {
   /** Present while starting. A VACUUM can take a long time; say so. */
   boot?: { phase: 'vacuum' | 'migrate' | 'drivers'; pct: number; etaMs: number | null }
   hint?: 'app_update'
+  /** The box accepted `hello.sub`; a snapshot follows without another ask. */
+  subscribed?: true
 }
 
 // --------------------------------------------------------------------------

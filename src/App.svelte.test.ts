@@ -284,6 +284,20 @@ describe('signing out, from the phone', () => {
     vi.restoreAllMocks()
   })
 
+  it('lowers link cadence in the background and restores it on return', async () => {
+    const visibility = vi.spyOn(SiteStore.prototype, 'setVisible')
+    await houseOnScreen()
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    expect(visibility.mock.calls.map(([visible]) => visible)).toEqual(
+      expect.arrayContaining([false, true])
+    )
+  })
+
   it('leaves nothing of the home behind, and comes back at pairing', async () => {
     await houseOnScreen()
     const database = await db()

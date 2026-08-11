@@ -209,4 +209,51 @@ describe('the energy screen', () => {
     expect(site.session.caps.has('api.passthrough')).toBe(false)
     expect(text()).not.toContain('Used at home')
   })
+
+  it('waits while hidden and catches up when shown', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    const asked = vi.spyOn(site, 'api')
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 0 }))
+    const { rerender } = render(Energy, { props: { site, active: false } })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(site.session.phase).toBe('streaming')
+    expect(asked, 'hidden energy figures asked the box').not.toHaveBeenCalled()
+
+    await rerender({ site, active: true })
+    for (let i = 0; i < 50 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(asked, 'energy figures did not catch up when shown').toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(text()).toMatch(/kWh/)
+
+    await rerender({ site, active: false })
+    await vi.advanceTimersByTimeAsync(20)
+    expect(text(), 'hiding the figures threw away the last answer').toMatch(/kWh/)
+  })
+
+  it('waits while the document is hidden and catches up on return', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const site = new SiteStore('test')
+    site.setVisible(false)
+    const asked = vi.spyOn(site, 'api')
+    site.connect(new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 0 }))
+    render(Energy, { props: { site, active: true } })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(site.session.phase).toBe('streaming')
+    expect(asked, 'background energy figures asked the box').not.toHaveBeenCalled()
+
+    site.setVisible(true)
+    for (let i = 0; i < 50 && asked.mock.calls.length === 0; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(asked, 'energy figures did not catch up with the foreground').toHaveBeenCalledTimes(1)
+  })
 })

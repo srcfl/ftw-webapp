@@ -35,10 +35,10 @@ The receiver ignores everything past `len`. Padding is never validated — AEAD
 already covers it.
 
 **Lane 0** carries `tick`, `delta`, `cmd`, `cmd.ack`, `cmd.result` and
-`event`. It is exactly one bucket, always, and never fragments. Cadence and
-size are fixed for the life of the session: 512 B at 1 Hz in the foreground,
-512 B at 0.2 Hz when the document is hidden. If the box has nothing to say it
-sends `tick` anyway.
+`event`. It is exactly one 512 B bucket for the life of the session and never
+fragments. Cadence changes only after an explicit visibility `sub`: 1 Hz while
+the document is visible and 0.2 Hz while it is hidden. It never changes with
+the telemetry it carries. If the box has nothing to say it sends `tick` anyway.
 
 This constancy is a privacy control, not a performance choice. A delta that
 does not fit sends the highest-priority fields and sets `TRUNC`; the rest
@@ -74,7 +74,7 @@ Twenty-three types in v1.
 
 | Type | Direction | Purpose |
 |---|---|---|
-| `hello` / `hello_ok` | C→B / B→C | Version range, capabilities, clock, boot state |
+| `hello` / `hello_ok` | C→B / B→C | Version range, capabilities, clock, boot state, optional first subscription |
 | `sub` | C→B | Start the telemetry stream |
 | `snap` | B→C | Full site snapshot with the field dictionary |
 | `delta` | B→C | Changed fields by id |
@@ -87,6 +87,18 @@ Twenty-three types in v1.
 | `error` | B→C | Stable code with machine-readable args |
 | `session.terminate` | B→C | Access revoked or session ended |
 | `api.req` / `api.head` / `api.chunk` / `api.end` | | The box's own HTTP API, over this session |
+
+### Starting the stream
+
+A current client includes its first `sub` body in `hello`. A current box
+accepts it, sets `hello_ok.subscribed: true`, and follows with the snapshot
+without a second client exchange.
+
+This stays compatible in both directions. An older box ignores the unknown
+`hello.sub` key and omits `subscribed`, so the client sends the separate `sub`
+it always sent. An older client omits `hello.sub`, so a current box waits for
+the separate `sub`. A later `sub` changes the same session's cadence, including
+the move between 1 Hz while visible and 0.2 Hz while hidden.
 
 ## Versioning
 

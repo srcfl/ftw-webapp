@@ -27,6 +27,7 @@
 import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import { currentEpoch, rendezvousHandle } from './rendezvous'
 import type { CarrierState } from '$lib/protocol/types'
+import { addLinkCount, markLinkPhase } from '$lib/perf/link'
 
 /**
  * The relay's close codes and control words.
@@ -138,6 +139,8 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     if (this.#status.phase !== 'open') return
     const ws = this.#ws
     if (!ws || ws.readyState !== 1) return
+    addLinkCount('relayTxFrames')
+    addLinkCount('relayTxBytes', frame.byteLength)
     ws.send(frame)
   }
 
@@ -183,6 +186,9 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     if (typeof ev.data === 'string') {
       if (ev.data === CTRL_READY) {
         this.#corrections = 0
+        if (this.#status.phase !== 'open') {
+          markLinkPhase('relay-ready', { relayDialMs: this.#rttMs })
+        }
         this.#setStatus({ phase: 'open', sinceMs: this.#now() })
       } else if (ev.data === CTRL_GONE) {
         // The box left. Keep the socket; the relay will say when it is back.
@@ -192,12 +198,15 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     }
 
     if (this.#status.phase !== 'open') return
+    const bytes = new Uint8Array(ev.data as ArrayBuffer)
+    addLinkCount('relayRxFrames')
+    addLinkCount('relayRxBytes', bytes.byteLength)
     // Only a delivered frame proves the path works, so this is where the dial
     // backoff resets. Resetting on the accept let a relay that accepts and
     // then dies keep us dialling at the floor interval for as long as it
     // crash-looped.
     this.#attempt = 0
-    this.emitFrame(new Uint8Array(ev.data as ArrayBuffer))
+    this.emitFrame(bytes)
   }
 
   #onClose(ws: WebSocket, code: number, reason: string): void {
