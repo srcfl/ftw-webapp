@@ -166,8 +166,21 @@
     }
   }
 
+  function displayTimeZone(zone: string | null | undefined): string | null {
+    const named = zone?.trim()
+    if (!named || named.toLowerCase() !== 'local') return named ?? null
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || named
+  }
+
   const build = $derived(site.session.box?.build ?? null)
-  const timeZone = $derived(site.session.box?.tz ?? null)
+  const timeZone = $derived(displayTimeZone(site.session.box?.tz))
+  const appBuiltOn = new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(Date.parse(__APP_BUILT_AT__))
 
   const pairedOn = $derived(
     pairedAtMs === null
@@ -222,7 +235,9 @@
   {/if}
 
   <dl>
-    <div><dt>Web app</dt><dd class="num">{__APP_BUILD__}</dd></div>
+    <div><dt>Web app version</dt><dd class="num">{__APP_VERSION__}</dd></div>
+    <div><dt>Build date</dt><dd><time datetime={__APP_BUILT_AT__}>{appBuiltOn}</time></dd></div>
+    <div><dt>Build</dt><dd class="num">{__APP_BUILD__}</dd></div>
     {#if build}
       <div><dt>Software</dt><dd class="num">{build}</dd></div>
     {/if}

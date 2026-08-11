@@ -9,13 +9,12 @@
   import { onMount, tick, untrack } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import InstallHint from '$lib/ui/InstallHint.svelte'
-  import UpdateLine from '$lib/ui/UpdateLine.svelte'
   import Now from '$views/Now.svelte'
   import Plan from '$views/Plan.svelte'
   import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
   import { Router, type Route } from '$lib/state/route.svelte'
-  import { checkForAppUpdate, serviceWorker } from '$lib/pwa/service-worker.svelte'
+  import { checkForAppUpdate } from '$lib/pwa/service-worker.svelte'
 
   // Replaced wholesale when someone signs out. `$state.raw` rather than
   // `$state`, because what changes is which store the views read, never a
@@ -377,7 +376,6 @@
       nav.standalone === true ||
       window.matchMedia?.('(display-mode: standalone)').matches === true ||
       preview?.has('standalone') === true
-    if (preview?.has('update-ready')) serviceWorker.waiting = true
     let mounted = true
     let stopPull: (() => void) | undefined
     let warmTimer: ReturnType<typeof setTimeout> | undefined
@@ -481,9 +479,9 @@
 
   /** Check the app build and ask this home for a fresh stream in place. */
   async function refreshCurrent(): Promise<void> {
-    // Update discovery is not part of the gesture's critical path. If a new
-    // build finishes installing, UpdateLine appears and the user chooses the
-    // one navigation that is actually needed.
+    // Update discovery is not part of the gesture's critical path. A ready
+    // build stays parked until the app is hidden, so this never reloads a
+    // screen someone is using.
     void checkForAppUpdate()
 
     if (demoActive) {
@@ -627,8 +625,6 @@
       noCarrier={connectHelp !== null}
     />
   {/if}
-
-  <UpdateLine />
 
   <main bind:this={scrollPane}>
     <div class="pull-refresh" data-state="idle" aria-hidden="true" bind:this={pullIndicator}>

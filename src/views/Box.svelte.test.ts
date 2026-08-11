@@ -84,10 +84,12 @@ describe('leaving, from the phone', () => {
   it('names the box it is paired to, without needing to reach it', async () => {
     mounted()
 
-    // The box software and the web app are two releases. Showing the latter's
-    // build id is how a screenshot can prove which deployed client is open.
-    expect(screen.getByText('Web app')).toBeTruthy()
-    expect(screen.getByText(__APP_BUILD__)).toBeTruthy()
+    // The box software and the web app are two releases. The readable version
+    // and date say when this one shipped; the commit proves its exact bytes.
+    expect(screen.getByText('Web app version').parentElement?.textContent).toContain(__APP_VERSION__)
+    expect(screen.getByText('Build date')).toBeTruthy()
+    expect(document.querySelector(`time[datetime="${__APP_BUILT_AT__}"]`)).toBeTruthy()
+    expect(screen.getByText('Build').parentElement?.textContent).toContain(__APP_BUILD__)
 
     // Nothing here connects. The box has to be nameable precisely when it is
     // out of reach, because that is one of the reasons someone opens this.
@@ -97,6 +99,18 @@ describe('leaving, from the phone', () => {
     // And the row this phone is on the box's own list, so the other half of
     // leaving can actually be carried out.
     expect(await screen.findByText(/This phone/)).toBeTruthy()
+  })
+
+  it('spells out the browser time zone when the box only says local', async () => {
+    const { site } = mounted()
+    site.session = {
+      ...site.session,
+      box: { id: SITE_ID, build: 'test', tz: 'Local' },
+    }
+
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    expect(await screen.findByText(browserTimeZone)).toBeTruthy()
+    expect(screen.queryByText(/^local$/i)).toBeNull()
   })
 
   it('names no box at all rather than the wrong one', async () => {

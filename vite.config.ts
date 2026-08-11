@@ -61,6 +61,18 @@ function serviceWorker(): Plugin {
   }
 }
 
+const appBuild =
+  (process.env['WORKERS_CI_COMMIT_SHA'] ?? process.env['GITHUB_SHA'])?.slice(0, 12) ?? 'dev'
+const appBuiltAtSource = process.env['APP_BUILT_AT']
+const appBuiltAtDate = appBuiltAtSource ? new Date(appBuiltAtSource) : new Date()
+if (Number.isNaN(appBuiltAtDate.getTime())) throw new Error('APP_BUILT_AT must be an ISO date')
+const appBuiltAt = appBuiltAtDate.toISOString()
+const appVersion =
+  process.env['APP_VERSION'] ??
+  (appBuild === 'dev'
+    ? 'dev'
+    : `${appBuiltAt.slice(0, 10).replaceAll('-', '.')}-${appBuild.slice(0, 7)}`)
+
 export default defineConfig({
   plugins: [svelte(), serviceWorker()],
 
@@ -68,9 +80,11 @@ export default defineConfig({
     // The build identifier the app announces at handshake, so a box can tell
     // which client it is talking to. GitHub Actions and Cloudflare Workers
     // Builds expose the same commit under different names.
-    __APP_BUILD__: JSON.stringify(
-      (process.env['WORKERS_CI_COMMIT_SHA'] ?? process.env['GITHUB_SHA'])?.slice(0, 12) ?? 'dev'
-    ),
+    __APP_BUILD__: JSON.stringify(appBuild),
+    // Human-readable release identity for the Box screen. A deploy needs no
+    // manual version bump, but APP_VERSION and APP_BUILT_AT can pin a release.
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __APP_BUILT_AT__: JSON.stringify(appBuiltAt),
   },
 
   resolve: {

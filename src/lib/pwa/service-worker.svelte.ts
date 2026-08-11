@@ -4,25 +4,16 @@
  * worker fetches the whole shell again, and the first launch has better things
  * to do with the radio. Nothing here is on the path to the first frame.
  *
- * `waiting` means a newer build is downloaded, verified and parked. The worker
- * alone would take over at the next launch with no page left open, but an
- * installed iOS app is never quite closed (see src/sw.ts), so the app asks for
- * the handover at a safe moment — after the user presses Update or while the
- * app is in the background — and reloads when the new worker controls the page.
+ * A newer build downloads, verifies and parks without touching the live page.
+ * The worker alone would take over at the next launch with no page left open,
+ * but an installed iOS app is never quite closed (see src/sw.ts), so the app
+ * asks for the handover itself at a safe moment: at launch when a build already
+ * waits, or while the app is hidden. It also checks again whenever a kept-alive
+ * page returns to the foreground. No update control belongs on screen.
  * The reload is a whole navigation, so no build's shell ever meets another's
  * chunks. A parked build that installs mid-session is not forced on a page
  * someone is reading: it lands when they next leave or reopen.
  */
-
-class ServiceWorkerState {
-  /** A newer build is installed and about to take over. */
-  waiting = $state(false)
-
-  /** The user asked the parked build to take over. */
-  applying = $state(false)
-}
-
-export const serviceWorker = new ServiceWorkerState()
 
 /** Set once the page has asked a worker to skip, so the reload fires once. */
 let asked = false
@@ -66,51 +57,44 @@ export async function registerServiceWorker(): Promise<void> {
 }
 
 function watch(registration: ServiceWorkerRegistration): void {
-  // Parked by an earlier visit. Announce it rather than forcing a second
-  // launch just after this one: the Update button gives the user a clear,
-  // immediate handover, and backgrounding remains the automatic safe point.
-  announce(registration.waiting)
+  // Parked by an earlier visit. This launch is a safe handover point: the
+  // page has only just loaded and nobody has started a task in it yet.
+  land(registration.waiting)
 
   registration.addEventListener('updatefound', () => {
     const worker = registration.installing
     if (!worker) return
     worker.addEventListener('statechange', () => {
-      if (worker.state === 'installed') announce(worker)
+      if (worker.state === 'installed') park(worker)
     })
   })
 
-  // Leaving the app is the other safe moment: hand over while the page is
-  // hidden, so the reload happens off-screen and the next look is the new
-  // build with no flash.
+  // Leaving the app is the other safe moment: hand over while hidden, so the
+  // reload happens off-screen. Returning may resume this same page without a
+  // load event on iOS, so check again without asking the user to refresh.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') land(registration.waiting)
+    if (document.visibilityState === 'hidden') {
+      land(registration.waiting ?? parkedWorker)
+    } else {
+      void checkForAppUpdate()
+    }
   })
 }
 
 /**
- * A worker only counts as an update if something is already controlling this
- * page. Without that check the very first install — where there is no old
- * build and nothing to replace — would announce itself as a pending update.
+ * Hold a complete build until the page is safe to replace.
+ *
+ * A worker only counts as an update if something already controls this page.
+ * If it finishes after the app was hidden, the visibility event has already
+ * passed, so land it here rather than waiting for another leave.
  */
-function announce(worker: ServiceWorker | null): void {
-  if (worker && navigator.serviceWorker.controller) {
-    parkedWorker = worker
-    serviceWorker.waiting = true
-  }
-}
-
-/** Ask the already downloaded build to take over, then reload exactly once. */
-export function applyAppUpdate(): boolean {
-  const worker = currentRegistration?.waiting ?? parkedWorker
-  if (!worker || !navigator.serviceWorker.controller) return false
-
-  requestTakeover(worker)
-  return true
+function park(worker: ServiceWorker | null): void {
+  if (!worker || !navigator.serviceWorker.controller) return
+  parkedWorker = worker
+  if (document.visibilityState === 'hidden') requestTakeover(worker)
 }
 
 function requestTakeover(worker: ServiceWorker): void {
-  serviceWorker.waiting = true
-  serviceWorker.applying = true
   armReload()
   if (!asked) {
     asked = true
@@ -119,7 +103,7 @@ function requestTakeover(worker: ServiceWorker): void {
 }
 
 /**
- * Check for a new build and announce it when one is ready.
+ * Check for a new build and park it when one is ready.
  *
  * This is the action behind the installed app's pull gesture. The update
  * check runs beside the in-place data refresh. Reloading when no update exists
@@ -138,7 +122,7 @@ export async function checkForAppUpdate(): Promise<boolean> {
         if (!registration.waiting) await registration.update()
         const worker = registration.waiting ?? (await waitForInstall(registration.installing))
         if (worker && navigator.serviceWorker.controller) {
-          announce(worker)
+          park(worker)
           return true
         }
       }
@@ -175,7 +159,7 @@ async function waitForInstall(worker: ServiceWorker | null): Promise<ServiceWork
 
 /** Note the parked build, and ask it to take over now. */
 function land(worker: ServiceWorker | null): void {
-  announce(worker)
   if (!worker || !navigator.serviceWorker.controller) return
+  parkedWorker = worker
   requestTakeover(worker)
 }
