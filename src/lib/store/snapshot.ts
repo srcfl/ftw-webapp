@@ -111,13 +111,19 @@ export function sessionPatchFromSnapshot(snap: StoredSnapshot): Partial<SessionS
 /** Throttles writes so a 1 Hz stream does not thrash the disk. */
 export class SnapshotWriter {
   #lastWriteMs = 0
-  #pending: StoredSnapshot | null = null
+  #pending: (() => StoredSnapshot) | null = null
   #timer: ReturnType<typeof setTimeout> | null = null
   #stopped = false
+  #save: (snap: StoredSnapshot) => Promise<void>
 
-  offer(snap: StoredSnapshot): void {
+  constructor(save: (snap: StoredSnapshot) => Promise<void> = saveSnapshot) {
+    this.#save = save
+  }
+
+  /** Keep only the newest state; build its plain-object copy when disk is due. */
+  offer(snapshot: () => StoredSnapshot): void {
     if (this.#stopped) return
-    this.#pending = snap
+    this.#pending = snapshot
 
     const since = Date.now() - this.#lastWriteMs
     if (since >= WRITE_INTERVAL_MS) {
@@ -158,13 +164,13 @@ export class SnapshotWriter {
       this.#timer = null
     }
 
-    const snap = this.#pending
-    if (!snap) return
+    const pending = this.#pending
+    if (!pending) return
     this.#pending = null
     this.#lastWriteMs = Date.now()
 
     try {
-      await saveSnapshot(snap)
+      await this.#save(pending())
     } catch {
       // A failed cache write costs a slower next start and nothing else.
       // Surfacing it would be noise about something the user cannot act on.

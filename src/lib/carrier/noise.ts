@@ -18,6 +18,7 @@ import { CarrierBase, type Carrier, type CarrierStatus } from './carrier'
 import type { CarrierState } from '$lib/protocol/types'
 import { DH_BYTES, TAG_BYTES, HandshakeState, NoiseError, type StaticKey, type KeyPair } from '$lib/crypto/noise'
 import { NoiseTransport } from '$lib/crypto/transport'
+import { addLinkCount, markLinkPhase } from '$lib/perf/link'
 
 /**
  * How long a handshake may go unanswered before it is retried.
@@ -46,6 +47,14 @@ const HANDSHAKE_BACKOFF_CAP_MS = 60_000
  * wire is somebody else's frame.
  */
 const MESSAGE_2_BYTES = DH_BYTES + TAG_BYTES
+
+/** Failures caused by an inbound frame that does not belong to this session. */
+const FOREIGN_FRAME_ERRORS = new Set([
+  'E_NOISE_AUTH',
+  'E_NOISE_REPLAY',
+  'E_NOISE_MESSAGE',
+  'E_NOISE_NONCE_EXHAUSTED',
+])
 
 export interface NoiseCarrierOptions {
   /** The transport to wrap. Its lifetime becomes ours. */
@@ -226,11 +235,22 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
 
     if (!this.#transport) return
 
-    const frame = this.#transport.decrypt(bytes)
-    // A frame that fails to authenticate is dropped, not fatal. Anyone can
-    // write to a relay socket, and letting a junk frame tear down a working
-    // session would hand them a denial of service for free.
-    if (frame) this.emitFrame(frame)
+    try {
+      const frame = this.#transport.decrypt(bytes)
+      addLinkCount('noiseAcceptedFrames')
+      this.emitFrame(frame)
+    } catch (err) {
+      // The relay broadcasts a box frame to every phone in its room. Auth,
+      // replay and shape failures are therefore routine routing misses, not
+      // application errors. Drop only the Noise errors an inbound byte string
+      // can cause; a programming error still reaches CarrierBase's reporter.
+      if (err instanceof NoiseError && FOREIGN_FRAME_ERRORS.has(err.code)) {
+        addLinkCount('noiseForeignFrames')
+        addLinkCount('noiseForeignBytes', bytes.byteLength)
+        return
+      }
+      throw err
+    }
   }
 
   #completeHandshake(bytes: Uint8Array): void {
@@ -246,6 +266,7 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
         this.#awaitingReply = false
         this.#handshake = null
         this.#attempt = 0
+        markLinkPhase('noise-open')
         this.#setStatus({ phase: 'open', sinceMs: Date.now() })
       })
       .catch((err) => {

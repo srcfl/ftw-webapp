@@ -62,6 +62,8 @@
   )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
+  let lastFlow: FtwEnergyFlowElement | null = null
+  let lastFlowFields: ReadonlyMap<number, number> | null = null
 
   // The component takes data by method, the way the dashboard feeds it.
   // An effect rather than an attribute because setReadings() is the
@@ -70,7 +72,11 @@
   // nobody can see — and because the effect reads the fields as they are
   // when `active` returns, coming back starts from the present.
   $effect(() => {
-    if (active) flow?.setReadings(flowReadings(site.session.fields))
+    const fields = site.session.fields
+    if (!active || !flow || (flow === lastFlow && fields === lastFlowFields)) return
+    flow.setReadings(flowReadings(fields))
+    lastFlow = flow
+    lastFlowFields = fields
   })
 
   /** The charger's sheet, opened by a tap on its bubble. */

@@ -57,6 +57,76 @@ describe('session end to end', () => {
     expect(session.state.dict['2']?.name).toBe('grid_w')
   })
 
+  it('starts the stream from hello without a second client exchange', async () => {
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new LoopbackCarrier(box, { latencyMs: 0 })
+    const sent = vi.spyOn(carrier, 'send')
+    const session = new Session({ build: BUILD })
+    session.connect(carrier)
+
+    await settle()
+
+    const frames = sent.mock.calls.map((call) => decodeFrame(call[0] as Uint8Array))
+    expect(frames.map((frame) => frame.envelope.t)).toEqual(['hello'])
+    expect((frames[0]!.envelope.b as { sub?: { hz?: number } }).sub?.hz).toBe(1)
+    expect(session.state.phase).toBe('streaming')
+  })
+
+  it('marks the phases that make up fresh-data latency', async () => {
+    const marked = vi.spyOn(performance, 'mark')
+    const session = connect(new SimBox({ now: () => Date.now() }))
+
+    await settle()
+
+    const phases = marked.mock.calls
+      .map(([name]) => String(name))
+      .filter((name) => ['ftw:connect-start', 'ftw:hello-ok', 'ftw:snapshot'].includes(name))
+    expect(phases).toEqual(['ftw:connect-start', 'ftw:hello-ok', 'ftw:snapshot'])
+    expect(session.state.phase).toBe('streaming')
+  })
+
+  it('falls back to the separate subscription for an older box', async () => {
+    const box = new SimBox({ now: () => Date.now(), inlineSubscribe: false })
+    const carrier = new LoopbackCarrier(box, { latencyMs: 0 })
+    const sent = vi.spyOn(carrier, 'send')
+    const session = new Session({ build: BUILD })
+    session.connect(carrier)
+
+    await settle()
+
+    expect(sent.mock.calls.map((call) => decodeFrame(call[0] as Uint8Array).envelope.t)).toEqual([
+      'hello',
+      'sub',
+    ])
+    expect(session.state.phase).toBe('streaming')
+  })
+
+  it('changes telemetry cadence only when visibility changes', async () => {
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new LoopbackCarrier(box, { latencyMs: 0 })
+    const sent = vi.spyOn(carrier, 'send')
+    const session = new Session({ build: BUILD })
+    session.connect(carrier)
+    await settle()
+    sent.mockClear()
+
+    session.setTelemetryHz(0.2)
+    session.setTelemetryHz(0.2)
+    await settle()
+
+    expect(sent).toHaveBeenCalledTimes(1)
+    expect(decodeFrame(sent.mock.calls[0]![0] as Uint8Array).envelope).toMatchObject({
+      t: 'sub',
+      b: { bucket: 512, hz: 0.2 },
+    })
+    expect(box.telemetryHz).toBe(0.2)
+
+    session.setTelemetryHz(1)
+    await settle()
+    expect(sent).toHaveBeenCalledTimes(2)
+    expect(box.telemetryHz).toBe(1)
+  })
+
   it('applies deltas onto the snapshot rather than replacing it', async () => {
     const box = new SimBox({ now: () => Date.now() })
     const session = connect(box)
@@ -236,7 +306,7 @@ describe('degradation instead of failure', () => {
     // it. Before this the phase parked on 'booting' and stayed there — the
     // starting screen for as long as the app was open, every view frozen on
     // what it held before the drop, and only a reload out of it.
-    const box = new SimBox({ now: () => Date.now() })
+    const box = new SimBox({ now: () => Date.now(), inlineSubscribe: false })
     const carrier = new LoopbackCarrier(box, { latencyMs: 0 })
     const session = new Session({ build: BUILD })
 

@@ -362,10 +362,13 @@
   onMount(() => {
     // The last chance to persist. 'visibilitychange' rather than 'unload',
     // which iOS does not reliably fire when an app is swiped away.
-    const onHide = () => {
-      if (document.visibilityState === 'hidden') void site.persistNow()
+    const onVisibility = () => {
+      const visible = document.visibilityState !== 'hidden'
+      site.setVisible(visible)
+      if (!visible) void site.persistNow()
     }
-    document.addEventListener('visibilitychange', onHide)
+    onVisibility()
+    document.addEventListener('visibilitychange', onVisibility)
     const unlisten = router.listen()
     const nav = navigator as Navigator & { standalone?: boolean }
     // These flags exist only in the Vite development build. They make the
@@ -421,7 +424,7 @@
     }
 
     return () => {
-      document.removeEventListener('visibilitychange', onHide)
+      document.removeEventListener('visibilitychange', onVisibility)
       unlisten()
       mounted = false
       cancelAnimationFrame(warmFrame)
@@ -454,6 +457,7 @@
         carrier.close('superseded connection')
         return
       }
+      store.setVisible(document.visibilityState !== 'hidden')
       if (!store.connect(carrier, id)) return
       connectHelp = null
     } catch (err) {
@@ -678,7 +682,7 @@
              not sit on the path to the first frame of the app. -->
         <div class="view" hidden={displayedRoute !== 'history'}>
           {#if HistoryView}
-            <HistoryView {site} />
+            <HistoryView {site} active={displayedRoute === 'history'} />
           {:else if viewLoadError.history}
             <p class="load-note">
               This screen didn't load — it will try again next time you open the app.

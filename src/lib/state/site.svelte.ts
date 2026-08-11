@@ -105,10 +105,16 @@ export class SiteStore {
    */
   #recent: { t: number; v: Record<number, number> }[] = []
 
-  session = $state<SessionState>(new Session({ build: 'boot' }).state)
+  // Session replaces this value for every frame; it never mutates a field in
+  // place. Raw state preserves the Map references that distinguish a cadence
+  // tick from changed readings, so views can skip work on the former.
+  session = $state.raw<SessionState>(new Session({ build: 'boot' }).state)
 
   /** Wall-clock time the cached view was captured. Null when live. */
   cachedAtMs = $state<number | null>(null)
+
+  /** Whether the document can currently show the stream. */
+  documentVisible = $state(true)
 
   /** Import ceiling the optimiser defends. Comes from the box once wired. */
   ceilingW = $state<number | null>(null)
@@ -154,7 +160,8 @@ export class SiteStore {
           performance.mark('ftw:live-data')
         }
         this.cachedAtMs = null
-        if (this.#siteId) this.#writer.offer(snapshotFromSession(this.#siteId, s))
+        const siteId = this.#siteId
+        if (siteId) this.#writer.offer(() => snapshotFromSession(siteId, s))
       }
     })
   }
@@ -215,6 +222,12 @@ export class SiteStore {
 
   get siteId(): string | null {
     return this.#siteId
+  }
+
+  /** Keep transport cadence and view refresh work in step with the document. */
+  setVisible(visible: boolean): void {
+    this.documentVisible = visible
+    this.#session.setTelemetryHz(visible ? 1 : 0.2)
   }
 
   /**

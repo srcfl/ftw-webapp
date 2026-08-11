@@ -14,6 +14,7 @@ import { RelayCarrier, BACKOFF_CAP_MS } from './relay'
 import { rendezvousHandle } from './rendezvous'
 import { TestPeer, waitFor } from '../../../tests/support/relay-harness.ts'
 import type { CarrierStatus } from './carrier'
+import { linkCounters, resetLinkCounters } from '$lib/perf/link'
 
 const SECRET = new Uint8Array(32).fill(11)
 
@@ -200,12 +201,15 @@ class StubSocket {
   onmessage: ((ev: { data: unknown }) => void) | null = null
   onclose: ((ev: { code: number; reason: string }) => void) | null = null
   onerror: (() => void) | null = null
+  sent: Uint8Array[] = []
 
   constructor(readonly url: string) {
     StubSocket.all.push(this)
   }
 
-  send(): void {}
+  send(frame: Uint8Array): void {
+    this.sent.push(frame)
+  }
   close(): void {
     this.readyState = 3
   }
@@ -229,6 +233,7 @@ describe('backing off from a relay that accepts and then drops', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     StubSocket.all = []
+    resetLinkCounters()
   })
   afterEach(() => vi.useRealTimers())
 
@@ -264,6 +269,31 @@ describe('backing off from a relay that accepts and then drops', () => {
     vi.advanceTimersByTime(500)
     expect(StubSocket.all.length).toBe(4)
 
+    carrier.close()
+  })
+
+  it('marks readiness and counts only bytes that cross an open socket', () => {
+    const marked = vi.spyOn(performance, 'mark')
+    const carrier = new RelayCarrier({
+      url: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 0,
+    })
+    const socket = StubSocket.all.at(-1)!
+
+    carrier.send(new Uint8Array(99))
+    socket.accept()
+    carrier.send(Uint8Array.from([1, 2, 3]))
+    socket.frame()
+
+    expect(marked).toHaveBeenCalledWith('ftw:relay-ready', expect.anything())
+    expect(linkCounters()).toMatchObject({
+      relayTxFrames: 1,
+      relayTxBytes: 3,
+      relayRxFrames: 1,
+      relayRxBytes: 8,
+    })
     carrier.close()
   })
 })

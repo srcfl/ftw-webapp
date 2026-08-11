@@ -301,6 +301,8 @@ export interface SimBoxOptions {
    * gets wrong and cannot notice.
    */
   scopes?: string[]
+  /** False models a box from before hello could carry a subscription. */
+  inlineSubscribe?: boolean
 }
 
 export class SimBox {
@@ -321,6 +323,8 @@ export class SimBox {
   #subscribed = false
   #negotiatedProto = PROTO_MAX
   #bucket: 256 | 512 = 512
+  #hz: Sub['hz'] = 1
+  #inlineSubscribe: boolean
   #lastReading: Reading | null = null
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
@@ -352,6 +356,7 @@ export class SimBox {
     this.#ceilingW = opts.ceilingW ?? this.house.fuseA * 230 * this.house.phases * 0.9
     this.#role = opts.role ?? ROLE_OWNER
     this.#scopes = opts.scopes ?? null
+    this.#inlineSubscribe = opts.inlineSubscribe ?? true
     this.#api = new SimApi({
       house: this.house,
       now: this.#now,
@@ -397,6 +402,10 @@ export class SimBox {
 
   get subscribed(): boolean {
     return this.#subscribed
+  }
+
+  get telemetryHz(): Sub['hz'] {
+    return this.#hz
   }
 
   onFrame(handler: (frame: Uint8Array) => void): () => void {
@@ -527,11 +536,16 @@ export class SimBox {
   }
 
   #onHello(hello: Hello): void {
+    // A hello starts a protocol session. A real Noise reconnect gets a fresh
+    // handler; reset the simulator's per-session stream state to match it.
+    this.#subscribed = false
+    this.#seq = 0
     const boxMax = Math.min(this.faults.maxProto, PROTO_MAX)
 
     // Too old for full mode? Degrade, never error. A hard wall here is a
     // white screen for anyone whose service worker pinned an old bundle.
     const proto = hello.proto.max < boxMax ? Math.max(PROTO_FLOOR, hello.proto.max) : boxMax
+    const inlineSub = !this.faults.booting && this.#inlineSubscribe ? hello.sub : undefined
 
     const b: HelloOk = {
       proto,
@@ -555,6 +569,7 @@ export class SimBox {
         ? { boot: { phase: 'vacuum' as const, pct: 40, etaMs: 90_000 } }
         : {}),
       ...(proto === PROTO_FLOOR ? { hint: 'app_update' as const } : {}),
+      ...(inlineSub ? { subscribed: true as const } : {}),
     }
 
     // Bulk, not lane 0. The reply carries the capability list and the mode
@@ -566,6 +581,7 @@ export class SimBox {
       { lane: LANE_BULK, flags: 0, envelope: { t: 'hello_ok', b } },
       bulkBucketFor(4000) ?? 4096
     )
+    if (inlineSub) this.#onSub(inlineSub)
   }
 
   #onSub(sub: Sub): void {
@@ -574,9 +590,13 @@ export class SimBox {
       return
     }
 
+    const wasSubscribed = this.#subscribed
     this.#bucket = sub.bucket
+    this.#hz = sub.hz
     this.#subscribed = true
-    this.#sendSnapshot()
+    // A current box treats a repeated sub as a cadence change. A legacy box
+    // sent a fresh snapshot for each one; keep that behaviour in its test mode.
+    if (!wasSubscribed || !this.#inlineSubscribe) this.#sendSnapshot()
   }
 
   /**
