@@ -103,14 +103,14 @@ describe('bringing a home back from a sealed copy', () => {
     render(Pair, { props: { onPaired: vi.fn() } })
     await new Promise((r) => setTimeout(r, 50))
 
-    expect(screen.getByRole('button', { name: /set this up before/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /open with your passkey/i })).toBeTruthy()
     expect(mock.getCalls, 'the pairing screen opened a passkey sheet on arrival').toBe(0)
     expect(asked, 'the pairing screen reached for a copy nobody asked for').not.toHaveBeenCalled()
   })
 
   it('says there is nothing saved, rather than showing a fault', async () => {
-    // The ordinary answer for a passkey that never opted in. Shown as an
-    // error it sends someone hunting for a problem that is not there.
+    // A save can fail or a platform can lack a recovery key. That is not a
+    // pairing fault.
     mock = installMockAuthenticator()
     // A passkey that exists and has never escrowed anything. Without one the
     // authenticator answers NotAllowedError — the same DOMException a
@@ -120,7 +120,7 @@ describe('bringing a home back from a sealed copy', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })))
 
     render(Pair, { props: { onPaired: vi.fn() } })
-    ;(await screen.findByRole('button', { name: /set this up before/i })).click()
+    ;(await screen.findByRole('button', { name: /open with your passkey/i })).click()
 
     await vi.waitFor(() =>
       expect((document.body.textContent ?? '').replace(/\s+/g, ' ')).toMatch(
@@ -128,19 +128,16 @@ describe('bringing a home back from a sealed copy', () => {
       )
     )
     // Still on the screen it started on, with the scan still offered.
-    expect(screen.getByRole('button', { name: /set this up before/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /open with your passkey/i })).toBeTruthy()
   })
 })
 
-/* The way back in without a camera.
+/* A phone that still has its home can either open it or scan a fresh QR.
  *
- * The box shows eight characters and its own page says: read this out, and on
- * the other phone choose to type a code rather than scan one. This is that
- * other phone. A screen that can only scan makes the floor unreachable for
- * exactly the person standing on it — no camera, a cracked lens, or somebody
- * being read a code down a phone line.
+ * The current box UI shows no spoken eight-character code. Keeping that path
+ * in the app taught people to look for a control that does not exist.
  */
-describe('typing a code the box read out', () => {
+describe('a home already saved on this phone', () => {
   const SITE = 'aaaabbbbccccdddd'
   let mock: MockAuthenticator | null = null
 
@@ -165,24 +162,13 @@ describe('typing a code the box read out', () => {
     } satisfies StoredSite)
   }
 
-  function field(): HTMLInputElement {
-    return document.querySelector('input') as HTMLInputElement
-  }
-
-  function type(text: string): void {
-    field().value = text
-    field().dispatchEvent(new Event('input', { bubbles: true }))
-  }
-
-  function buttonSaying(pattern: RegExp): HTMLButtonElement | undefined {
-    return [...document.querySelectorAll('button')].find((b) =>
-      pattern.test(b.textContent ?? '')
-    ) as HTMLButtonElement | undefined
-  }
-
   beforeEach(async () => {
     document.body.replaceChildren()
     mock = installMockAuthenticator()
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: async () => ({}) },
+      configurable: true,
+    })
     await knownHome()
   })
 
@@ -194,102 +180,14 @@ describe('typing a code the box read out', () => {
     vi.unstubAllGlobals()
   })
 
-  it('arms the next handshake with the bytes the box drew, and opens the home', async () => {
+  it('offers the saved home and a fresh Settings QR, never a typed code', async () => {
     const onPaired = vi.fn()
     render(Pair, { props: { onPaired } })
 
-    const offer = await vi.waitFor(() => {
-      const button = buttonSaying(/won't let this phone in/i)
-      expect(button, 'the screen never offered a code to type').toBeDefined()
-      return button!
-    })
-    offer.click()
-    await vi.waitFor(() => expect(field()).toBeTruthy())
-
-    // Read out as "zero four aitch em, ay ess double-u nine".
-    type('04HM-ASW9')
-    // The button opens only once eight characters are in hand. Clicking
-    // before that lands on a disabled control and asserts nothing.
-    const send = await vi.waitFor(() => {
-      const button = buttonSaying(/^\s*Let this phone in\s*$/)!
-      expect(button.disabled, 'a full code left the button shut').toBe(false)
-      return button
-    })
-    send.click()
-
-    await vi.waitFor(() => expect(onPaired).toHaveBeenCalledWith({ siteId: SITE }))
-
-    // 0x01 0x23 0x45 0x67 0x89 at the box, from its own encoder. Message 1 of
-    // the next handshake carries exactly this.
-    const row = await (await db()).get('sites', SITE)
-    expect([...row!.pairingCode!]).toEqual([0x01, 0x23, 0x45, 0x67, 0x89])
-  })
-
-  it('folds what a listener writes down, so a try is never spent on a mishearing', async () => {
-    // Five wrong tries burn the code at the box. I for 1 and O for 0 is the
-    // mistake this alphabet was chosen to absorb, and absorbing it has to
-    // happen here — before anything reaches the wire.
-    render(Pair, { props: { onPaired: vi.fn() } })
-
-    const offer = await vi.waitFor(() => {
-      const button = buttonSaying(/won't let this phone in/i)
-      expect(button).toBeDefined()
-      return button!
-    })
-    offer.click()
-    await vi.waitFor(() => expect(field()).toBeTruthy())
-
-    type('io1l0000')
-    // What the field shows back is what will be sent: folded and grouped.
-    expect(field().value).toBe('1011-0000')
-
-    const send = await vi.waitFor(() => {
-      const button = buttonSaying(/^\s*Let this phone in\s*$/)!
-      expect(button.disabled).toBe(false)
-      return button
-    })
-    send.click()
-    await vi.waitFor(async () =>
-      expect([...(await (await db()).get('sites', SITE))!.pairingCode!]).toEqual([
-        0x08, 0x02, 0x10, 0x00, 0x00,
-      ])
-    )
-  })
-
-  it('will not send a code that is not eight characters yet', async () => {
-    const onPaired = vi.fn()
-    render(Pair, { props: { onPaired } })
-
-    const offer = await vi.waitFor(() => {
-      const button = buttonSaying(/won't let this phone in/i)
-      expect(button).toBeDefined()
-      return button!
-    })
-    offer.click()
-    await vi.waitFor(() => expect(field()).toBeTruthy())
-
-    type('04HM')
-    await new Promise((r) => setTimeout(r, 30))
-    const send = buttonSaying(/^\s*Let this phone in\s*$/)!
-    expect(send.disabled, 'half a code opened the button').toBe(true)
-    send.click()
-
-    await new Promise((r) => setTimeout(r, 30))
-    expect(onPaired, 'half a code was sent to the box').not.toHaveBeenCalled()
-    expect((await (await db()).get('sites', SITE))!.pairingCode).toBeUndefined()
-  })
-
-  it('is not offered to a phone with no home to get back into', async () => {
-    // A box code carries no box key and no rendezvous secret, so it can do
-    // nothing for a phone that has never seen this box. The box's own page
-    // says so rather than offering a path with no end; so does this.
-    const database = await db()
-    for (const row of await database.getAll('sites')) await database.delete('sites', row.siteId)
-
-    render(Pair, { props: { onPaired: vi.fn() } })
-    await new Promise((r) => setTimeout(r, 50))
-
-    expect(buttonSaying(/won't let this phone in/i)).toBeUndefined()
+    expect(await screen.findByRole('button', { name: /^open home$/i })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /scan a new pairing qr/i })).toBeTruthy()
+    expect(document.querySelector('input')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/eight characters|type the code/i)
   })
 })
 
@@ -302,6 +200,12 @@ describe('typing a code the box read out', () => {
  * small text — which reads as one real way in and one afterthought.
  */
 describe('arriving for the first time', () => {
+  beforeEach(async () => {
+    document.body.replaceChildren()
+    const database = await db()
+    for (const row of await database.getAll('sites')) await database.delete('sites', row.siteId)
+  })
+
   afterEach(() => {
     document.body.replaceChildren()
     vi.unstubAllGlobals()
@@ -314,21 +218,50 @@ describe('arriving for the first time', () => {
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
       standalone: false,
       maxTouchPoints: 5,
+      // Make Scan a real option in this test environment. Its absence below
+      // must come from the install gate, not from jsdom having no camera.
+      mediaDevices: { getUserMedia: vi.fn() },
     })
   }
 
-  it('offers both ways in as the same size of choice', async () => {
+  it('names the exact local dashboard path and the conditional recovery path', async () => {
     render(Pair, { props: { onPaired: vi.fn() } })
 
-    // Both are buttons a thumb lands on, not one button and one hint. The
-    // scan is only offered where a camera exists, so it is asserted through
-    // whichever of the two this environment can draw.
-    const before = await screen.findByRole('button', { name: /i've set this up before/i })
-    expect(before).toBeTruthy()
+    const said = (document.body.textContent ?? '').replace(/\s+/g, ' ')
+    expect(said).toMatch(/local FTW dashboard/i)
+    expect(said).toMatch(/Settings → FTW app/i)
+    expect(said).toMatch(/Show pairing code/i)
+    expect(said).toMatch(/not printed on the Raspberry Pi/i)
+    expect(screen.getByRole('button', { name: /open with your passkey/i })).toBeTruthy()
+    expect(said).toMatch(/sealed recovery copy/i)
+    expect(said).toMatch(/If that passkey supports recovery and the save reaches Sourceful/i)
+    expect(said).toMatch(/If not, pairing still works; a new Settings QR is the way back/i)
+    expect(said).not.toMatch(/FTW also saves a sealed recovery copy/i)
+  })
 
-    // And neither is dressed as the recommended one: the accent-filled
-    // primary belongs to a single obvious action, and here there is none.
-    expect(before.className).not.toMatch(/primary/)
+  it('starts a demo only after the person asks', async () => {
+    const onTryDemo = vi.fn(async () => {})
+    const onPaired = vi.fn()
+    render(Pair, { props: { onPaired, onTryDemo } })
+
+    expect(onTryDemo).not.toHaveBeenCalled()
+    ;(await screen.findByRole('button', { name: /try the live demo/i })).click()
+    await vi.waitFor(() => expect(onTryDemo).toHaveBeenCalledOnce())
+    expect(onPaired).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: /starting the demo/i })).toBeTruthy()
+  })
+
+  it('does not offer the public demo from a recovery screen', async () => {
+    render(Pair, {
+      props: {
+        onPaired: vi.fn(),
+        onTryDemo: vi.fn(),
+        problem: 'This phone has no key for that home.',
+        dismiss: vi.fn(),
+      },
+    })
+
+    expect(screen.queryByRole('button', { name: /try the live demo/i })).toBeNull()
   })
 
   it('says how to install, where someone lands rather than at the foot of the app', async () => {
@@ -345,6 +278,33 @@ describe('arriving for the first time', () => {
     expect(said).toMatch(/add to home screen/i)
     // And why, in terms of what the person gets rather than storage policy.
     expect(said).toMatch(/notify|instantly|between visits/i)
+    expect(screen.queryByRole('button', { name: /open with your passkey/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /scan the pairing qr/i })).toBeNull()
+  })
+
+  it('keeps an incoming QR inactive in Safari until the app is installed', async () => {
+    asIosSafariTab()
+    render(Pair, {
+      props: { fragment: fragmentFor(ATTACKER_KEY), onPaired: vi.fn() },
+    })
+
+    expect(await screen.findByRole('heading', { name: /install ftw first/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /connect this box/i })).toBeNull()
+    expect(await screen.findByText(/scan the pairing QR again/i)).toBeTruthy()
+  })
+
+  it('keeps an invalid pairing link behind the Safari install gate', async () => {
+    asIosSafariTab()
+    const onPaired = vi.fn()
+    render(Pair, {
+      props: { fragment: '#not-a-pairing-code', onPaired },
+    })
+
+    expect(await screen.findByText(/not an FTW pairing code/i)).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /install ftw first/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /scan the pairing qr/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /open with your passkey/i })).toBeNull()
+    expect(onPaired).not.toHaveBeenCalled()
   })
 
   it('says nothing about installing to a phone that already did', async () => {

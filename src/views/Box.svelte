@@ -273,9 +273,10 @@
     </button>
   {:else}
     <p>
-      Right now the only way back is the code on your box. Sourceful can hold a
-      sealed copy it cannot open, with an opaque id and nothing beside it, so a
-      new phone gets this home back with your passkey alone.
+      No sealed recovery copy is saved for this home right now. FTW normally
+      makes one when you pair on a phone that supports passkey recovery.
+      Sourceful can hold that copy without opening it, with an opaque id and
+      nothing beside it, so a new phone gets this home back with your passkey.
     </p>
     <p>
       The cost: your passkey is then enough to open this home, on any device
@@ -306,7 +307,10 @@
         sign out.
       </p>
     {:else}
-      <p>To come back you need to scan the code on the box itself.</p>
+      <p>
+        To come back, open the box's local dashboard and use Settings → FTW app
+        → Show pairing code.
+      </p>
     {/if}
     <!-- What to check, not what is certainly there. A device key that never
          finished pairing was never recorded, and a phone removed on the box

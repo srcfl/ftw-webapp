@@ -250,9 +250,11 @@ through the platform's keychain — but what the passkey protected did not, and
 the only offer that screen could make was "scan the code on your box", for a
 box the phone was already paired to.
 
-So a household may ask Sourceful to hold **one sealed copy**, at
-`escrow.ftw.energy`. It is opt-in per household and off until someone asks. The
-claim, in the words the opt-in screen uses:
+When a passkey supplies PRF output, pairing saves a sealed recovery copy at
+`escrow.ftw.energy` by default. It happens in the background and adds no prompt.
+Pairing still succeeds without a copy when PRF is unavailable or Sourceful
+cannot be reached. The Box screen shows whether a copy exists and lets its owner
+remove it. Its claim is:
 
 > **Sourceful holds a sealed copy it cannot open, with an opaque id and nothing
 > beside it.**
@@ -269,12 +271,12 @@ Sourceful holds says nothing about the key.
 guard, and why there is no delete. Three things belong here instead, because
 they are decisions rather than mechanism.
 
-**It moves a boundary, for the households that opt in.** The passkey's vendor
-— iCloud Keychain, Google Password Manager — can now restore access to the
-house, because anyone who can complete that ceremony derives both the id and
-the key. That is the same boundary those vendors already hold for passwords,
-and it is the trade the feature *is*. The screen says so in a sentence before
-the button, not afterwards.
+**It moves a boundary while a copy exists.** The passkey's vendor — iCloud
+Keychain, Google Password Manager — can now restore access to the house, because
+anyone who can complete that ceremony derives both the id and the key. That is
+the same boundary those vendors already hold for passwords, and it is the trade
+the feature *is*. The Box screen states the trade and lets the owner remove the
+copy.
 
 **A recovery is invisible to the household.** Restoring puts back the same
 device scalar, so `appenroll.Authorise` takes its already-authorised branch and
@@ -368,14 +370,14 @@ decision holds only for as long as it names nobody, which is why the four
 attempts are written down with their numbers instead of summarised as "we
 checked".
 
-**The opt-in screen keeps its sentence, and that is a decision too.** What
+**The Box screen keeps its sentence, and that is a decision too.** What
 leaks is a fact about Sourceful's own traffic rather than about the household
 reading the screen — no id, no household, nothing they could act on if they
 were told, and nothing they could choose differently about. A line about
-fsyncs before the button would hand somebody a question they cannot answer in
-exchange for a risk they do not carry. So this one is written down for the
-outsider who checks the service, in `escrow/README.md`, and the screen goes on
-saying what it holds.
+fsyncs beside the copy controls would hand somebody a question they cannot
+answer in exchange for a risk they do not carry. So this one is written down
+for the outsider who checks the service, in `escrow/README.md`, and the screen
+goes on saying what it holds.
 
 Four lessons, and they generalise past this feature. A privacy claim that only
 the code has been checked against has been checked halfway; one that has not

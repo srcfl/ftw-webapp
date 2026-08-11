@@ -432,6 +432,12 @@ export class Session {
   /** Attach a carrier and start the handshake. Replaces any current one. */
   connect(carrier: Carrier): void {
     this.#detach()
+    // The replacement starts out unopened. Keep the readings, but drop the
+    // old transport claim now rather than leaving the session in `streaming`
+    // until the new socket opens. Pull-to-refresh and any other in-place
+    // reconnect must never show an old stream as live while the new carrier
+    // is still dialling.
+    this.#patch({ phase: 'idle', carrier: 'none' })
     this.#carrier = carrier
 
     this.#unsub.push(

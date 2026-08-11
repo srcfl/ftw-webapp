@@ -26,8 +26,11 @@ import { join } from 'node:path'
 interface Chunk {
   file: string
   isEntry?: boolean
+  isDynamicEntry?: boolean
   /** Manifest keys this chunk imports with a plain `import`. */
   imports?: string[]
+  /** Manifest keys this chunk imports only after an explicit `import()`. */
+  dynamicImports?: string[]
 }
 
 /** Every script the browser downloads before it can paint, as text. */
@@ -35,6 +38,14 @@ let launchPath = ''
 
 /** Every emitted script, so a marker can be found wherever it landed. */
 let chunks = new Map<string, string>()
+
+/** The production manifest and its static launch closure. */
+let manifest: Record<string, Chunk> = {}
+let entryKey = ''
+let launchKeys = new Set<string>()
+
+/** The emitted worker, whose injected file list is the offline precache. */
+let serviceWorker = ''
 
 /**
  * A string that exists inside the QR encoder's body and nowhere else.
@@ -46,36 +57,48 @@ const ENCODER = 'data length overflow'
 
 beforeAll(async () => {
   const outDir = mkdtempSync(join(tmpdir(), 'ftw-entry-'))
-  await build({ logLevel: 'silent', build: { outDir, sourcemap: false } })
+  // Vitest runs with NODE_ENV=test. Vite derives import.meta.env.DEV from that
+  // process value even when its build mode is production, so leaving it alone
+  // makes this test compile the development simulator path and then call the
+  // result a production bundle. Match `vite build`, and put the runner's value
+  // back before any other test can observe it.
+  const priorNodeEnv = process.env['NODE_ENV']
+  process.env['NODE_ENV'] = 'production'
+  try {
+    await build({ mode: 'production', logLevel: 'silent', build: { outDir, sourcemap: false } })
+  } finally {
+    if (priorNodeEnv === undefined) delete process.env['NODE_ENV']
+    else process.env['NODE_ENV'] = priorNodeEnv
+  }
 
-  const manifest = JSON.parse(
+  manifest = JSON.parse(
     readFileSync(join(outDir, '.vite/manifest.json'), 'utf8')
   ) as Record<string, Chunk>
 
-  const entryKey = Object.keys(manifest).find(
+  entryKey = Object.keys(manifest).find(
     (key) => manifest[key]!.isEntry && manifest[key]!.file.endsWith('.js')
-  )
-  expect(entryKey, 'the build emitted no entry chunk').toBeDefined()
+  ) ?? ''
+  expect(entryKey, 'the build emitted no entry chunk').not.toBe('')
 
   // The static closure. `imports` is the plain-import edge; `dynamicImports`
   // is deliberately not followed, because that is exactly the edge that costs
   // nothing until something asks.
-  const seen = new Set<string>()
   const walk = (key: string) => {
-    if (seen.has(key)) return
-    seen.add(key)
+    if (launchKeys.has(key)) return
+    launchKeys.add(key)
     for (const next of manifest[key]?.imports ?? []) walk(next)
   }
-  walk(entryKey!)
+  walk(entryKey)
 
   for (const chunk of Object.values(manifest)) {
     if (chunk.file.endsWith('.js')) {
       chunks.set(chunk.file, readFileSync(join(outDir, chunk.file), 'utf8'))
     }
   }
-  launchPath = [...seen]
+  launchPath = [...launchKeys]
     .map((key) => chunks.get(manifest[key]!.file) ?? '')
     .join('\n')
+  serviceWorker = readFileSync(join(outDir, 'sw.js'), 'utf8')
 }, 120_000)
 
 /** Fails loudly when a marker has stopped naming exactly one chunk. */
@@ -94,7 +117,7 @@ describe('what a cold start downloads before it can paint', () => {
     // Something that must be there: the shell mounts the pairing screen
     // itself, because a phone with nothing paired has no other screen.
     expect(launchPath, 'the closure missed a chunk the shell imports').toContain(
-      'Connect your box'
+      'Connect FTW'
     )
   })
 
@@ -116,9 +139,23 @@ describe('what a cold start downloads before it can paint', () => {
     )
   })
 
-  it('does not carry the box simulator', () => {
-    // Development only, and `import.meta.env.DEV` is what removes it. A
-    // simulated house shipped to households is the worst thing on this list.
-    expect(launchPath, 'the simulator shipped to production').not.toContain('SimBox')
+  it('keeps the public demo behind one dynamic edge and precaches it', () => {
+    const demoKey = 'src/lib/demo/simulated-site.ts'
+    const demo = manifest[demoKey]
+
+    expect(demo, 'the public demo was not emitted').toBeDefined()
+    expect(demo!.isDynamicEntry, 'the public demo is not a dynamic entry').toBe(true)
+    expect(launchKeys.has(demoKey), 'the public demo entered the static launch closure').toBe(false)
+    expect(
+      manifest[entryKey]!.dynamicImports ?? [],
+      'the app entry has no explicit dynamic edge to the public demo'
+    ).toContain(demoKey)
+
+    // Every emitted JS and CSS path in this object is fetched during service
+    // worker install. The demo stays off the first frame but remains available
+    // when an installed app is opened without a network.
+    expect(serviceWorker, 'the public demo is missing from the offline precache').toContain(
+      JSON.stringify(`/${demo!.file}`)
+    )
   })
 })

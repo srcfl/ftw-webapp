@@ -322,7 +322,7 @@ export async function openRecoveryBlob(
     throw new RecoveryBlobError(
       'the derived key does not open this blob under that version',
       'E_BLOB_LOCKED',
-      'The saved copy of this home could not be opened. Scan the code on your box instead.'
+      "The saved copy of this home could not be opened. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR instead."
     )
   }
 
@@ -351,6 +351,6 @@ function format(message: string): RecoveryBlobError {
   return new RecoveryBlobError(
     message,
     'E_BLOB_FORMAT',
-    'The saved copy of this home could not be read. Scan the code on your box instead.'
+    "The saved copy of this home could not be read. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR instead."
   )
 }

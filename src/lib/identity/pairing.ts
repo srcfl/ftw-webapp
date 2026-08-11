@@ -140,7 +140,7 @@ export async function pairWithBox(
   const sealed =
     opts.holdCopy === false
       ? Promise.resolve()
-      : holdSealedCopy(store, wrapping, siteId, opts.escrow)
+      : holdSealedCopy(store, wrapping, site, opts.escrow)
 
   // Asked for only once there is something worth keeping. Prompting on a
   // first launch that has no data yet is a question about nothing.
@@ -169,23 +169,26 @@ export async function pairWithBox(
 async function holdSealedCopy(
   store: VaultStore,
   wrapping: WrappingKey,
-  siteId: string,
+  site: PairedSite,
   escrow?: import('./escrow').EscrowOptions
 ) {
   if (!wrapping.escrow) return
   try {
     const { markEscrowed, saveEscrowCopy } = await import('./escrow')
-    await markEscrowed(siteId, true)
-    if ((await saveEscrowCopy(store, wrapping, escrow ?? {})) !== 'saved') {
-      await markEscrowed(siteId, false)
-    }
+    const outcome = await saveEscrowCopy(store, wrapping, escrow ?? {}, {
+      siteId: site.siteId,
+      label: site.label,
+      boxStaticKey: site.boxStaticKey,
+      rendezvousSecret: site.rendezvousSecret,
+    })
+    if (outcome === 'saved') await markEscrowed(site.siteId, true)
   } catch {
     // Offline, a dismissed prompt, a disk that refused — the home stays
     // exactly as it paired, minus a spare copy it can make next time the
     // BOX screen is opened. Never surfaced here: pairing already worked.
     try {
       const { markEscrowed } = await import('./escrow')
-      await markEscrowed(siteId, false)
+      await markEscrowed(site.siteId, false)
     } catch {
       // The mark is this device's belief about a copy; a stale one costs a
       // wrong word on the BOX screen and is put right by the next attempt.
@@ -249,7 +252,7 @@ export async function redeemBoxCode(siteId: string, typed: string): Promise<void
   if (!row) {
     throw new BoxCodeError(
       `no site ${siteId}`,
-      'This phone has no record of that home. Scan the code on your box instead.'
+      "This phone has no record of that home. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR instead."
     )
   }
 

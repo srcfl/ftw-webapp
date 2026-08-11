@@ -191,7 +191,9 @@ describe('what the user is told', () => {
     expect(help(() => parseEnrollmentFragment(fragment('v3')))).toMatch(/update the app/i)
     expect(help(() => parseEnrollmentFragment(fragment('v1')))).toMatch(/update the box/i)
     expect(help(() => parseEnrollmentFragment(fragment('v2', 'A')))).toMatch(/scan it again/i)
-    expect(help(() => parseEnrollmentUrl('https://evil.example/p#x'))).toMatch(/code on the box/i)
+    expect(help(() => parseEnrollmentUrl('https://evil.example/p#x'))).toMatch(
+      /settings → ftw app → show pairing code/i
+    )
 
     // No error prose leaks a field name, a length or a byte count.
     for (const f of [

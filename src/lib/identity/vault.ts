@@ -435,7 +435,7 @@ export async function unlockWrappingKey(
   throw new VaultError(
     'no wrapping key could be obtained for any stored copy',
     'E_VAULT_LOCKED',
-    'This device can no longer unlock its key. Scan the code on your box to set it up again.'
+    "This device can no longer unlock its key. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR."
   )
 }
 
@@ -554,7 +554,7 @@ function emptyVault(): VaultError {
   return new VaultError(
     'no device key has been created',
     'E_VAULT_EMPTY',
-    'Scan the code on your box to set this device up.'
+    "Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan the QR."
   )
 }
 
@@ -576,7 +576,7 @@ async function unseal(key: CryptoKey, copy: WrappedCopy): Promise<Uint8Array<Arr
     throw new VaultError(
       `the wrapping key does not open the copy for ${copy.credentialId}`,
       'E_VAULT_LOCKED',
-      'This device can no longer unlock its key. Scan the code on your box to set it up again.'
+      "This device can no longer unlock its key. Open your box's local dashboard, then Settings → FTW app → Show pairing code, and scan a new QR."
     )
   }
 }

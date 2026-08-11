@@ -59,13 +59,12 @@ export interface StoredSite {
    */
   pairingCode?: Uint8Array
   /**
-   * Whether this household asked Sourceful to hold a sealed copy of it.
+   * Whether Sourceful last confirmed that it holds a sealed copy of this home.
    *
-   * Per household and absent by default, which is what makes the offer an
-   * offer. Only homes marked here go into the sealed blob, so a phone holding
-   * two homes escrows the one that was asked for and not the other — the
-   * claim on the opt-in screen is about a household, and a blob carrying a
-   * home nobody offered up would make it false.
+   * Pairing tries to create one by default when the passkey supports it, but
+   * this becomes true only after the service confirms the write. Only homes
+   * marked here go into later copies, so one failed background save can never
+   * turn into a false claim on the Box screen.
    *
    * See $lib/identity/escrow.
    */

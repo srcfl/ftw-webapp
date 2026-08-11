@@ -554,6 +554,22 @@ describe('a copy held by default', () => {
     await wipeThisDevice()
     await expect(recoverFromEscrow(wired())).resolves.toEqual([])
   })
+
+  it('does not mark a copy before Sourceful confirms the write', async () => {
+    const { site, sealed } = await pairWithBox(enrollmentUrl(), {
+      escrow: {
+        origin: service.origin,
+        fetch: async () => {
+          throw new TypeError('offline')
+        },
+      },
+    })
+    await sealed
+
+    const row = await (await db()).get('sites', site.siteId)
+    expect(row?.escrow).not.toBe(true)
+    expect(service.rows()).toEqual([])
+  })
 })
 
 describe('a passkey that cannot seal a copy', () => {

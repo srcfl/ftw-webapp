@@ -386,6 +386,26 @@ describe('configuration', () => {
     expect((decode(res.body) as { role: string }).role).toBe(ROLE_VIEWER)
   })
 
+  it('can skip the ceremony only when a simulator opts in for the public demo', async () => {
+    const box = new SimBox({
+      now: () => NOON,
+      role: ROLE_OWNER,
+      requireApiStepUp: false,
+    })
+    const session = connect(box)
+    await settle()
+
+    const asking = new TextEncoder().encode(JSON.stringify({ role: ROLE_VIEWER }))
+    const res = await session.api({
+      method: 'POST',
+      path: '/api/app-link/pairing',
+      body: asking,
+    })
+
+    expect(res.status).toBe(200)
+    expect((decode(res.body) as { role: string }).role).toBe(ROLE_VIEWER)
+  })
+
   it('will not mint a code to be read aloud, however privileged the caller', async () => {
     // A code somebody reads down a phone line is forty bits, and what makes
     // forty bits safe is that every minting costs a walk to the box: five

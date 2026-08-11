@@ -75,7 +75,7 @@ describe('a box code, redeemed', () => {
     // row could not find the box or be sure of the one that answered, so this
     // is a dead end rather than a slow failure — and the sentence says scan.
     await expect(redeemBoxCode('nosuchsite', '04HM-ASW9')).rejects.toMatchObject({
-      help: expect.stringMatching(/scan the code on your box/i),
+      help: expect.stringMatching(/settings → ftw app → show pairing code/i),
     })
   })
 })

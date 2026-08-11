@@ -275,7 +275,7 @@ describe('unlocking an enrolled device', () => {
     try {
       await unlockWrappingKey(store)
     } catch (err) {
-      expect((err as VaultError).help).toMatch(/scan the code on your box/i)
+      expect((err as VaultError).help).toMatch(/settings → ftw app → show pairing code/i)
     }
   })
 

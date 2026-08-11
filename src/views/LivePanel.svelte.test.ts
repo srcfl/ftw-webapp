@@ -85,6 +85,27 @@ describe('a live line behind a bubble', () => {
     expect(api, 'the live panel reached for the box API it does not need').not.toHaveBeenCalled()
   })
 
+  it('does not open a live line over retained readings after the wire drops', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const site = new SiteStore('test')
+    const carrier = new LoopbackCarrier(new SimBox({ now: () => Date.now() }), { latencyMs: 5 })
+    site.connect(carrier)
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+    carrier.drop('wire died')
+    await vi.advanceTimersByTimeAsync(20)
+
+    render(Now, { props: { site } })
+    await vi.advanceTimersByTimeAsync(20)
+    openBubble('grid')
+    await vi.advanceTimersByTimeAsync(20)
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    site.destroy()
+  })
+
   it('closes on Escape', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOON)

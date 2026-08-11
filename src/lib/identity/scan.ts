@@ -101,9 +101,39 @@ async function decoder(): Promise<Decode> {
  */
 export async function scanForEnrollment(
   video: HTMLVideoElement,
-  onCode: (raw: string) => void
+  onCode: (raw: string) => void,
+  signal?: AbortSignal
 ): Promise<ScanHandle> {
-  let stream: MediaStream
+  let stream: MediaStream | null = null
+  let running = true
+  let frame = 0
+
+  /**
+   * Stop is valid before the camera exists as well as after it starts.
+   *
+   * A permission sheet can outlive the view that opened it. Marking the scan
+   * stopped now means a stream that resolves later is closed before it reaches
+   * the video. Calling this again is safe: `stream` is cleared when released.
+   */
+  const stop = () => {
+    running = false
+    cancelAnimationFrame(frame)
+    frame = 0
+    if (stream) {
+      const active = stream
+      stream = null
+      for (const track of active.getTracks()) track.stop()
+      if (video.srcObject === active) video.srcObject = null
+    }
+    signal?.removeEventListener('abort', stop)
+  }
+
+  if (signal?.aborted) {
+    stop()
+    return { stop }
+  }
+  signal?.addEventListener('abort', stop, { once: true })
+
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       // The back camera is the one pointing at the box.
@@ -111,6 +141,10 @@ export async function scanForEnrollment(
       audio: false,
     })
   } catch (err) {
+    // Cancellation is not a camera error. The caller has already left the
+    // scanner, so resolving a stopped handle must not repaint it as failed.
+    if (!running) return { stop }
+    stop()
     const name = (err as { name?: string }).name
     if (name === 'NotAllowedError' || name === 'SecurityError') {
       throw new ScanError(
@@ -127,18 +161,20 @@ export async function scanForEnrollment(
     throw new ScanError('failed', "The camera didn't start. Try again.")
   }
 
+  if (!running) {
+    // `stop()` may have run while getUserMedia was waiting. It had no stream
+    // then; now it closes the one that arrived late.
+    stop()
+    return { stop }
+  }
+
   video.srcObject = stream
   video.setAttribute('playsinline', '') // iOS goes fullscreen without it
   await video.play().catch(() => {})
 
-  let running = true
-  let frame = 0
-
-  const stop = () => {
-    running = false
-    cancelAnimationFrame(frame)
-    for (const track of stream.getTracks()) track.stop()
-    video.srcObject = null
+  if (!running) {
+    stop()
+    return { stop }
   }
 
   // After the camera, so the permission sheet is the first thing that happens
@@ -148,12 +184,18 @@ export async function scanForEnrollment(
   try {
     detect = await decoder()
   } catch (err) {
+    if (!running) return { stop }
     stop()
     if (err instanceof ScanError) throw err
     throw new ScanError(
       'unsupported',
       "The scanner didn't load. Point your phone's camera at the code instead — it opens the same link."
     )
+  }
+
+  if (!running) {
+    stop()
+    return { stop }
   }
 
   // Every other frame. Detection at 60 Hz burns battery for no gain — a code
@@ -164,19 +206,25 @@ export async function scanForEnrollment(
 
     skip = !skip
     if (!skip && video.readyState >= 2) {
+      let codes: string[] = []
       try {
-        for (const raw of await detect(video)) {
-          if (looksLikeEnrollment(raw)) {
-            stop()
-            onCode(raw)
-            return
-          }
-        }
+        codes = await detect(video)
       } catch {
         // A dropped frame is not worth reporting; the next one usually works.
       }
+      // `detect` cannot be aborted. Its result belongs to the scan that asked
+      // for it, so discard it when stop ran while the promise was pending.
+      if (!running) return
+      for (const raw of codes) {
+        if (looksLikeEnrollment(raw)) {
+          stop()
+          onCode(raw)
+          return
+        }
+      }
     }
 
+    if (!running) return
     frame = requestAnimationFrame(() => void tick())
   }
 

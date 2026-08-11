@@ -7,8 +7,8 @@
  * `waiting` means a newer build is downloaded, verified and parked. The worker
  * alone would take over at the next launch with no page left open, but an
  * installed iOS app is never quite closed (see src/sw.ts), so the app asks for
- * the handover at a safe moment — when it is freshly loaded or when it goes to
- * the background — and reloads the instant the new worker controls the page.
+ * the handover at a safe moment — after the user presses Update or while the
+ * app is in the background — and reloads when the new worker controls the page.
  * The reload is a whole navigation, so no build's shell ever meets another's
  * chunks. A parked build that installs mid-session is not forced on a page
  * someone is reading: it lands when they next leave or reopen.
@@ -66,9 +66,10 @@ export async function registerServiceWorker(): Promise<void> {
 }
 
 function watch(registration: ServiceWorkerRegistration): void {
-  // Parked by an earlier visit — this launch is exactly the safe moment to
-  // land it, before the user has touched anything.
-  land(registration.waiting)
+  // Parked by an earlier visit. Announce it rather than forcing a second
+  // launch just after this one: the Update button gives the user a clear,
+  // immediate handover, and backgrounding remains the automatic safe point.
+  announce(registration.waiting)
 
   registration.addEventListener('updatefound', () => {
     const worker = registration.installing
@@ -118,15 +119,14 @@ function requestTakeover(worker: ServiceWorker): void {
 }
 
 /**
- * Check for a new build, use it when one is ready, or reload this build.
+ * Check for a new build and announce it when one is ready.
  *
  * This is the action behind the installed app's pull gesture. The update
- * check comes first so a deliberate refresh never returns to a build the
- * service worker has already replaced on the server. A normal reload remains
- * the fallback: the running worker serves its own complete cached build, so
- * the shell and its chunks still cannot be mixed.
+ * check runs beside the in-place data refresh. Reloading when no update exists
+ * would only ask the active worker for the same cached shell, discard every
+ * mounted view, and make a live app feel like a web page.
  */
-export async function refreshApp(): Promise<void> {
+export async function checkForAppUpdate(): Promise<boolean> {
   if ('serviceWorker' in navigator) {
     try {
       const registration =
@@ -139,16 +139,14 @@ export async function refreshApp(): Promise<void> {
         const worker = registration.waiting ?? (await waitForInstall(registration.installing))
         if (worker && navigator.serviceWorker.controller) {
           announce(worker)
-          requestTakeover(worker)
-          return
+          return true
         }
       }
     } catch {
-      // Offline is a valid refresh. The current worker has a complete shell.
+      // Offline is a valid state. The current worker has a complete shell.
     }
   }
-
-  location.reload()
+  return false
 }
 
 /** Wait briefly for a worker found by update() to finish installing. */

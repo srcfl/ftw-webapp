@@ -92,7 +92,7 @@
       const role = (e as CustomEvent<{ role?: string }>).detail?.role
       if (role === 'ev') {
         if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) evOpen = true
-      } else if (role && LIVE_ROLES.has(role)) {
+      } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
         liveRole = role as LiveRole
       }
     }
@@ -210,7 +210,7 @@
   <div class="flow">
     <!-- static is the honesty switch: a cached view holds still, because a
          moving particle claims power is flowing at this very moment. -->
-    <ftw-energy-flow bind:this={flow} embedded static={live ? undefined : true}
+    <ftw-energy-flow bind:this={flow} embedded static={live && active ? undefined : true}
     ></ftw-energy-flow>
   </div>
 

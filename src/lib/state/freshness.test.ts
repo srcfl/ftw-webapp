@@ -370,4 +370,35 @@ describe('freshness on a box the app was not compiled against', () => {
 
     site.destroy()
   })
+
+  it('does not reclaim the relay during reconnect until a new snapshot arrives', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.UTC(2026, 6, 15, 12))
+
+    const site = new SiteStore('test')
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new LoopbackCarrier(box, { latencyMs: 20 })
+    site.connect(carrier)
+
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(site.carrier).toBe('relay')
+
+    carrier.drop('wire died')
+    expect(site.carrier).toBe('none')
+
+    carrier.restore()
+    await vi.advanceTimersByTimeAsync(20)
+    expect(site.session.phase).toBe('handshaking')
+    expect(site.carrier, 'the old frame made the new handshake look live').toBe('none')
+
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(site.carrier).toBe('relay')
+
+    site.destroy()
+    vi.useRealTimers()
+  })
 })

@@ -226,6 +226,8 @@ export interface SimApiOptions {
   house: HouseConfig
   now: () => number
   ceilingW: number
+  /** False only in the public demo, whose changes never leave memory. */
+  requireStepUp?: boolean
   /** This session's own device id, so its row can be marked. */
   deviceId?: string
   /**
@@ -416,7 +418,9 @@ export class SimApi {
         if (req.role !== ROLE_OWNER) {
           return { code: 'E_SCOPE_DENIED', args: { needRole: ROLE_OWNER, role: req.role } }
         }
-        if (!req.stepUp) return { code: 'E_NEEDS_STEP_UP', args: { tier } }
+        if (this.#opts.requireStepUp !== false && !req.stepUp) {
+          return { code: 'E_NEEDS_STEP_UP', args: { tier } }
+        }
         break
 
       case 'actuate':

@@ -12,10 +12,11 @@
   import { currentEnvironment, isIosSafariTab } from '$lib/pwa/install'
   import { boxFingerprint, pairWithBox, type PairedSite } from '$lib/identity/pairing'
   import { EnrollmentError } from '$lib/identity/enrollment'
-  import { BOX_CODE_CHARS, foldBoxCode, groupBoxCode } from '$lib/identity/boxcode'
 
   interface Props {
     onPaired: (site: PairedSite) => void
+    /** Open the public simulator without pairing or writing a home to disk. */
+    onTryDemo?: (() => void | Promise<void>) | null
     /**
      * A pairing link the app was opened with.
      *
@@ -30,8 +31,8 @@
      * Null on the ordinary path — a phone with nothing paired, or one whose
      * box has simply gone quiet. Set when no carrier could be built at all:
      * no key, no record of the home, no rendezvous secret to find the box
-     * with. That distinction decides what may be offered here, because two of
-     * the three ways in need something this phone is missing. See
+     * with. That distinction decides what may be offered here, because opening
+     * the saved home needs something this phone is missing. See
      * $lib/state/connect, which owns the sentence.
      */
     problem?: string | null
@@ -39,7 +40,13 @@
     dismiss?: (() => void) | null
   }
 
-  let { onPaired, fragment = null, problem = null, dismiss = null }: Props = $props()
+  let {
+    onPaired,
+    onTryDemo = null,
+    fragment = null,
+    problem = null,
+    dismiss = null,
+  }: Props = $props()
 
   /**
    * Running in an iOS browser tab rather than from the home screen.
@@ -51,7 +58,14 @@
    */
   const inSafariTab = isIosSafariTab(currentEnvironment())
 
-  type Stage = 'intro' | 'scanning' | 'typing' | 'pairing' | 'error' | 'recovering' | 'choosing'
+  type Stage =
+    | 'intro'
+    | 'scanning'
+    | 'pairing'
+    | 'error'
+    | 'recovering'
+    | 'choosing'
+    | 'demoing'
 
   let stage = $state<Stage>('intro')
 
@@ -95,20 +109,21 @@
   /**
    * Whether this phone can still open the home it holds.
    *
-   * A key and a row are what the two quick ways in need: opening the home
-   * again, and spending eight characters read off the box. With a `problem`
-   * neither can work — a typed code writes bytes no handshake can spend, and
-   * "Open Home" lands straight back on the screen it came from — so both go,
-   * and what is left are the two ways that carry the missing part with them:
-   * a scan, and the sealed copy.
+   * A key and a row are what opening the home again needs. With a `problem`
+   * that path cannot work, so the two complete recovery paths remain: a new
+   * pairing QR from FTW Settings, and the sealed copy opened by a passkey.
    */
   const canOpen = $derived(known !== null && problem === null)
 
   let message = $state('')
   let video = $state<HTMLVideoElement | null>(null)
   let handle: ScanHandle | null = null
+  let scanAbort: AbortController | null = null
 
-  onDestroy(() => handle?.stop())
+  onDestroy(() => {
+    scanAbort?.abort()
+    handle?.stop()
+  })
 
   /**
    * A link is an offer, never an instruction.
@@ -117,7 +132,7 @@
    * anyone can send — by SMS, by email, on a sticker over the real QR — so
    * "your box needs re-pairing, tap here" silently repointed the app at the
    * sender's box: their readings shown as this home, every mode change sent
-   * to their hardware, and no way back without finding the physical code
+   * to their hardware, and no way back without opening a new pairing QR
    * again. On a device without PRF it cost the owner not one tap.
    *
    * So the fragment is parsed and shown, and nothing is trusted until
@@ -144,6 +159,10 @@
   })
 
   async function startScan() {
+    scanAbort?.abort()
+    handle?.stop()
+    const controller = new AbortController()
+    scanAbort = controller
     stage = 'scanning'
     message = ''
 
@@ -152,59 +171,18 @@
     if (!video) return
 
     try {
-      handle = await scanForEnrollment(video, (raw) => void pair(raw))
+      const next = await scanForEnrollment(video, (raw) => void pair(raw), controller.signal)
+      if (controller.signal.aborted) {
+        next.stop()
+        return
+      }
+      handle = next
     } catch (err) {
+      if (controller.signal.aborted) return
       handle = null
       stage = 'error'
       message =
         err instanceof ScanError ? err.userMessage : "The camera didn't start. Try again."
-    }
-  }
-
-  /**
-   * The eight characters somebody is reading out over the phone.
-   *
-   * Held folded — I and L are already 1, O is already 0, the hyphen and any
-   * spaces are gone — so what the field shows is what will be sent. Folding
-   * as they type rather than when they press the button is the point: the box
-   * burns a code after five wrong tries, and a try must never be spent on
-   * something this app could read correctly itself.
-   */
-  let code = $state('')
-  let codeProblem = $state('')
-
-  const codeReady = $derived(code.length === BOX_CODE_CHARS)
-
-  function onCodeInput(event: Event) {
-    const field = event.currentTarget as HTMLInputElement
-    code = foldBoxCode(field.value)
-    // Written back so the grouping and the folding are visible rather than
-    // implied. Setting `value` puts the caret at the end, which is where it
-    // already is for anyone typing a code they are hearing.
-    field.value = groupBoxCode(code)
-    codeProblem = ''
-  }
-
-  /**
-   * Spend the code on the next handshake.
-   *
-   * Only ever for a home this phone already holds — `known` is the whole
-   * precondition, and it is why the button that leads here appears nowhere
-   * else. The box's own page says the same: a code is for a phone that has
-   * been here before, because only the square carries what a stranger needs.
-   */
-  async function useCode() {
-    if (!known || !codeReady) return
-    stage = 'pairing'
-    try {
-      const { redeemBoxCode } = await import('$lib/identity/pairing')
-      await redeemBoxCode(known.siteId, code)
-      onPaired({ siteId: known.siteId } as PairedSite)
-    } catch (err) {
-      stage = 'typing'
-      const help = (err as { help?: unknown } | null)?.help
-      codeProblem =
-        typeof help === 'string' ? help : "That didn't work. Ask your box for a new code."
     }
   }
 
@@ -232,10 +210,9 @@
    * Ask the passkey what Sourceful is holding.
    *
    * Three answers and they are nothing alike on screen: homes to choose from,
-   * nothing held at all — which is the ordinary answer for a passkey that
-   * never opted in, and not a fault — and a copy that will not open, which is
-   * the one case where something is wrong and the box's own code is the way
-   * back.
+   * nothing held at all — which can happen when a save failed or the phone
+   * could not make a recovery key — and a copy that will not open. In both
+   * cases a new pairing QR is the way back.
    */
   async function recover() {
     stage = 'recovering'
@@ -245,7 +222,8 @@
       held = await recoverFromEscrow()
       if (held.length === 0) {
         stage = 'intro'
-        message = 'Nothing was saved for this passkey. Scan the code on your box instead.'
+        message =
+          'Nothing was saved for this passkey. Open Settings → FTW app in your box dashboard and scan a new pairing code instead.'
         return
       }
       recovered = held.map((home) => ({
@@ -265,7 +243,7 @@
       message =
         typeof help === 'string'
           ? help
-          : "That didn't work. Scan the code on your box instead."
+          : "That didn't work. Open Settings → FTW app in your box dashboard and scan a new pairing code instead."
     }
   }
 
@@ -282,7 +260,21 @@
     }
   }
 
+  async function tryDemo() {
+    if (!onTryDemo) return
+    stage = 'demoing'
+    message = ''
+    try {
+      await onTryDemo()
+    } catch {
+      stage = 'intro'
+      message = "The demo didn't load. Check your connection and try again."
+    }
+  }
+
   function cancel() {
+    scanAbort?.abort()
+    scanAbort = null
     handle?.stop()
     handle = null
     stage = 'intro'
@@ -290,59 +282,62 @@
   }
 </script>
 
+{#snippet demoOffer()}
+  {#if onTryDemo}
+    <section class="demo" aria-labelledby="demo-title">
+      <p class="demo-label"><span aria-hidden="true"></span> Interactive demo</p>
+      <h2 id="demo-title">See a home running</h2>
+      <p>
+        Explore live solar, battery, grid, EV charging, plans and history. The
+        data is simulated and nothing is saved.
+      </p>
+      <button class="primary" onclick={() => void tryDemo()}>Try the live demo</button>
+    </section>
+  {/if}
+{/snippet}
+
 <section class="pair">
-  {#if stage === 'scanning'}
+  {#if inSafariTab && (stage === 'intro' || stage === 'error')}
+    <h1>Install FTW first</h1>
+    <p>Add FTW to your Home Screen before you connect a box or restore a saved home.</p>
+    {#if message}
+      <p class="problem">{message}</p>
+    {/if}
+    <div class="install">
+      <p class="install-title">Two taps in Safari</p>
+      <p class="install-steps">
+        Tap <span class="key">Share</span>, then
+        <span class="key">Add to Home Screen</span>.
+      </p>
+      <p class="install-why">
+        Open FTW from your Home Screen after that. It starts faster, keeps your
+        readings between visits, and can receive notifications.
+      </p>
+    </div>
+    {#if offered}
+      <p class="hint">
+        This pairing link stays inactive in Safari. After installing, open FTW
+        from your Home Screen and scan the pairing QR again.
+      </p>
+    {/if}
+    {@render demoOffer()}
+  {:else if stage === 'scanning'}
     <div class="viewfinder">
       <!-- svelte-ignore a11y_media_has_caption -->
       <video bind:this={video} muted autoplay playsinline></video>
       <div class="reticle" aria-hidden="true"></div>
     </div>
-    <p class="hint">Point at the code on your box.</p>
-    <button class="quiet" onclick={cancel}>Cancel</button>
-  {:else if stage === 'typing'}
-    <!-- The floor that always works: no camera, a cracked lens, or somebody
-         reading eight characters down a phone from the box's own screen. -->
-    <h1>Type the code from your box</h1>
-    <p>
-      Your box shows eight characters. Type them here to let this phone back
-      in to {known?.label ?? 'your home'}.
-    </p>
-
-    <label class="field">
-      <span>Code</span>
-      <input
-        class="num"
-        value={groupBoxCode(code)}
-        oninput={onCodeInput}
-        onkeydown={(e) => {
-          if (e.key === 'Enter') void useCode()
-        }}
-        autocapitalize="characters"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-        inputmode="text"
-        maxlength="9"
-        placeholder="04HM-ASW9"
-        aria-describedby="code-note"
-      />
-    </label>
-
-    {#if codeProblem}
-      <p class="problem">{codeProblem}</p>
-    {/if}
-
-    <button class="primary" disabled={!codeReady} onclick={() => void useCode()}>
-      Let this phone in
-    </button>
-    <p class="hint" id="code-note">
-      A code works once and lasts a few minutes. If your home does not come
-      back, ask for a new one — five wrong tries stop the old code.
+    <p class="hint">
+      In your box's local dashboard, open Settings → FTW app. Hold the pairing
+      QR inside the frame.
     </p>
     <button class="quiet" onclick={cancel}>Cancel</button>
   {:else if stage === 'pairing'}
-    <h1>Connecting</h1>
-    <p>Confirming it's really your box.</p>
+    <h1>Securing this phone</h1>
+    <p>Confirm with Face ID or Touch ID if your phone asks.</p>
+  {:else if stage === 'demoing'}
+    <h1>Starting the demo</h1>
+    <p>Loading a simulated home.</p>
   {:else if stage === 'recovering'}
     <h1>Checking</h1>
     <p>Asking your passkey what it can open.</p>
@@ -369,7 +364,8 @@
         Connecting it replaces {known.label} as the home this app shows and
         controls. Your key for {known.label} stays on this phone.
       {:else}
-        Check it matches the code on your box before continuing.
+        Only continue if you just opened Settings → FTW app and chose Show
+        pairing code in this box's local dashboard.
       {/if}
     </p>
 
@@ -388,7 +384,7 @@
       }}>Not now</button
     >
   {:else}
-    <h1>{problem ? 'Get this phone back in' : canOpen ? 'Welcome back' : 'Connect your box'}</h1>
+    <h1>{problem ? 'Get this phone back in' : canOpen ? 'Welcome back' : 'Connect FTW'}</h1>
     <p>
       {#if problem}
         <!-- What happened, from the one file that knows. What to do about it
@@ -397,8 +393,8 @@
       {:else if canOpen}
         Your key is still on this phone — nothing to set up again.
       {:else}
-        Scan the code on your FTW box. Everything stays between this app and
-        your box — nothing readable passes through Sourceful.
+        Connect your own box, open a home saved with your passkey, or try a
+        live simulated home first.
       {/if}
     </p>
 
@@ -406,86 +402,68 @@
       <p class="problem">{message}</p>
     {/if}
 
-    {#if inSafariTab}
-      <!-- Said here, on the screen someone actually lands on, and not as a
-           strip at the foot of the app. On iOS this is not a nicety: a tab's
-           storage is evicted after a week away, and notifications only reach
-           an installed app — so a phone that never installs loses its cache
-           on exactly the schedule that makes the app feel slow, and can
-           never be told its car has finished charging. iOS gives a page no
-           way to open the Share sheet, so naming the two taps is the whole
-           of what can honestly be done. -->
-      <div class="install">
-        <p class="install-title">Add FTW to your home screen first</p>
-        <p class="install-steps">
-          Tap <span class="key">Share</span>, then
-          <span class="key">Add to Home Screen</span>.
-        </p>
-        <p class="install-why">
-          It opens instantly, keeps your readings between visits, and is the
-          only way your box can notify you.
-        </p>
-      </div>
+    {#if !problem && !dismiss && !canOpen && onTryDemo}
+      {@render demoOffer()}
     {/if}
 
     {#if canOpen}
       <button class="primary" onclick={() => onPaired({ siteId: known!.siteId } as PairedSite)}>
         Open {known?.label}
       </button>
-      <!-- Offered here and nowhere else, because here is the only place it
-           can work. A box code carries no box key and no rendezvous secret,
-           so it re-admits a phone that already holds those and can do nothing
-           at all for one that does not — which is what the box's own page
-           says rather than offering a path with no end. -->
-      <button
-        class="quiet"
-        onclick={() => {
-          stage = 'typing'
-          code = ''
-          codeProblem = ''
-          message = ''
-        }}>Your box won't let this phone in?</button
-      >
-      <p class="hint">
-        Ask someone standing at {known?.label}'s box to show a code, and type
-        it in here.
-      </p>
+      {#if canScan()}
+        <button class="quiet" onclick={startScan}>Scan a new pairing QR</button>
+      {/if}
+      <p class="hint">Use a new QR from Settings → FTW app if this key no longer works.</p>
     {/if}
 
-    {#if canOpen}
-      {#if canScan()}
-        <!-- "Add another box" only where that is what it would do. From a home
-             this phone cannot open, the same button is how it gets back into
-             that same box, and calling it a second box would be a lie about
-             which house is on the other side of it. -->
-        <button class="quiet" onclick={startScan}>Add another box</button>
-      {/if}
-    {:else}
-      <!-- The two ways in, side by side and weighted the same, because for
-           somebody arriving they are the same size of question: is this box
-           new to me, or have I been here before? Making one a button and the
-           other a line of small text answered that question for them, and
-           answered it wrong for everyone coming back to a phone whose storage
-           was wiped. -->
-      <div class="ways">
+    {#if !canOpen}
+      <!-- Both complete paths are visible: a new box uses its Settings QR,
+           while a saved home uses its passkey. -->
+      <section class="setup" aria-labelledby="setup-title">
+        <h2 id="setup-title">Connect your own box</h2>
+        <p class="not-printed">
+          The QR code is inside FTW Settings. It is not printed on the
+          Raspberry Pi or its case.
+        </p>
+        <ol>
+          <li>Open your box's local FTW dashboard while on your home network.</li>
+          <li>Go to <span class="key">Settings → FTW app</span>.</li>
+          <li>Tap <span class="key">Show pairing code</span>, then scan the QR here.</li>
+        </ol>
+        <p class="security-note">
+          Next, a supported phone asks for Face ID or Touch ID to protect your
+          FTW key. There is no FTW account or password. If that passkey supports
+          recovery and the save reaches Sourceful, FTW keeps a sealed recovery
+          copy that Sourceful cannot open. If not, pairing still works; a new
+          Settings QR is the way back.
+        </p>
         {#if canScan()}
-          <button class="way" onclick={startScan}>
-            <span class="way-title">Scan the code on your box</span>
-            <span class="way-note">First time here. Two taps and you are in.</span>
-          </button>
+          <button class="primary" onclick={startScan}>Scan the pairing QR</button>
         {/if}
+        <details>
+          <summary>Can't see Show pairing code?</summary>
+          <p>
+            Turn on <span class="key">Let the FTW app connect to this box</span>,
+            save, and restart the box first.
+          </p>
+        </details>
+      </section>
+
+      <div class="ways">
         <!-- Asking costs a Face ID prompt, so it stays a thing someone
              presses rather than a check on arrival: nothing may stand in
              front of the first frame, and a passkey that never saved a copy
              is told so once, because it asked. -->
         <button class="way" onclick={() => void recover()}>
-          <span class="way-title">I've set this up before</span>
-          <span class="way-note">Open your home again with your passkey.</span>
+          <span class="way-title">Open with your passkey</span>
+          <span class="way-note">
+            Used FTW before? Ask Face ID or Touch ID for a saved home.
+          </span>
         </button>
       </div>
       <p class="hint">
-        Or point your phone's camera at the code on your box. It opens the
-        same link.
+        You can also scan the QR with the phone's Camera app. It opens this
+        same pairing flow.
       </p>
     {/if}
 
@@ -531,6 +509,87 @@
     font-size: 13px;
   }
 
+  .demo,
+  .setup {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-4);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+
+  .demo {
+    border-color: color-mix(in oklch, var(--energy-export) 45%, var(--line));
+    background:
+      radial-gradient(circle at 100% 0%, color-mix(in oklch, var(--energy-export) 12%, transparent), transparent 55%),
+      var(--surface-raised);
+  }
+
+  .demo h2,
+  .setup h2 {
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+
+  .demo-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--energy-export);
+  }
+
+  .demo-label span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--energy-export);
+  }
+
+  .not-printed {
+    color: var(--fg-label);
+  }
+
+  .security-note {
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .setup ol {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-left: 1.25rem;
+    color: var(--fg-dim);
+  }
+
+  details {
+    width: 100%;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+
+  summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--fg-dim);
+  }
+
+  details p {
+    padding-bottom: var(--space-1);
+    color: var(--fg-muted);
+  }
+
   .primary {
     background: var(--accent);
     color: var(--on-accent);
@@ -542,51 +601,6 @@
   .quiet {
     color: var(--fg-dim);
     font-size: 14px;
-  }
-
-  /* The one field in the app, and it exists because a camera can fail. Wide
-     letter spacing and the numeric face because these eight characters are
-     read out loud one at a time, and a 0 that could be an O is what the
-     alphabet was chosen to prevent. */
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    width: 100%;
-    max-width: 18rem;
-  }
-
-  .field span {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
-  }
-
-  input {
-    width: 100%;
-    min-height: 52px;
-    padding: 0 var(--space-4);
-    font-size: 24px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg);
-    background: var(--surface-sunken);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-  }
-
-  input::placeholder {
-    color: var(--fg-muted);
-    /* The example, not a value. Same weight would read as a code already
-       typed in a field somebody is being asked to type into. */
-    opacity: 0.6;
-  }
-
-  .primary:disabled {
-    opacity: 0.4;
   }
 
   /* Said where someone lands, not at the foot of the app. It is an
@@ -626,9 +640,7 @@
     font-weight: 600;
   }
 
-  /* The two doors in, weighted the same. Neither is the recommended one:
-     which fits depends on something only the person holding the phone
-     knows, so the screen asks rather than steers. */
+  /* The recovery action has the same card weight as box setup. */
   .ways {
     display: flex;
     flex-direction: column;
