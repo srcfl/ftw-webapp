@@ -248,7 +248,20 @@ export class SiteStore {
 
   /** A restored page may wake without a matching visibility transition. */
   pageShown(): void {
-    if (!this.documentVisible || this.#resumeWaiting) return
+    const visible =
+      typeof document === 'undefined'
+        ? this.documentVisible
+        : document.visibilityState !== 'hidden'
+    if (!visible) return
+
+    // iOS can restore a suspended page with pageshow but no matching
+    // visibilitychange. Pull both our cadence and our watchdog back into line
+    // with the browser before judging whether the last frame is recent.
+    if (!this.documentVisible) {
+      this.setVisible(true)
+      return
+    }
+    if (this.#resumeWaiting) return
     const lastFrameAtMs = this.#lastFrameAtMs
     if (
       this.session.phase === 'streaming' &&

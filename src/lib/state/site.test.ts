@@ -105,7 +105,7 @@ describe('a stream returning from phone sleep', () => {
     site.destroy()
   })
 
-  it('redials a stale open socket after 2.5 seconds, not a 40-second retry', async () => {
+  it('recovers a stale page shown without visibilitychange after 2.5 seconds', async () => {
     vi.useFakeTimers()
     const box = new SimBox({ now: () => Date.now() })
     const carrier = new WakeableLoopback(box, { latencyMs: 0 })
@@ -117,7 +117,11 @@ describe('a stream returning from phone sleep', () => {
 
     site.setVisible(false)
     carrier.sleeping = true
-    site.setVisible(true)
+    // The browser says visible again but never emits visibilitychange. This
+    // is why pageshow exists as a separate recovery event.
+    site.pageShown()
+
+    expect(site.documentVisible).toBe(true)
 
     await vi.advanceTimersByTimeAsync(FOREGROUND_FRAME_DEADLINE_MS - 1)
     expect(carrier.wakeCalls).toBe(0)
