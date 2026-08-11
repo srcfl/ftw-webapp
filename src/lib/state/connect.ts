@@ -20,6 +20,7 @@ import {
 } from '$lib/identity/vault'
 import { db, type StoredSite } from '$lib/store/db'
 import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
+import { markLinkPhase } from '$lib/perf/link'
 
 /** Overridable only for development against a local relay. */
 export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL
@@ -101,6 +102,7 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     await ensureLocalCopy(vault, wrapping)
   }
   const device = await deviceKey(vault, wrapping)
+  markLinkPhase('keys-ready')
 
   const relayUrl = opts.relayUrl ?? RELAY_URL
   const inner = opts.makeInner

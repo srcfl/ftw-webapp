@@ -500,6 +500,14 @@ export class Session {
     }
   }
 
+  /** Ask the carrier stack to replace a path that may have slept stale. */
+  wake(): boolean {
+    const carrier = this.#carrier
+    if (!carrier?.wake) return false
+    carrier.wake()
+    return true
+  }
+
   /** Age of a source's last successful reading, in ms of box uptime. */
   ageOf(srcId: string): number {
     const src = this.#state.sources.get(srcId)

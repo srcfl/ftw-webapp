@@ -38,6 +38,14 @@ export interface Carrier {
   onFrame(handler: (frame: Uint8Array) => void): () => void
   onStatus(handler: (status: CarrierStatus) => void): () => void
 
+  /**
+   * Recheck the live path after the app or network wakes.
+   *
+   * Frames are never replayed. A carrier that supports this starts a fresh
+   * connection now instead of waiting for a stale socket or retry timer.
+   */
+  wake?(): void
+
   close(reason?: string): void
 }
 

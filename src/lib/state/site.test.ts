@@ -14,9 +14,9 @@
  * Everything here is real: a Session, a SimBox, the loopback carrier.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import 'fake-indexeddb/auto'
-import { SiteStore } from './site.svelte'
+import { FOREGROUND_FRAME_DEADLINE_MS, SiteStore } from './site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import { db, type StoredSnapshot } from '$lib/store/db'
@@ -59,6 +59,19 @@ function snapshot(siteId: string, value: number): StoredSnapshot {
   }
 }
 
+class WakeableLoopback extends LoopbackCarrier {
+  wakeCalls = 0
+  sleeping = false
+
+  override send(frame: Uint8Array): void {
+    if (!this.sleeping) super.send(frame)
+  }
+
+  wake(): void {
+    this.wakeCalls += 1
+  }
+}
+
 beforeEach(async () => {
   snapshotSeam.takeBoot = null
   snapshotSeam.load = null
@@ -66,6 +79,72 @@ beforeEach(async () => {
   for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
     await database.clear(store)
   }
+})
+
+afterEach(() => vi.useRealTimers())
+
+describe('a stream returning from phone sleep', () => {
+  it('keeps a healthy socket when its next frame arrives on time', async () => {
+    vi.useFakeTimers()
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new WakeableLoopback(box, { latencyMs: 0 })
+    const site = new SiteStore('test')
+    site.connect(carrier)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(site.session.phase).toBe('streaming')
+    carrier.wakeCalls = 0
+
+    site.setVisible(false)
+    site.setVisible(true)
+    await vi.advanceTimersByTimeAsync(500)
+    box.tick()
+    await vi.advanceTimersByTimeAsync(10)
+    await vi.advanceTimersByTimeAsync(FOREGROUND_FRAME_DEADLINE_MS)
+
+    expect(carrier.wakeCalls).toBe(0)
+    site.destroy()
+  })
+
+  it('recovers a stale page shown without visibilitychange after 2.5 seconds', async () => {
+    vi.useFakeTimers()
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new WakeableLoopback(box, { latencyMs: 0 })
+    const site = new SiteStore('test')
+    site.connect(carrier)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(site.session.phase).toBe('streaming')
+    carrier.wakeCalls = 0
+
+    site.setVisible(false)
+    carrier.sleeping = true
+    // The browser says visible again but never emits visibilitychange. This
+    // is why pageshow exists as a separate recovery event.
+    site.pageShown()
+
+    expect(site.documentVisible).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(FOREGROUND_FRAME_DEADLINE_MS - 1)
+    expect(carrier.wakeCalls).toBe(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(carrier.wakeCalls).toBe(1)
+
+    site.destroy()
+  })
+
+  it('redials at once when the phone reports a new network path', async () => {
+    vi.useFakeTimers()
+    const box = new SimBox({ now: () => Date.now() })
+    const carrier = new WakeableLoopback(box, { latencyMs: 0 })
+    const site = new SiteStore('test')
+    site.connect(carrier)
+    await vi.advanceTimersByTimeAsync(100)
+    carrier.wakeCalls = 0
+
+    site.networkOnline()
+
+    expect(carrier.wakeCalls).toBe(1)
+    site.destroy()
+  })
 })
 
 describe('a store repointed at another home mid-stream', () => {

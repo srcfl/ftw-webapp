@@ -115,8 +115,8 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     this.#now = opts.now ?? (() => Date.now())
     this.#random = opts.random ?? Math.random
 
-    globalThis.addEventListener?.('online', this.#wake)
-    globalThis.addEventListener?.('visibilitychange', this.#wake)
+    globalThis.addEventListener?.('online', this.#wakeRetry)
+    globalThis.addEventListener?.('visibilitychange', this.#wakeRetry)
 
     this.#dial()
   }
@@ -144,12 +144,36 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     ws.send(frame)
   }
 
+  /** Drop an apparently live socket and dial now after a foreground wake. */
+  wake(): void {
+    if (this.#shutdown) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+
+    // The relay's own online/visibility listener may have started this dial
+    // just before the app's end-to-end wake reached us. Keep that new socket,
+    // but replace a CONNECTING socket that survived a long phone sleep.
+    if (
+      this.#status.phase === 'connecting' &&
+      this.#ws !== null &&
+      this.#now() - this.#dialledAtMs < 1_000
+    ) {
+      return
+    }
+
+    if (this.#retry !== null) clearTimeout(this.#retry)
+    this.#retry = null
+    this.#attempt = 0
+    this.#rttMs = null
+    this.#drop()
+    this.#dial()
+  }
+
   close(reason = 'closed by client'): void {
     if (this.#shutdown) return
     this.#shutdown = true
 
-    globalThis.removeEventListener?.('online', this.#wake)
-    globalThis.removeEventListener?.('visibilitychange', this.#wake)
+    globalThis.removeEventListener?.('online', this.#wakeRetry)
+    globalThis.removeEventListener?.('visibilitychange', this.#wakeRetry)
 
     if (this.#retry !== null) clearTimeout(this.#retry)
     this.#retry = null
@@ -288,7 +312,7 @@ export class RelayCarrier extends CarrierBase implements Carrier {
    * there on its own, and the visibility handler beats it to the retry the
    * moment anyone does look.
    */
-  #wake = (): void => {
+  #wakeRetry = (): void => {
     if (this.#shutdown || this.#retry === null) return
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     clearTimeout(this.#retry)

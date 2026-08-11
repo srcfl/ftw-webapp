@@ -41,7 +41,17 @@ export function resetLinkCounters(): void {
 }
 
 export function markLinkPhase(
-  phase: 'connect-start' | 'relay-ready' | 'noise-open' | 'hello-ok' | 'snapshot',
+  phase:
+    | 'app-open'
+    | 'keys-ready'
+    | 'connect-start'
+    | 'relay-ready'
+    | 'noise-open'
+    | 'hello-ok'
+    | 'snapshot'
+    | 'resume-start'
+    | 'resume-redial'
+    | 'resume-live',
   detail?: object
 ): void {
   globalThis.performance?.mark?.(`ftw:${phase}`, detail ? { detail } : undefined)
