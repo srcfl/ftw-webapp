@@ -63,37 +63,41 @@ const KNOWN_STRINGS = [
   'dispatchBlockedBy',
 ]
 
-function findString(haystack: Uint8Array, needle: string): boolean {
-  const bytes = new TextEncoder().encode(needle)
-  outer: for (let i = 0; i + bytes.length <= haystack.length; i++) {
-    for (let j = 0; j < bytes.length; j++) {
-      if (haystack[i + j] !== bytes[j]) continue outer
+function countBytes(haystack: Uint8Array, needle: Uint8Array): number {
+  let count = 0
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer
     }
-    return true
+    count++
   }
-  return false
+  return count
 }
 
 /**
  * The shortest needle worth searching for, in bytes.
  *
- * The dump is around 36 kB, so any given three-byte sequence turns up in it
- * about twice in a thousand runs by coincidence — and with a handful of
- * readings searched that is a failure every few hundred runs against a relay
- * that leaked nothing. This file ran at three bytes and did exactly that. A
- * test people learn to re-run protects nothing, so the floor is four, where
- * the same sum is about one run in thirty thousand.
+ * The dump is around 36 kB. Four bytes looked safe in isolation, but this test
+ * searches two byte orders across a household of readings on every run. It
+ * eventually found an int32-shaped coincidence in honest ciphertext and
+ * failed the secure transport. Eight bytes puts that accidental match beyond
+ * a useful CI horizon.
+ *
+ * A lone int32 is only four bytes, so the detector searches adjacent int32
+ * readings as one eight-byte needle. A float64 is already eight. Short words
+ * such as "snap" and "tick" must occur twice; this session sends repeated
+ * frames in plaintext, while two equal four-byte ciphertext coincidences are
+ * still far beyond a useful CI horizon.
  */
-const MIN_NEEDLE_BYTES = 4
+const MIN_NEEDLE_BYTES = 8
 
 /**
  * How a reading could appear on this wire.
  *
  * The raw widths, in case a future carrier packs readings some other way:
- * four bytes for an int32 and eight for a float64, both long enough that
- * finding one means something. The CBOR form is offered too and survives the
- * floor only for values past 65 535, which is where CBOR stops spending three
- * bytes on an integer.
+ * eight bytes for a float64. Adjacent int32 readings are handled as a pair
+ * below: retaining their coverage without treating one random four-byte match
+ * as disclosure. The CBOR form is offered too when it is long enough.
  *
  * Dropping the short CBOR forms costs this test nothing. A reading can only
  * be CBOR on this wire by sitting in an envelope, and an envelope carries its
@@ -114,6 +118,26 @@ function encodingsOf(value: number): Uint8Array[] {
     out.push(new Uint8Array(f64.buffer))
   }
   return out.filter((n) => n.length >= MIN_NEEDLE_BYTES)
+}
+
+/** Raw int32 coverage without a four-byte false-positive oracle. */
+function int32PairEncodingsOf(values: number[]): Uint8Array[] {
+  const out: Uint8Array[] = []
+  for (let i = 0; i + 1 < values.length; i++) {
+    const first = values[i]!
+    const second = values[i + 1]!
+    // A pair containing a near-zero reading is mostly zero bytes and reveals
+    // no household.
+    if (Math.abs(first) < 256 || Math.abs(second) < 256) continue
+
+    for (const little of [true, false]) {
+      const pair = new DataView(new ArrayBuffer(8))
+      pair.setInt32(0, first, little)
+      pair.setInt32(4, second, little)
+      out.push(new Uint8Array(pair.buffer))
+    }
+  }
+  return out
 }
 
 function findBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
@@ -141,7 +165,11 @@ function concat(parts: Uint8Array[]): Uint8Array {
 /** Which of the known strings and readings the dump gives away. */
 function leaks(dump: Uint8Array, readings: number[]): string[] {
   const found: string[] = []
-  for (const s of KNOWN_STRINGS) if (findString(dump, s)) found.push(`string:${s}`)
+  for (const s of KNOWN_STRINGS) {
+    const bytes = new TextEncoder().encode(s)
+    const occurrences = countBytes(dump, bytes)
+    if (occurrences >= (bytes.length >= MIN_NEEDLE_BYTES ? 1 : 2)) found.push(`string:${s}`)
+  }
   for (const value of readings) {
     // A number near zero has no encoding worth hunting for: it is a couple of
     // low-entropy bytes, and every stream of ciphertext is full of those. The
@@ -153,6 +181,12 @@ function leaks(dump: Uint8Array, readings: number[]): string[] {
         found.push(`reading:${value}`)
         break
       }
+    }
+  }
+  for (const encoding of int32PairEncodingsOf(readings)) {
+    if (findBytes(dump, encoding)) {
+      found.push('reading:int32-pair')
+      break
     }
   }
   return found
@@ -178,9 +212,10 @@ describe('the relay cannot read what it carries', () => {
     // Checked rather than argued in a comment, because the argument is what
     // went wrong: the prose made the case against two-byte needles and the
     // code stopped one byte short, so every reading a house actually produces
-    // was searched for as three bytes. 620 — a state of charge — is the one
-    // that fired, on a run where nothing leaked at all.
-    // Four is written out here rather than read from MIN_NEEDLE_BYTES on
+    // was searched for as three bytes. 620 — a state of charge — was the first
+    // coincidence; after moving to four bytes, 4235 eventually proved that
+    // threshold flaky too, again on a run where nothing leaked at all.
+    // Eight is written out here rather than read from MIN_NEEDLE_BYTES on
     // purpose: checking a filter against the filter's own threshold passes
     // whatever the threshold is, which is the same nothing this test was
     // added to stop.
@@ -189,12 +224,22 @@ describe('the relay cannot read what it carries', () => {
         expect(
           needle.length,
           `${value} is hunted for as ${needle.length} bytes`
-        ).toBeGreaterThanOrEqual(4)
+        ).toBeGreaterThanOrEqual(8)
       }
       // And the floor must not empty the quiver: a reading with nothing left
       // to search for is a reading this test has stopped covering.
       expect(encodingsOf(value).length, `nothing left to search for ${value}`).toBeGreaterThan(0)
     }
+
+    const int32Pairs = int32PairEncodingsOf([1555, -3456])
+    expect(int32Pairs).toHaveLength(2)
+    for (const pair of int32Pairs) expect(pair).toHaveLength(8)
+  })
+
+  it('requires a repeated short protocol word, not one ciphertext coincidence', () => {
+    const encoder = new TextEncoder()
+    expect(leaks(encoder.encode('before snap after'), [])).toEqual([])
+    expect(leaks(encoder.encode('before snap between snap after'), [])).toEqual(['string:snap'])
   })
 
   it('dumps everything it saw and gives nothing away', async () => {
@@ -213,6 +258,7 @@ describe('the relay cannot read what it carries', () => {
 
     const readings = [...pair.session.state.fields.values()]
     expect(readings.some((v) => Math.abs(v) > 256)).toBe(true)
+    expect(int32PairEncodingsOf(readings).length).toBeGreaterThan(0)
 
     const inspection = relay.inspect()
     const dump = concat([
@@ -225,18 +271,21 @@ describe('the relay cannot read what it carries', () => {
     // found" was satisfied by the words alone, so the half of the detector
     // that hunts for numbers was never proven — which is how its needles came
     // to be a byte too short without anything noticing.
-    const plain = encodeFrame(
+    const plainFrame = encodeFrame(
       { lane: 0, flags: 0, envelope: { t: 'snap', b: { fields: readings } } },
       4096
     )
+    const plain = concat([plainFrame, plainFrame])
     expect(leaks(plain, readings).some((f) => f.startsWith('string:'))).toBe(true)
 
-    // Readings packed as raw int32 — the shape the byte needles exist for,
-    // and the one no envelope would announce with a name.
-    const packed = new DataView(new ArrayBuffer(readings.length * 4))
-    readings.forEach((v, i) => packed.setInt32(i * 4, v, true))
+    // Two readings packed as raw int32 — the shape the pair needle exists
+    // for, and the one no envelope would announce with a name.
+    const identifiable = readings.filter((v) => Math.abs(v) >= 256).slice(0, 2)
+    expect(identifiable).toHaveLength(2)
+    const packed = new DataView(new ArrayBuffer(identifiable.length * 4))
+    identifiable.forEach((v, i) => packed.setInt32(i * 4, v, true))
     expect(
-      leaks(new Uint8Array(packed.buffer), readings).some((f) => f.startsWith('reading:'))
+      leaks(new Uint8Array(packed.buffer), identifiable).some((f) => f.startsWith('reading:'))
     ).toBe(true)
 
     expect(leaks(dump, readings)).toEqual([])
