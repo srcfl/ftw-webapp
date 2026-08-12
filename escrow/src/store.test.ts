@@ -530,6 +530,9 @@ describe('how many households are in there', () => {
     s.close()
   }
 
+  // This writes, seals and compresses two full slot files. It proves privacy,
+  // not a latency budget, and can cross Vitest's five-second default when the
+  // full suite is sharing a runner even though it takes ~2 s on its own.
   it('looks the same whether it holds two households or two hundred', async () => {
     // Every slot is written with random bytes when the file is made, so an
     // empty one is not distinguishable from a used one by any of the tools that
@@ -554,7 +557,7 @@ describe('how many households are in there', () => {
       .toBeLessThan(0.005)
     expect(Math.abs(longestRun(empty) - longestRun(full)), 'a run of repeated bytes says where the data is')
       .toBeLessThan(8)
-  })
+  }, 15_000)
 
   it('catches all three when the empty slots are left as zeroes, which is why the last test means anything', async () => {
     // The control. The same file with its noise taken out — which is what a
