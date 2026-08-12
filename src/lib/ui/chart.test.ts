@@ -19,8 +19,77 @@ import {
   columnsOf,
   runsOf,
   blankSpans,
+  trendOf,
+  trendRadiusFor,
+  trendSpanMs,
   type Domain,
 } from './chart'
+
+describe('the visual trend over readings', () => {
+  it('turns alternating five-minute control pulses into their operating level', () => {
+    const values = new Int32Array(15)
+    for (let i = 0; i < values.length; i++) values[i] = i % 2 === 0 ? 0 : 2000
+
+    const trend = trendOf(values, trendRadiusFor(5 * 60_000))
+
+    // The full seven-reading kernel has equal total weight on each side of
+    // the alternating signal, so its middle is the actual average power.
+    for (let i = 3; i < values.length - 3; i++) expect(trend[i]).toBe(1000)
+    expect(trendSpanMs(5 * 60_000)).toBe(30 * 60_000)
+  })
+
+  it('keeps a real step ordered and inside the readings around it', () => {
+    const values = new Int32Array([...new Array(8).fill(0), ...new Array(8).fill(4000)])
+    const trend = trendOf(values, 3)
+
+    for (let i = 0; i < trend.length; i++) {
+      expect(trend[i]).toBeGreaterThanOrEqual(0)
+      expect(trend[i]).toBeLessThanOrEqual(4000)
+      if (i > 0) expect(trend[i]).toBeGreaterThanOrEqual(trend[i - 1]!)
+    }
+    expect(trend[3]).toBe(0)
+    expect(trend[12]).toBe(4000)
+  })
+
+  it('never borrows across a gap and leaves a short isolated run raw', () => {
+    const values = new Int32Array([
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      1000,
+      MISSING_SAMPLE,
+      0,
+      2000,
+      MISSING_SAMPLE,
+      -3000,
+      -3000,
+      -3000,
+      -3000,
+      -3000,
+      -3000,
+      -3000,
+    ])
+    const trend = trendOf(values, 3)
+
+    expect([...trend.slice(0, 7)]).toEqual(new Array(7).fill(1000))
+    expect(trend[7]).toBe(MISSING_SAMPLE)
+    expect([...trend.slice(8, 10)]).toEqual([0, 2000])
+    expect(trend[10]).toBe(MISSING_SAMPLE)
+    expect([...trend.slice(11)]).toEqual(new Array(7).fill(-3000))
+  })
+
+  it('does not alter the stored readings or already-aggregated hourly history', () => {
+    const values = new Int32Array([0, 2000, 0, 2000, 0, 2000, 0])
+    const before = [...values]
+
+    expect([...trendOf(values, trendRadiusFor(3_600_000))]).toEqual(before)
+    expect([...values]).toEqual(before)
+    expect(trendSpanMs(3_600_000)).toBe(0)
+  })
+})
 
 describe('the curve between readings', () => {
   it('passes through every reading without overshooting either neighbour', () => {

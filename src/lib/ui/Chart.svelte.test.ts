@@ -117,7 +117,9 @@ function mount(
   names: string[],
   traces: Trace[],
   axis: Domain,
-  roles: Record<string, string> = ROLES
+  roles: Record<string, string> = ROLES,
+  stepMs = 3_600_000,
+  cursor: number | null = null
 ) {
   const { ops, ctx } = recorder()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
@@ -130,9 +132,9 @@ function mount(
     columns,
     points: columns[0]!.length,
     startMs: 0,
-    stepMs: 3_600_000,
+    stepMs,
   }
-  render(Chart, { props: { frame, traces, axis, height: HEIGHT } })
+  render(Chart, { props: { frame, traces, axis, height: HEIGHT, cursor } })
   return ops
 }
 
@@ -208,9 +210,36 @@ describe('readings are joined without sharp corners', () => {
     const ops = mount([column], ['grid_w'], [GRID], [-4000, 4000])
     const curves = ops.filter((op) => op.op === 'bezierCurveTo')
 
-    // Once for the fill and once for the stroke. A straight lineTo-only path
-    // would put the sharp joins from the original phone chart back.
-    expect(curves).toHaveLength((column.length - 1) * 2)
+    // A straight lineTo-only path would put the sharp joins from the original
+    // phone chart back. The old second copy was the heavy fill back to zero.
+    expect(curves).toHaveLength(column.length - 1)
+  })
+
+  it('strokes the calm trend while the cursor still marks the exact reading', () => {
+    const column = new Int32Array(15)
+    for (let i = 0; i < column.length; i++) column[i] = i % 2 === 0 ? 0 : 2000
+
+    const cursor = 7
+    const ops = mount(
+      [column],
+      ['grid_w'],
+      [GRID],
+      [0, 2000],
+      ROLES,
+      5 * 60_000,
+      cursor
+    )
+    const path = strokedPaths(ops).find((p) => p.strokeStyle === 'role-import')
+    const x = (cursor / (column.length - 1)) * (WIDTH - 1)
+
+    // The alternating 0/2 kW pulses have a 1 kW trend at the centre.
+    expect(path?.points.some(([px, y]) => Math.abs(px - x) < 0.001 && Math.abs(y - 100) < 0.001)).toBe(
+      true
+    )
+
+    // But the dot is at the box's exact 2 kW reading, not on the trend.
+    const dot = ops.find((op) => op.op === 'arc' && Math.abs(op.args[0]! - x) < 0.001)
+    expect(dot?.args[1]).toBe(0)
   })
 })
 

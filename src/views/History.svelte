@@ -15,7 +15,7 @@
   import { onDestroy, onMount, untrack } from 'svelte'
   import Chart from '$lib/ui/Chart.svelte'
   import Energy from '$views/Energy.svelte'
-  import { axisOf, ticksOf, type Domain, type Trace } from '$lib/ui/chart'
+  import { axisOf, ticksOf, trendSpanMs, type Domain, type Trace } from '$lib/ui/chart'
   import { formatPower, formatScaleWatts } from '$lib/format/power'
   import { MISSING_SAMPLE } from '$lib/protocol/messages'
   import { HistoryStore, RANGES, RANGE_KEYS, type RangeKey } from '$lib/state/history.svelte'
@@ -148,6 +148,13 @@
     if (hours === 1) return 'hour'
     if (hours === 24) return 'day'
     return `${hours} hours`
+  }
+
+  /** The chart only trends resolutions finer than its 30-minute window. */
+  function trendWords(stepMs: number): string | null {
+    const spanMs = trendSpanMs(stepMs)
+    if (spanMs === 0) return null
+    return `${Math.round(spanMs / 60_000)} min trend · ${Math.round(stepMs / 60_000)} min box readings · exact on touch`
   }
 
   /**
@@ -301,7 +308,11 @@
     {:else if history.loading}
       Reading your box…
     {:else if frame && history.resActual}
-      One point every {stepWords(frame.stepMs)}, from your box{#if missingMs > 0}
+      {#if trendWords(frame.stepMs)}
+        {trendWords(frame.stepMs)}
+      {:else}
+        One point every {stepWords(frame.stepMs)}, from your box
+      {/if}{#if missingMs > 0}
         · {missingWords(missingMs)} not recorded{/if}
     {/if}
   </p>

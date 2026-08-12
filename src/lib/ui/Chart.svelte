@@ -13,11 +13,11 @@
     a stretch no series has a reading for is shaded so it reads as an outage
     rather than as a quiet afternoon. See chart.ts, where both live and are
     tested.
-  - Every reading is a knot in a shape-preserving curve. Its controls cannot
-    overshoot either neighbouring reading, so smoothing a corner never invents
-    a higher peak or a lower trough. When readings outnumber pixels, each pixel
-    column still draws the true lowest and highest reading under it with the
-    mean through the middle.
+  - The line is a short, centred trend over the readings, joined with a
+    shape-preserving curve. Five-minute control pulses read as an operating
+    level instead of a saw blade; the raw reading remains on the axis and under
+    the finger. When readings outnumber pixels, a quiet band still carries the
+    true lowest and highest reading under each pixel.
   - The vertical axis does not jump. The caller owns it, passes it in, and
     holds it open while a sharper series replaces a cached one — so the shape
     changes under a fixed axis instead of the whole chart rescaling.
@@ -32,6 +32,8 @@
     blankSpans,
     indexAt,
     monotoneCurveOf,
+    trendOf,
+    trendRadiusFor,
     xOf,
     type Column,
     type CubicSpan,
@@ -77,8 +79,8 @@
 
   /** One trace, ready to stroke: either a line or a band, never both. */
   type Shape =
-    | { kind: 'line'; column: Int32Array; runs: CurvedRun[] }
-    | { kind: 'band'; columns: Column[]; runs: CurvedRun[] }
+    | { kind: 'line'; values: Float64Array; runs: CurvedRun[] }
+    | { kind: 'band'; columns: Column[]; mids: Float64Array; runs: CurvedRun[] }
 
   function curveRuns(values: ArrayLike<number>, segments: Segment[]): CurvedRun[] {
     return segments.map((segment) => ({ segment, spans: monotoneCurveOf(values, segment) }))
@@ -103,14 +105,16 @@
     return traces.map((trace) => {
       const column = frame.columns[frame.names.indexOf(trace.name)]
       if (!column) return null
+      const trend = trendOf(column, trendRadiusFor(frame.stepMs))
       if (!dense) {
-        const segments = segmentsOf(column)
-        return { kind: 'line', column, runs: curveRuns(column, segments) }
+        const segments = segmentsOf(trend)
+        return { kind: 'line', values: trend, runs: curveRuns(trend, segments) }
       }
       const columns = columnsOf(column, w)
       const segments = runsOf(columns)
-      const mids = Float64Array.from(columns, (c) => c.mid)
-      return { kind: 'band', columns, runs: curveRuns(mids, segments) }
+      const trendColumns = columnsOf(trend, w)
+      const mids = Float64Array.from(trendColumns, (c) => c.mid)
+      return { kind: 'band', columns, mids, runs: curveRuns(mids, segments) }
     })
   })
 
@@ -155,20 +159,17 @@
     /**
      * Add one present run to the current path.
      *
-     * Every measured/aggregated value is an endpoint. Only the connection
-     * between them changes, and monotoneCurveOf keeps both controls inside
-     * the neighbouring values, so the whole cubic remains inside them too.
+     * Every trend value is an endpoint. monotoneCurveOf keeps both controls
+     * inside neighbouring trend values, so the cubic adds no extra peak.
      */
     const curvePath = (
       run: CurvedRun,
       xAt: (index: number) => number,
-      startValue: number,
-      joinStart = false
+      startValue: number
     ): void => {
       const { segment, spans } = run
       const startX = xAt(segment.start)
-      if (joinStart) ctx.lineTo(startX, y(startValue))
-      else ctx.moveTo(startX, y(startValue))
+      ctx.moveTo(startX, y(startValue))
       for (let offset = 0; offset < spans.length; offset++) {
         const span = spans[offset]!
         const fromX = xAt(segment.start + offset)
@@ -227,10 +228,10 @@
         // The spread of readings inside each pixel, filled; their mean, drawn
         // through it. A month of readings has both a range and a middle, and
         // one line can only carry the middle.
-        const { columns, runs } = shape
+        const { columns, mids, runs } = shape
 
         ctx.fillStyle = color
-        ctx.globalAlpha = 0.28
+        ctx.globalAlpha = 0.12
         for (const { segment: run } of runs) {
           // One pixel wide, a band has no area to fill. The stroke below is
           // what carries it.
@@ -251,7 +252,7 @@
         ctx.globalAlpha = 1
 
         ctx.strokeStyle = color
-        ctx.lineWidth = 1
+        ctx.lineWidth = 2
         for (const run of runs) {
           const first = columns[run.segment.start]!
           ctx.beginPath()
@@ -264,43 +265,28 @@
             ctx.moveTo(first.px, y(first.max))
             ctx.lineTo(first.px, y(first.min))
           } else {
-            curvePath(run, (i) => columns[i]!.px, first.mid)
+            curvePath(run, (i) => columns[i]!.px, mids[run.segment.start]!)
           }
           ctx.stroke()
         }
         return
       }
 
-      // Fewer readings than pixels: every one of them, joined.
-      const { column, runs } = shape
-
-      // Filled back to zero, at a weight that reads as ground rather than as
-      // a second line. A series resting at zero then has no mass at all,
-      // which is the truthful amount of attention it has earned.
-      ctx.fillStyle = color
-      ctx.globalAlpha = 0.14
-      for (const run of runs) {
-        const { segment } = run
-        if (segment.end - segment.start < 2) continue
-        ctx.beginPath()
-        ctx.moveTo(x(segment.start), y(0))
-        curvePath(run, x, column[segment.start]!, true)
-        ctx.lineTo(x(segment.end - 1), y(0))
-        ctx.closePath()
-        ctx.fill()
-      }
-      ctx.globalAlpha = 1
+      // Fewer readings than pixels: the trend gets the full colour. The old
+      // four translucent fills all closed at zero and mixed into a large
+      // brown mass; it hid both the sign boundary and the individual traces.
+      const { values, runs } = shape
 
       ctx.strokeStyle = color
-      ctx.lineWidth = 1.5
+      ctx.lineWidth = 2
       for (const run of runs) {
         const { segment } = run
         // One point on its own still deserves to be visible; a zero-length
         // stroke with a round cap draws the dot.
         ctx.beginPath()
-        curvePath(run, x, column[segment.start]!)
+        curvePath(run, x, values[segment.start]!)
         if (segment.end - segment.start === 1) {
-          ctx.lineTo(x(segment.start), y(column[segment.start]!))
+          ctx.lineTo(x(segment.start), y(values[segment.start]!))
         }
         ctx.stroke()
       }
@@ -367,7 +353,7 @@
 <div
   class="chart"
   role="img"
-  aria-label="{traces.map((t) => t.label).join(', ')} over the selected range"
+  aria-label="{traces.map((t) => t.label).join(', ')} trend over the selected range; exact readings are in the readout"
   bind:this={box}
   style:height="{height}px"
   onpointermove={move}
