@@ -52,9 +52,13 @@ jobs:
           # push would be invisible and the job would compare against the wrong
           # branch while looking like it had worked.
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          BODY=$(gh pr view "${{ github.event.pull_request.number }}" \
-                   --repo "${{ github.repository }}" --json body -q .body)
+          BODY=""
+          if [ -n "$PR_NUMBER" ]; then
+            BODY=$(gh pr view "$PR_NUMBER" \
+                     --repo "${{ github.repository }}" --json body -q .body)
+          fi
           REF=$(printf '%s\n' "$BODY" | sed -n 's|^Contract-pair: *srcfl/ftw@||p' | head -1 | tr -d '\r')
           echo "ref=${REF:-master}" >> "$GITHUB_OUTPUT"
           echo "comparing against srcfl/ftw@${REF:-master}"
