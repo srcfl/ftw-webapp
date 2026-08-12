@@ -2,7 +2,7 @@
  *
  * Everything here is a pure function of a series, so truthfulness can be
  * tested without a rendering context: a hole stays a hole, extrema survive
- * reduction and smoothing never leaves the interval the box actually read.
+ * reduction and a display trend stays inside its local readings.
  *
  * No chart library. A line, an axis and a hit test are less code than the
  * adapter would be, and this way the gap rule is ours to enforce rather than
@@ -43,7 +43,7 @@ export function isPresent(value: number | undefined): boolean {
  * standing alone is still a segment — it draws as a dot rather than
  * disappearing, because a reading that exists should be visible.
  */
-export function segmentsOf(column: Int32Array): Segment[] {
+export function segmentsOf(column: ArrayLike<number>): Segment[] {
   const out: Segment[] = []
   let start = -1
 
@@ -57,6 +57,77 @@ export function segmentsOf(column: Int32Array): Segment[] {
   }
 
   if (start >= 0) out.push({ start, end: column.length })
+  return out
+}
+
+/** Half the time either side of a reading that contributes to its trend. */
+export const TREND_HALF_WINDOW_MS = 15 * 60_000
+
+/**
+ * Number of neighbouring readings used on either side of a trend point.
+ *
+ * Five-minute history gets a seven-point kernel spanning 30 minutes. Hourly
+ * history is already aggregated by the box and stays untouched. The cap is a
+ * guard for a future sub-minute resolution: painting should never turn into
+ * an unbounded O(points * radius) operation because a frame declared a tiny
+ * step.
+ */
+export function trendRadiusFor(stepMs: number): number {
+  if (!Number.isFinite(stepMs) || stepMs <= 0) return 0
+  return Math.min(30, Math.floor(TREND_HALF_WINDOW_MS / stepMs))
+}
+
+/** The actual first-to-last time span of the trend kernel. */
+export function trendSpanMs(stepMs: number): number {
+  return 2 * trendRadiusFor(stepMs) * stepMs
+}
+
+/**
+ * A centred, triangular moving average for the line the eye follows.
+ *
+ * The raw readings remain the source of the axis and the value under the
+ * finger. This is only their visual trend: alternating five-minute control
+ * pulses should read as a stable operating level rather than a saw blade.
+ * Triangular weights give the centre the most authority and taper smoothly
+ * to either edge. Every output is a convex combination of nearby readings,
+ * so it cannot invent a value outside their local range.
+ *
+ * Missing readings split the work into independent segments. Nothing on the
+ * far side of an outage can pull the trend across it, and a short isolated
+ * run is left raw because it has too little context to call a trend.
+ */
+export function trendOf(values: ArrayLike<number>, requestedRadius: number): Float64Array {
+  const out = new Float64Array(values.length)
+  out.fill(MISSING_SAMPLE)
+
+  const radius = Math.min(
+    Math.max(0, values.length - 1),
+    Math.max(0, Math.floor(requestedRadius))
+  )
+
+  for (const segment of segmentsOf(values)) {
+    const count = segment.end - segment.start
+    if (radius === 0 || count < 2 * radius + 1) {
+      for (let i = segment.start; i < segment.end; i++) out[i] = values[i]!
+      continue
+    }
+
+    for (let i = segment.start; i < segment.end; i++) {
+      const from = Math.max(segment.start, i - radius)
+      const to = Math.min(segment.end - 1, i + radius)
+      let weighted = 0
+      let totalWeight = 0
+
+      for (let j = from; j <= to; j++) {
+        const weight = radius + 1 - Math.abs(j - i)
+        weighted += values[j]! * weight
+        totalWeight += weight
+      }
+
+      out[i] = weighted / totalWeight
+    }
+  }
+
   return out
 }
 
@@ -165,7 +236,7 @@ export interface Column {
  * A pixel with no readings at all yields no entry, so the pen lifts there
  * the same way it lifts over a gap in `segmentsOf`.
  */
-export function columnsOf(column: Int32Array, width: number): Column[] {
+export function columnsOf(column: ArrayLike<number>, width: number): Column[] {
   const points = column.length
   if (points === 0 || width <= 0) return []
 

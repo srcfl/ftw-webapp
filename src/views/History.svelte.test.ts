@@ -210,6 +210,9 @@ describe('a history window the wire cut short', () => {
     // The simulated house both draws and sends back, so both words belong.
     expect(rungs.some((r) => r.endsWith('in')), 'nothing says which way is in').toBe(true)
     expect(rungs.some((r) => r.endsWith('out')), 'nothing says which way is out').toBe(true)
+    expect(document.body.textContent).toMatch(
+      /30 min trend\s*·\s*5 min box readings\s*·\s*exact on touch/i
+    )
   })
 
   it('sends one window for one tap, not two', async () => {
