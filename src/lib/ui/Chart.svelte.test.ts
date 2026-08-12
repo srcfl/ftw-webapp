@@ -75,6 +75,7 @@ function recorder(): { ops: Op[]; ctx: CanvasRenderingContext2D } {
     'closePath',
     'moveTo',
     'lineTo',
+    'bezierCurveTo',
     'arc',
     'stroke',
     'fill',
@@ -100,6 +101,8 @@ function strokedPaths(ops: Op[]): Path[] {
     if (op.op === 'beginPath') current = { points: [], strokeStyle: '' }
     else if (op.op === 'moveTo' || op.op === 'lineTo') {
       current?.points.push([op.args[0]!, op.args[1]!])
+    } else if (op.op === 'bezierCurveTo') {
+      current?.points.push([op.args[4]!, op.args[5]!])
     } else if (op.op === 'stroke' && current) {
       out.push({ ...current, strokeStyle: op.strokeStyle })
       current = null
@@ -196,6 +199,18 @@ describe('a gap survives the reduction and the paint', () => {
     const yOf = (v: number) => HEIGHT - ((v - -4000) / 8000) * HEIGHT
     expect(ys[0]).toBeCloseTo(yOf(3000), 5)
     expect(ys[1]).toBeCloseTo(yOf(1000), 5)
+  })
+})
+
+describe('readings are joined without sharp corners', () => {
+  it('uses bounded cubic edges for a sparse series', () => {
+    const column = new Int32Array([0, 2000, 1000, 3000])
+    const ops = mount([column], ['grid_w'], [GRID], [-4000, 4000])
+    const curves = ops.filter((op) => op.op === 'bezierCurveTo')
+
+    // Once for the fill and once for the stroke. A straight lineTo-only path
+    // would put the sharp joins from the original phone chart back.
+    expect(curves).toHaveLength((column.length - 1) * 2)
   })
 })
 

@@ -1,9 +1,8 @@
 /* Chart maths, kept out of the canvas.
  *
- * Everything here is a pure function of a series, so the one property that
- * matters can be tested without a rendering context: a hole in the data is
- * drawn as a hole. A line that runs straight across a four-hour outage is not
- * a simplification, it is four hours of readings the house never took.
+ * Everything here is a pure function of a series, so truthfulness can be
+ * tested without a rendering context: a hole stays a hole, extrema survive
+ * reduction and smoothing never leaves the interval the box actually read.
  *
  * No chart library. A line, an axis and a hit test are less code than the
  * adapter would be, and this way the gap rule is ours to enforce rather than
@@ -24,6 +23,13 @@ export interface Trace {
 export interface Segment {
   start: number
   end: number
+}
+
+/** One cubic edge ending at the next real reading. Values stay in data space. */
+export interface CubicSpan {
+  control1: number
+  control2: number
+  value: number
 }
 
 export function isPresent(value: number | undefined): boolean {
@@ -51,6 +57,72 @@ export function segmentsOf(column: Int32Array): Segment[] {
   }
 
   if (start >= 0) out.push({ start, end: column.length })
+  return out
+}
+
+/**
+ * Join one present run with a smooth curve that still goes through every sample.
+ *
+ * This is shape-preserving cubic Hermite interpolation (PCHIP). The controls
+ * for an edge remain between that edge's two readings, so the Bezier curve
+ * cannot overshoot them; at a peak, trough or plateau the tangent becomes
+ * flat instead of rounding the turn into a value the box never recorded.
+ *
+ * The result contains one span per pair of readings. Its x controls belong at
+ * one and two thirds of the distance between those readings; x is kept out of
+ * this function because the same values are painted both at sample positions
+ * and at reduced pixel-column positions.
+ */
+export function monotoneCurveOf(values: ArrayLike<number>, segment: Segment): CubicSpan[] {
+  const count = segment.end - segment.start
+  if (count < 2) return []
+
+  const deltas = new Float64Array(count - 1)
+  for (let i = 0; i < deltas.length; i++) {
+    deltas[i] = values[segment.start + i + 1]! - values[segment.start + i]!
+  }
+
+  const slopes = new Float64Array(count)
+  if (count === 2) {
+    slopes[0] = deltas[0]!
+    slopes[1] = deltas[0]!
+  } else {
+    // PCHIP's one-sided endpoint estimate, limited to the first edge so its
+    // control cannot leave the interval between the first two readings.
+    const endpoint = (edge: number, neighbour: number): number => {
+      let slope = (3 * edge - neighbour) / 2
+      if (Math.sign(slope) !== Math.sign(edge)) return 0
+      if (Math.sign(edge) !== Math.sign(neighbour) && Math.abs(slope) > 3 * Math.abs(edge)) {
+        slope = 3 * edge
+      }
+      return slope
+    }
+
+    slopes[0] = endpoint(deltas[0]!, deltas[1]!)
+    slopes[count - 1] = endpoint(deltas[count - 2]!, deltas[count - 3]!)
+
+    for (let i = 1; i < count - 1; i++) {
+      const before = deltas[i - 1]!
+      const after = deltas[i]!
+      // A direction change or a flat edge is an extremum. A zero tangent is
+      // what keeps the curve on the readings' side of it.
+      slopes[i] =
+        before === 0 || after === 0 || Math.sign(before) !== Math.sign(after)
+          ? 0
+          : (2 * before * after) / (before + after)
+    }
+  }
+
+  const out: CubicSpan[] = []
+  for (let i = 0; i < count - 1; i++) {
+    const value = values[segment.start + i]!
+    const next = values[segment.start + i + 1]!
+    out.push({
+      control1: value + slopes[i]! / 3,
+      control2: next - slopes[i + 1]! / 3,
+      value: next,
+    })
+  }
   return out
 }
 
