@@ -148,6 +148,7 @@ describe('a history window the wire cut short', () => {
       closePath() {},
       moveTo() {},
       lineTo() {},
+      bezierCurveTo() {},
       arc() {},
       stroke() {},
       fill() {},

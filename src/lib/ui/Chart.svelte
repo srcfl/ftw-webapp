@@ -2,11 +2,10 @@
   The series, on a canvas.
 
   Canvas for the lines and DOM for everything around them. Two thousand points
-  across four series is roughly eight thousand lineTo calls — under two
-  milliseconds on a phone five years old, so there is no worker here and no
-  need for one. The same points as SVG nodes would be eight thousand elements
-  for the browser to lay out on every resize, which is where charts on phones
-  actually go wrong.
+  across four series is roughly eight thousand path segments, small enough to
+  paint directly without a worker. The same points as SVG nodes would be eight
+  thousand elements for the browser to lay out on every resize, which is where
+  charts on phones actually go wrong.
 
   Three rules this component exists to keep:
 
@@ -14,11 +13,11 @@
     a stretch no series has a reading for is shaded so it reads as an outage
     rather than as a quiet afternoon. See chart.ts, where both live and are
     tested.
-  - More readings than pixels are reduced, never smoothed. Each pixel column
-    draws the true lowest and highest reading under it with the mean through
-    the middle, so the peak of the month is still the highest point on the
-    chart. A curve fitted through those readings would be a shape the house
-    never made.
+  - Every reading is a knot in a shape-preserving curve. Its controls cannot
+    overshoot either neighbouring reading, so smoothing a corner never invents
+    a higher peak or a lower trough. When readings outnumber pixels, each pixel
+    column still draws the true lowest and highest reading under it with the
+    mean through the middle.
   - The vertical axis does not jump. The caller owns it, passes it in, and
     holds it open while a sharper series replaces a cached one — so the shape
     changes under a fixed axis instead of the whole chart rescaling.
@@ -32,8 +31,10 @@
     runsOf,
     blankSpans,
     indexAt,
+    monotoneCurveOf,
     xOf,
     type Column,
+    type CubicSpan,
     type Domain,
     type Segment,
     type Trace,
@@ -69,10 +70,19 @@
   let box = $state<HTMLDivElement | null>(null)
   let width = $state(320)
 
+  interface CurvedRun {
+    segment: Segment
+    spans: CubicSpan[]
+  }
+
   /** One trace, ready to stroke: either a line or a band, never both. */
   type Shape =
-    | { kind: 'line'; column: Int32Array; segments: Segment[] }
-    | { kind: 'band'; columns: Column[]; runs: Segment[] }
+    | { kind: 'line'; column: Int32Array; runs: CurvedRun[] }
+    | { kind: 'band'; columns: Column[]; runs: CurvedRun[] }
+
+  function curveRuns(values: ArrayLike<number>, segments: Segment[]): CurvedRun[] {
+    return segments.map((segment) => ({ segment, spans: monotoneCurveOf(values, segment) }))
+  }
 
   /**
    * The plot's width in whole pixels.
@@ -93,9 +103,14 @@
     return traces.map((trace) => {
       const column = frame.columns[frame.names.indexOf(trace.name)]
       if (!column) return null
-      if (!dense) return { kind: 'line', column, segments: segmentsOf(column) }
+      if (!dense) {
+        const segments = segmentsOf(column)
+        return { kind: 'line', column, runs: curveRuns(column, segments) }
+      }
       const columns = columnsOf(column, w)
-      return { kind: 'band', columns, runs: runsOf(columns) }
+      const segments = runsOf(columns)
+      const mids = Float64Array.from(columns, (c) => c.mid)
+      return { kind: 'band', columns, runs: curveRuns(mids, segments) }
     })
   })
 
@@ -136,6 +151,39 @@
     const lineSoft = role('--line-soft')
     const sunken = role('--surface-sunken')
     const colors = traces.map((t) => role(t.colorVar))
+
+    /**
+     * Add one present run to the current path.
+     *
+     * Every measured/aggregated value is an endpoint. Only the connection
+     * between them changes, and monotoneCurveOf keeps both controls inside
+     * the neighbouring values, so the whole cubic remains inside them too.
+     */
+    const curvePath = (
+      run: CurvedRun,
+      xAt: (index: number) => number,
+      startValue: number,
+      joinStart = false
+    ): void => {
+      const { segment, spans } = run
+      const startX = xAt(segment.start)
+      if (joinStart) ctx.lineTo(startX, y(startValue))
+      else ctx.moveTo(startX, y(startValue))
+      for (let offset = 0; offset < spans.length; offset++) {
+        const span = spans[offset]!
+        const fromX = xAt(segment.start + offset)
+        const toX = xAt(segment.start + offset + 1)
+        const third = (toX - fromX) / 3
+        ctx.bezierCurveTo(
+          fromX + third,
+          y(span.control1),
+          toX - third,
+          y(span.control2),
+          toX,
+          y(span.value)
+        )
+      }
+    }
 
     // Hours the box has nothing for, shaded before anything is drawn over
     // them. Recessed rather than marked, so it reads as absence.
@@ -183,7 +231,7 @@
 
         ctx.fillStyle = color
         ctx.globalAlpha = 0.28
-        for (const run of runs) {
+        for (const { segment: run } of runs) {
           // One pixel wide, a band has no area to fill. The stroke below is
           // what carries it.
           if (run.end - run.start < 2) continue
@@ -205,9 +253,9 @@
         ctx.strokeStyle = color
         ctx.lineWidth = 1
         for (const run of runs) {
-          const first = columns[run.start]!
+          const first = columns[run.segment.start]!
           ctx.beginPath()
-          if (run.end - run.start === 1) {
+          if (run.segment.end - run.segment.start === 1) {
             // A pixel standing alone between two gaps, drawn as the extent of
             // what was read there rather than as a point on a line that is
             // not there. Equal ends make a zero-length stroke, which the
@@ -216,11 +264,7 @@
             ctx.moveTo(first.px, y(first.max))
             ctx.lineTo(first.px, y(first.min))
           } else {
-            ctx.moveTo(first.px, y(first.mid))
-            for (let i = run.start + 1; i < run.end; i++) {
-              const c = columns[i]!
-              ctx.lineTo(c.px, y(c.mid))
-            }
+            curvePath(run, (i) => columns[i]!.px, first.mid)
           }
           ctx.stroke()
         }
@@ -228,18 +272,19 @@
       }
 
       // Fewer readings than pixels: every one of them, joined.
-      const { column, segments } = shape
+      const { column, runs } = shape
 
       // Filled back to zero, at a weight that reads as ground rather than as
       // a second line. A series resting at zero then has no mass at all,
       // which is the truthful amount of attention it has earned.
       ctx.fillStyle = color
       ctx.globalAlpha = 0.14
-      for (const segment of segments) {
+      for (const run of runs) {
+        const { segment } = run
         if (segment.end - segment.start < 2) continue
         ctx.beginPath()
         ctx.moveTo(x(segment.start), y(0))
-        for (let i = segment.start; i < segment.end; i++) ctx.lineTo(x(i), y(column[i]!))
+        curvePath(run, x, column[segment.start]!, true)
         ctx.lineTo(x(segment.end - 1), y(0))
         ctx.closePath()
         ctx.fill()
@@ -248,14 +293,12 @@
 
       ctx.strokeStyle = color
       ctx.lineWidth = 1.5
-      for (const segment of segments) {
+      for (const run of runs) {
+        const { segment } = run
         // One point on its own still deserves to be visible; a zero-length
         // stroke with a round cap draws the dot.
         ctx.beginPath()
-        ctx.moveTo(x(segment.start), y(column[segment.start]!))
-        for (let i = segment.start + 1; i < segment.end; i++) {
-          ctx.lineTo(x(i), y(column[i]!))
-        }
+        curvePath(run, x, column[segment.start]!)
         if (segment.end - segment.start === 1) {
           ctx.lineTo(x(segment.start), y(column[segment.start]!))
         }

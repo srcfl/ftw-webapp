@@ -1,14 +1,15 @@
-/* A hole in the data is drawn as a hole.
+/* The chart does not invent data.
  *
- * This is the one property of the chart worth a test. A line running straight
- * across a four-hour outage is not a simplification of the truth — it is four
- * hours of readings the house never took, drawn as though it had.
+ * A line across an outage and a smooth curve beyond a measured extremum are
+ * both plausible-looking values the box never reported. These tests keep
+ * gaps, reduction and interpolation inside what was actually observed.
  */
 
 import { describe, it, expect } from 'vitest'
 import { MISSING_SAMPLE } from '$lib/protocol/messages'
 import {
   segmentsOf,
+  monotoneCurveOf,
   domainOf,
   unionDomain,
   ticksOf,
@@ -20,6 +21,43 @@ import {
   blankSpans,
   type Domain,
 } from './chart'
+
+describe('the curve between readings', () => {
+  it('passes through every reading without overshooting either neighbour', () => {
+    const values = new Int32Array([0, 4000, 1000, 1000, -3000, 2000])
+    const curve = monotoneCurveOf(values, { start: 0, end: values.length })
+
+    expect(curve).toHaveLength(values.length - 1)
+    curve.forEach((span, i) => {
+      const low = Math.min(values[i]!, values[i + 1]!)
+      const high = Math.max(values[i]!, values[i + 1]!)
+      expect(span.value, `edge ${i} missed its measured endpoint`).toBe(values[i + 1])
+      expect(span.control1, `edge ${i} rose above or below its readings`).toBeGreaterThanOrEqual(low)
+      expect(span.control1, `edge ${i} rose above or below its readings`).toBeLessThanOrEqual(high)
+      expect(span.control2, `edge ${i} rose above or below its readings`).toBeGreaterThanOrEqual(low)
+      expect(span.control2, `edge ${i} rose above or below its readings`).toBeLessThanOrEqual(high)
+    })
+  })
+
+  it('flattens a peak and a trough instead of rounding past them', () => {
+    const values = new Int32Array([0, 3000, -2000, 1000])
+    const curve = monotoneCurveOf(values, { start: 0, end: values.length })
+
+    // The control on each side of an extremum equals the extremum itself:
+    // that is a zero tangent and therefore no hidden value beyond it.
+    expect(curve[0]!.control2).toBe(3000)
+    expect(curve[1]!.control1).toBe(3000)
+    expect(curve[1]!.control2).toBe(-2000)
+    expect(curve[2]!.control1).toBe(-2000)
+  })
+
+  it('does not join across a missing run or invent a curve for one point', () => {
+    const values = new Int32Array([0, 1000, MISSING_SAMPLE, 2000])
+    const segments = segmentsOf(values)
+
+    expect(segments.map((segment) => monotoneCurveOf(values, segment).length)).toEqual([1, 0])
+  })
+})
 
 describe('segments lift the pen over a gap', () => {
   it('splits a series at every missing sample', () => {
