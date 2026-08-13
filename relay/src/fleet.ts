@@ -216,19 +216,18 @@ function emptyDay(date: string): FleetDay {
   return {
     date,
     reports: 0,
-    ftw_versions: {},
-    channels: {},
-    drivers: {},
-    battery_kwh: {},
-    price_zones: {},
-    install_age: {},
+    ftw_versions: emptyCounts(),
+    channels: emptyCounts(),
+    drivers: emptyCounts(),
+    battery_kwh: emptyCounts(),
+    price_zones: emptyCounts(),
+    install_age: emptyCounts(),
   }
 }
 
 function increment(counts: Counts, label: string): void {
-  const current = counts[label]
-  if (current !== undefined) {
-    counts[label] = Math.min(MAX_REPORTS_PER_DAY, current + 1)
+  if (Object.hasOwn(counts, label)) {
+    counts[label] = Math.min(MAX_REPORTS_PER_DAY, counts[label]! + 1)
     return
   }
   if (Object.keys(counts).length < MAX_LABELS - 1) {
@@ -305,7 +304,7 @@ function readCounts(value: unknown): Counts | null {
   if (!isRecord(value)) return null
   const entries = Object.entries(value)
   if (entries.length > MAX_LABELS) return null
-  const out: Counts = {}
+  const out = emptyCounts()
   for (const [label, raw] of entries) {
     if (label.length === 0 || label.length > 64) return null
     const count = readCount(raw)
@@ -313,4 +312,9 @@ function readCounts(value: unknown): Counts | null {
     out[label] = count
   }
   return out
+}
+
+/** Public labels must never reach Object.prototype through a counter lookup. */
+function emptyCounts(): Counts {
+  return Object.create(null) as Counts
 }

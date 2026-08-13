@@ -41,6 +41,10 @@ describe('fleet report validation', () => {
     expect(fleetReportError(report({ drivers: ['sungrow', 'easee_cloud'] }))).toMatch(/sorted/)
     expect(fleetReportError(report({ drivers: ['home-at-vasagatan'] }))).toMatch(/invalid/)
   })
+
+  it('accepts property-like driver names without treating them as object state', () => {
+    expect(fleetReportError(report({ drivers: ['__proto__', 'constructor'] }))).toBeNull()
+  })
 })
 
 describe('daily fleet totals', () => {
@@ -75,6 +79,20 @@ describe('daily fleet totals', () => {
     expect(stored).not.toHaveProperty('reports_raw')
     expect(JSON.stringify(stored)).not.toContain('gateway_id')
 
+    expect(new FleetStats({ path, now }).view()).toEqual(stats.view())
+  })
+
+  it('counts object property names as labels and keeps them through a restart', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ftw-fleet-labels-'))
+    const path = join(dir, 'fleet-stats.json')
+    const now = () => Date.UTC(2026, 7, 12, 12)
+    const stats = new FleetStats({ path, now })
+
+    expect(stats.put(report({ drivers: ['__proto__', 'constructor'] }))).toBe(true)
+    const drivers = stats.view().days[0]?.drivers ?? {}
+    expect(Object.hasOwn(drivers, '__proto__')).toBe(true)
+    expect(drivers['__proto__']).toBe(1)
+    expect(drivers['constructor']).toBe(1)
     expect(new FleetStats({ path, now }).view()).toEqual(stats.view())
   })
 
