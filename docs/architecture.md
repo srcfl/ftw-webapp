@@ -15,9 +15,15 @@ This app is a cached projection of the box. It renders from its own store
 first and replaces that with fresher data when a carrier answers. It expresses
 intent; it never decides.
 
-Sourceful's cloud serves this bundle and relays encrypted frames. It knows
-that an opaque handle is online and roughly how much traffic passed. It cannot
-read a watt, a device name or a command.
+Sourceful's cloud serves this bundle and relays encrypted frames. On that path
+it knows that an opaque handle is online and roughly how much traffic passed.
+It cannot read a watt, a device name or a command.
+
+A separate daily fleet-report endpoint is the stated exception. Unless the box
+owner opts out, it receives six coarse labels with no box id and reduces them
+to UTC-day counters on arrival. It keeps neither the report nor the source
+address. Those counters estimate reports, not unique boxes; `relay/fleet.ts`
+holds the exact field and storage limits.
 
 ## One origin, three carriers
 

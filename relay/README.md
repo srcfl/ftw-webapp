@@ -7,7 +7,8 @@ It is the only remote path between the two, and it cannot read a watt.
 box ──ws──▶ ┌────────────┐ ◀──ws── phone
             │   relay    │
             │  no keys   │ ◀──ws── laptop
-            │  no disk   │
+            │ no traffic │
+            │   on disk  │
             └────────────┘
 ```
 
@@ -17,8 +18,8 @@ box ──ws──▶ ┌────────────┐ ◀──ws─�
 npm run relay          # PORT=8787 HOST=0.0.0.0
 ```
 
-Two environment variables, no configuration file. Everything else is a constant
-in `src/server.ts`, next to the code it governs.
+Network settings and two state-file paths come from the environment. There is
+no configuration file; every limit stays in `src/server.ts` beside the code.
 
 ## What it does
 
@@ -33,9 +34,10 @@ cost two kilobytes a second. That is the right way to spend the bandwidth.
 
 ## What it cannot do, and how you can check
 
-Read `src/`. Four small files, and they are meant to be read: routing and
+Read `src/`. The small files are meant to be read: routing and
 refusals in `server.ts`, rate limiting in `limits.ts`, the epoch clock and the
-wire's constants in the other two.
+wire's constants in their own files, daily totals in `fleet.ts`, and the dead
+man's switch in `deadman.ts`.
 
 | Claim | Where to look |
 |---|---|
@@ -44,8 +46,8 @@ wire's constants in the other two.
 | No compression | `perMessageDeflate: false` — a compressed frame's size depends on its content |
 | No padding, no trimming | `send()` forwards the received buffer unchanged |
 | No handle derivation | Needs a secret that never comes near here; see `src/lib/carrier/rendezvous.ts` |
-| No storage of traffic | Rooms are a `Map` and are deleted with their last socket |
-| One stored file, and only this | The dead man rows: id, endpoint, ciphertext, deadline, a pre-signed delivery header. `deadman.ts` is the whole write path |
+| No storage of routed traffic | Rooms are a `Map` and are deleted with their last socket |
+| Bounded stored state | `deadman.json` holds sealed dead-man rows; `fleet-stats.json` holds daily counters for 90 days. Neither holds routed traffic |
 | No record of who was here | `log` is given counts and statuses; `inspect()` is everything held, and holds counts |
 
 **The dead man's switch is the one thing the relay holds**, because it is the
@@ -64,6 +66,25 @@ which connection is that box's. What it cannot tell: what the message says,
 which household it is, or anything about the traffic beside it. The routing
 path is untouched: a claim is one consumed word on the uplink, never routed,
 and room bytes remain unread.
+
+## Fleet statistics
+
+`POST /fleet` accepts the seven-field `ftw.fleet/1` report from an FTW box once
+a day. It contains the schema plus six coarse values: release version and
+channel, driver types, battery-size range, price zone and install-age range.
+There is no box id, key, serial, site name, counter or timestamp. The relay
+validates the exact field set, increments the UTC day's counters and drops the
+body. Only the latest 90 days of totals are written.
+
+The TLS and relay process see the source address while the request is open.
+Neither writes it. Rate limiting uses the same keyed, short-lived counter array
+as relay joins, not an address list. The detailed totals are available on
+loopback at `GET /fleet/stats`; Caddy returns 404 for that path publicly.
+
+These are **reports, not unique boxes**. There is no id with which to dedupe,
+and the public POST has no credential with which to prove that a report came
+from a real box. The daily count is an operating estimate, not a billing or
+security measure.
 
 `tests/relay-blindness.test.ts` runs a real box against a real app across this
 server, collects every routed byte, every logged line and everything in memory,
@@ -155,6 +176,8 @@ Honesty about the residue, in the spirit of `docs/architecture.md`:
   written down, and TLS termination in front of this will see them too.
 - Timing. Lane 0's fixed size and constant cadence are what keep that from
   saying anything about the house.
+- The six coarse fleet labels during one daily HTTP request. It stores their
+  daily totals, not the request or the address that sent it.
 
 ## Not here yet
 
