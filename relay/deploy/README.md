@@ -23,9 +23,9 @@ design, not the instance size.
 ## The instance
 
 A `t4g.small` is enough — the relay routes opaque frames and does no
-cryptography. Its own blast radius on purpose: `i-08351b29352efc64e` already
-carries `home.sourceful.energy` and buzz-prod, and this should not share a fate
-with services being retired.
+cryptography. Its own blast radius on purpose: `i-0e8fec73834292798` carries
+only the FTW relay, so it does not share a fate with Buzz or services being
+retired.
 
 Security group: 80 and 443 from anywhere (Caddy needs 80 for ACME), 22 from
 wherever you administer it. Nothing else — 8787 is bound to loopback and must
