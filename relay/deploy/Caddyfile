@@ -25,6 +25,11 @@
 }
 
 relay.ftw.energy {
+	# Daily fleet totals are useful to the operator, not a public API. The
+	# relay still serves this path on loopback for SSM checks.
+	@fleet_stats path /fleet/stats /fleet/stats/
+	respond @fleet_stats 404
+
 	# The relay reads this to rate-limit. Behind a terminator every client is
 	# one address, so without it the whole fleet shares a single limit and
 	# ordinary reconnection load is an outage. Caddy sets it; the relay only

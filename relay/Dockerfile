@@ -17,8 +17,11 @@ RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
 COPY relay/src ./src
 COPY src/lib/carrier/rendezvous.ts ./shared/rendezvous.ts
 
-# Unprivileged, and the image holds nothing worth reading anyway: no database,
-# no keys, no state that survives a restart.
+# A fresh named volume inherits this directory's owner, so the unprivileged
+# process can write the two bounded state files without running as root.
+RUN mkdir -p /state && chown node:node /state
+
+# Unprivileged. The image has no keys and never stores routed traffic.
 USER node
 
 ENV PORT=8787 HOST=0.0.0.0 NODE_ENV=production

@@ -3,9 +3,10 @@
 One small instance in eu-central-1, Caddy in front for TLS, the relay behind it
 on loopback. That is the whole deployment.
 
-It is deliberately not more. The relay holds nothing — rooms live in memory and
-die with their last socket — so a restart costs every peer one reconnection and
-loses no data. There is no database to back up and no state to migrate.
+It is deliberately not more. Routed rooms live in memory and die with their
+last socket, so a restart costs every peer one reconnection. One named volume
+holds two bounded JSON files: sealed dead-man rows and 90 days of anonymous
+fleet totals. There is no database.
 
 ## Why one instance
 
@@ -65,16 +66,25 @@ cd /opt/ftw-webapp && git pull && cd relay/deploy && docker compose up -d --buil
 ```
 
 Every peer reconnects, which is a few seconds of a freshness stamp falling
-behind and no user-visible error. There is nothing to drain and nothing to
-migrate.
+behind and no user-visible error. There is nothing to drain. The fleet totals
+file appears on first report; no manual data migration is needed.
 
 ## What to watch
 
 The relay logs one line every fifteen seconds with aggregate counts — epoch,
-rooms, sockets, frames, bytes. Deliberately no handles: a log line naming one
+rooms, sockets, frames, bytes and today's fleet reports. Deliberately no handles: a log line naming one
 is the household identifier this design exists to withhold, and logs are the
 least guarded thing in any deployment. The Caddy config strips the request URI
 for the same reason, since the join path carries the handle.
+
+Read the detailed fleet totals from the host or an SSM session:
+
+```bash
+curl -s http://127.0.0.1:8787/fleet/stats
+```
+
+The response says `reports, not unique boxes`. The public
+`https://relay.ftw.energy/fleet/stats` route returns 404.
 
 Two things worth an alert:
 
@@ -82,6 +92,8 @@ Two things worth an alert:
   real.
 - `rooms` at zero while boxes are known to be online. That is either DNS or the
   epoch, and both are visible in the log line.
+- `fleet_reports_today` staying at zero for more than a day after a box release
+  points at the FTW endpoint, TLS or report validation.
 
 ## Rotation
 

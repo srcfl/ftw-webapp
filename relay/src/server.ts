@@ -17,9 +17,9 @@
  *   It does not compress. permessage-deflate is refused below, because a
  *     compressed frame's size depends on its content, which would undo the
  *     padding that keeps the household's load pattern off the wire.
- *   It does not store. Rooms live in memory and are deleted when the last
- *     socket leaves, so the relay cannot answer "which boxes exist" — not as
- *     policy, but because the answer is not anywhere.
+ *   It does not store routed traffic. Rooms live in memory and are deleted
+ *     when the last socket leaves. A separate /fleet HTTP door reduces the
+ *     fixed anonymous report to daily totals and drops the request body.
  *   It does not write down who was here. The log carries counts only.
  *
  * Its clock is the one thing peers do trust it for: it announces the epoch,
@@ -35,6 +35,7 @@ import {
 } from 'node:http'
 import { currentEpoch } from './epoch.ts'
 import { Deadman, rowError } from './deadman.ts'
+import { FleetStats, fleetReportError, type FleetReport } from './fleet.ts'
 import { AttemptCounter, TokenBucket } from './limits.ts'
 import {
   CLOSE_BAD_JOIN,
@@ -95,6 +96,11 @@ export interface RelayOptions {
     body: Uint8Array,
     headers: Record<string, string>
   ) => Promise<{ status: number }>
+  /** Daily fleet totals. Empty keeps them in memory only. */
+  fleetStatsPath?: string
+  /** Fleet-report requests allowed per address per window. */
+  fleetAttemptLimit?: number
+  fleetAttemptWindowMs?: number
 }
 
 export interface RoomInspection {
@@ -112,6 +118,8 @@ export interface RelayInspection {
   heartbeats: number
   /** Counts only. The rows themselves never appear on any surface. */
   deadman: { rows: number; claimed: number; armed: number }
+  /** Counts only. Detailed daily totals stay on the local operator route. */
+  fleet: { days: number; reportsToday: number }
 }
 
 type Role = 'box' | 'app'
@@ -165,6 +173,8 @@ const DEFAULTS = {
   maxSocketsPerAddress: 16,
   trustProxy: false,
   rotateSpreadMs: 300_000,
+  fleetAttemptLimit: 120,
+  fleetAttemptWindowMs: 60 * 60_000,
 } as const
 
 /**
@@ -213,8 +223,11 @@ export class RelayServer {
   #http: HttpServer
   #rooms = new Map<string, Room>()
   #attempts: AttemptCounter
+  #fleetAttempts: AttemptCounter
   #timer: ReturnType<typeof setInterval>
-  #opts: Required<Omit<RelayOptions, 'port' | 'host' | 'deadmanPath' | 'deadmanPost'>>
+  #opts: Required<
+    Omit<RelayOptions, 'port' | 'host' | 'deadmanPath' | 'deadmanPost' | 'fleetStatsPath'>
+  >
   #epoch: number
   #rotateStartedAtMs: number | null = null
   #sockets = 0
@@ -224,6 +237,7 @@ export class RelayServer {
   #bytesRouted = 0
   #heartbeats = 0
   #deadman: Deadman
+  #fleet: FleetStats
 
   private constructor(wss: WebSocketServer, opts: RelayOptions, http: HttpServer) {
     this.#wss = wss
@@ -241,6 +255,8 @@ export class RelayServer {
       rotateSpreadMs: opts.rotateSpreadMs ?? DEFAULTS.rotateSpreadMs,
       maxBufferedBytes: opts.maxBufferedBytes ?? DEFAULTS.maxBufferedBytes,
       maxSocketsPerAddress: opts.maxSocketsPerAddress ?? DEFAULTS.maxSocketsPerAddress,
+      fleetAttemptLimit: opts.fleetAttemptLimit ?? DEFAULTS.fleetAttemptLimit,
+      fleetAttemptWindowMs: opts.fleetAttemptWindowMs ?? DEFAULTS.fleetAttemptWindowMs,
     }
 
     const now = this.#opts.now()
@@ -249,11 +265,20 @@ export class RelayServer {
       { limit: this.#opts.attemptLimit, windowMs: this.#opts.attemptWindowMs },
       now
     )
+    this.#fleetAttempts = new AttemptCounter(
+      { limit: this.#opts.fleetAttemptLimit, windowMs: this.#opts.fleetAttemptWindowMs },
+      now
+    )
     this.#deadman = new Deadman({
       path: opts.deadmanPath ?? '',
       now: this.#opts.now,
       log: this.#opts.log,
       ...(opts.deadmanPost ? { post: opts.deadmanPost } : {}),
+    })
+    this.#fleet = new FleetStats({
+      path: opts.fleetStatsPath ?? '',
+      now: this.#opts.now,
+      log: this.#opts.log,
     })
 
     this.#wss.on('connection', (socket, req) => this.#onConnection(socket, req))
@@ -275,7 +300,7 @@ export class RelayServer {
     // withhold, and a health check is exactly the endpoint nobody guards.
     // Bound after the instance exists; the callback below outlives this
     // function, so the reference heals itself the moment start() resolves.
-    let deadmanRoutes: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null
+    let relayRoutes: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null
 
     const http = createServer((req, res) => {
       if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/healthz/')) {
@@ -283,7 +308,7 @@ export class RelayServer {
         res.end('ok\n')
         return
       }
-      if (deadmanRoutes?.(req, res)) return
+      if (relayRoutes?.(req, res)) return
       res.writeHead(426, { 'content-type': 'text/plain' })
       res.end('upgrade required\n')
     })
@@ -311,7 +336,7 @@ export class RelayServer {
         http.on('error', (err) => log(`relay: http error after start: ${String(err)}`))
 
         const relay = new RelayServer(wss, opts, http)
-        deadmanRoutes = (req, res) => relay.#serveDeadman(req, res)
+        relayRoutes = (req, res) => relay.#serveFleet(req, res) || relay.#serveDeadman(req, res)
         resolve(relay)
       })
     })
@@ -351,6 +376,7 @@ export class RelayServer {
       bytesRouted: this.#bytesRouted,
       heartbeats: this.#heartbeats,
       deadman: this.#deadman.inspect(),
+      fleet: this.#fleet.inspect(),
     }
   }
 
@@ -602,10 +628,75 @@ export class RelayServer {
       if (elapsed >= this.#opts.rotateSpreadMs) this.#rotateStartedAtMs = null
     }
 
+    const fleet = this.#fleet.inspect()
     this.#opts.log(
       `epoch=${this.#epoch} rooms=${this.#rooms.size} sockets=${this.#sockets} ` +
-        `frames=${this.#framesRouted} bytes=${this.#bytesRouted}`
+        `frames=${this.#framesRouted} bytes=${this.#bytesRouted} ` +
+        `fleet_reports_today=${fleet.reportsToday}`
     )
+  }
+
+  /**
+   * POST /fleet accepts the box's fixed anonymous report. GET /fleet/stats is
+   * for an operator on loopback; Caddy refuses that path on the public host.
+   */
+  #serveFleet(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = req.url ?? ''
+    if (req.method === 'GET' && (url === '/fleet/stats' || url === '/fleet/stats/')) {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      })
+      res.end(JSON.stringify(this.#fleet.view(), null, 2) + '\n')
+      return true
+    }
+
+    if (req.method !== 'POST' || (url !== '/fleet' && url !== '/fleet/')) return false
+    if (
+      !this.#fleetAttempts.allow(
+        clientAddress(req, this.#opts.trustProxy),
+        this.#opts.now()
+      )
+    ) {
+      res.writeHead(429, { 'content-type': 'application/json' })
+      res.end('{"error":"slow down"}')
+      return true
+    }
+    if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+      res.writeHead(415, { 'content-type': 'application/json' })
+      res.end('{"error":"application/json required"}')
+      return true
+    }
+
+    collectBody(req, 4096)
+      .then((body) => {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(body.toString('utf8'))
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end('{"error":"a JSON object"}')
+          return
+        }
+        const fault = fleetReportError(parsed)
+        if (fault) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: fault }))
+          return
+        }
+        if (!this.#fleet.put(parsed as unknown as FleetReport)) {
+          res.writeHead(429, { 'content-type': 'application/json' })
+          res.end('{"error":"daily limit reached"}')
+          return
+        }
+        res.writeHead(204, { 'cache-control': 'no-store' })
+        res.end()
+      })
+      .catch(() => {
+        res.writeHead(413, { 'content-type': 'application/json' })
+        res.end('{"error":"too large"}')
+      })
+    return true
   }
 
   /**
