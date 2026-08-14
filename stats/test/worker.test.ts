@@ -28,7 +28,9 @@ describe('project stats Worker', () => {
     expect(page.status).toBe(200)
     expect(page.headers.get('content-security-policy')).toContain("default-src 'none'")
     expect(page.headers.get('x-frame-options')).toBe('DENY')
-    expect(await page.text()).toContain('Project growth, without user tracking.')
+    const html = await page.text()
+    expect(html).toContain('Project growth, without user tracking.')
+    expect(html).toContain('Project at a glance')
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await response.json<Record<string, any>>()
@@ -36,6 +38,11 @@ describe('project stats Worker', () => {
     expect(data.mode).toBe('public')
     expect(data.github.repositories).toEqual([])
     expect(data.fleet).toMatchObject({ state: 'empty', reports_30d: null, minimum: 10 })
+    expect(data.relay_status).toEqual({
+      state: 'empty',
+      observed_at: null,
+      meaning: 'export heartbeat only; no relay load or user counts',
+    })
   })
 
   it('fails the private view closed without a verified Access token', async () => {
@@ -89,8 +96,11 @@ describe('project stats Worker', () => {
     const publicResponse = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await publicResponse.json<Record<string, any>>()
     expect(data.fleet).toMatchObject({ state: 'withheld', reports_30d: null, minimum: 10 })
+    expect(data.relay_status).toMatchObject({ state: 'reporting', observed_at: now.toISOString() })
     expect(JSON.stringify(data)).not.toContain('easee_cloud')
-    expect(JSON.stringify(data)).not.toContain('rooms')
+    for (const field of ['rooms', 'sockets', 'frames_routed', 'bytes_routed']) {
+      expect(JSON.stringify(data)).not.toContain('"' + field + '"')
+    }
     expect(data.freshness.relay).toBeUndefined()
     expect(data.freshness.fleet).toBeNull()
   })

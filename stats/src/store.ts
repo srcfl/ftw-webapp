@@ -91,6 +91,8 @@ interface StoredFleetDay extends FleetDay {
   observed_at: string
 }
 
+const RELAY_REPORTING_MAX_AGE_MS = 15 * 60_000
+
 export async function dashboardData(
   env: AppEnv,
   privateView: boolean,
@@ -228,6 +230,7 @@ export async function dashboardData(
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),
     fleet: fleetView,
+    relay_status: relayStatus(relay.results, nowMs),
   }
 
   if (privateView) {
@@ -412,6 +415,25 @@ function relaySummary(rows: RelayRow[]): Record<string, unknown> {
       rooms: row.rooms,
       sockets: row.sockets,
     })),
+  }
+}
+
+function relayStatus(rows: RelayRow[], nowMs: number): Record<string, unknown> {
+  const observedAt = rows[0]?.observed_at ?? null
+  if (!observedAt) {
+    return {
+      state: 'empty',
+      observed_at: null,
+      meaning: 'export heartbeat only; no relay load or user counts',
+    }
+  }
+
+  const observedMs = Date.parse(observedAt)
+  const reporting = Number.isFinite(observedMs) && Math.max(0, nowMs - observedMs) <= RELAY_REPORTING_MAX_AGE_MS
+  return {
+    state: reporting ? 'reporting' : 'delayed',
+    observed_at: observedAt,
+    meaning: 'export heartbeat only; no relay load or user counts',
   }
 }
 

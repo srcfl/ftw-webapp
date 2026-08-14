@@ -5,10 +5,11 @@ configured GitHub repositories, reads server-side traffic counts for
 `ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
-The public view shows repository data. Fleet totals stay hidden until at least
-`PUBLIC_MIN_REPORTS` reports exist in the chosen period. A report is one daily
-check-in, not one user or one box. The private view may show smaller aggregate
-counts, but it requires a valid Cloudflare Access JWT.
+The public view shows repository data, site traffic, a relay export heartbeat
+and privacy-bounded fleet totals. It never shows relay load. Fleet totals stay
+hidden until at least `PUBLIC_MIN_REPORTS` reports exist in the chosen period.
+A report is one daily check-in, not one user or one box. The private view may
+show smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
 
 The service never accepts routed frames, room handles, box ids, serials, IP
 addresses, site names, or raw fleet reports. The relay signs one body made from
@@ -42,6 +43,10 @@ Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. Protect
 `stats.ftw.energy/admin*` and `stats.ftw.energy/api/admin*` with one Cloudflare
 Access application. The Worker also checks the token signature, issuer and
 audience, so a route mistake fails closed.
+
+Use a policy made for this app and include the GitHub organization `srcfl`.
+Do not add GitHub as a separate login-method Include rule: Access joins Include
+rules with OR, which would let any GitHub user through.
 
 Set the same relay ingest secret and the Worker ingest URL on the relay host:
 
