@@ -15,12 +15,16 @@
     "GITHUB_OWNER": "srcfl",
     "GITHUB_REPOS": "ftw,ftw-webapp,device-drivers",
     "SITE_HOSTNAME": "ftw.energy",
-    "PUBLIC_MIN_REPORTS": "10"
+    "PUBLIC_MIN_REPORTS": "10",
+    "CLOUDFLARE_ZONE_ID": "b8e2cf4b19abbeb535cca652750916c9",
+    "ACCESS_TEAM_DOMAIN": "https://sourceful.cloudflareaccess.com",
+    "ACCESS_AUD": "980a936eae5215f4484780b68996a4985f435a0e19cd8d11c13225b3f74844cd"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "ftw-project-stats",
+      "database_id": "0c4e65ba-58a8-4ae4-8874-83d130a2f516",
       "migrations_dir": "migrations"
     }
   ],

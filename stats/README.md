@@ -24,20 +24,19 @@ npx wrangler d1 create ftw-project-stats
 npx wrangler d1 migrations apply ftw-project-stats --config stats/wrangler.jsonc --remote
 ```
 
-Set four Worker secrets:
+Set three Worker secrets:
 
 ```sh
 npx wrangler secret put GITHUB_TOKEN --config stats/wrangler.jsonc
-npx wrangler secret put CLOUDFLARE_ZONE_ID --config stats/wrangler.jsonc
 npx wrangler secret put CLOUDFLARE_ANALYTICS_TOKEN --config stats/wrangler.jsonc
 npx wrangler secret put RELAY_INGEST_SECRET --config stats/wrangler.jsonc
 ```
 
-Use the `ftw.energy` zone id. Scope the Cloudflare token to Account Analytics
-Read and only the account and zone that hold `ftw.energy`. The daily query asks
-for Cloudflare's server-side visits, requests and response bytes for the apex
-host. It sends no browser script and stores no request rows, IP addresses or
-visitor ids.
+Set `CLOUDFLARE_ZONE_ID` as a Worker variable. Scope the Cloudflare token to
+Account Analytics Read and only the account that holds `ftw.energy`. The daily
+query asks for Cloudflare's server-side visits, requests and response bytes for
+the apex host. It sends no browser script and stores no request rows, IP
+addresses or visitor ids.
 
 Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. Protect
 `stats.ftw.energy/admin*` and `stats.ftw.energy/api/admin*` with one Cloudflare
