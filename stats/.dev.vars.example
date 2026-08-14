@@ -1,0 +1,6 @@
+GITHUB_TOKEN=github_pat_replace_me
+CLOUDFLARE_ZONE_ID=replace_with_the_ftw_energy_zone_id
+CLOUDFLARE_ANALYTICS_TOKEN=replace_with_an_account_analytics_read_token
+RELAY_INGEST_SECRET=replace_with_at_least_32_random_bytes
+ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+ACCESS_AUD=replace_with_the_access_application_aud

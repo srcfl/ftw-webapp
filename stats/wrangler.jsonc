@@ -1,0 +1,37 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ftw-project-stats",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "stats.ftw.energy",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "GITHUB_OWNER": "srcfl",
+    "GITHUB_REPOS": "ftw,ftw-webapp,device-drivers",
+    "SITE_HOSTNAME": "ftw.energy",
+    "PUBLIC_MIN_REPORTS": "10"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ftw-project-stats",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["3 * * * *", "17 0 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}
