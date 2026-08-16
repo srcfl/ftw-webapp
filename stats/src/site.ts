@@ -4,10 +4,13 @@ import type { AppEnv } from './types.ts'
 const API_URL = 'https://api.cloudflare.com/client/v4/graphql'
 const MAX_RESPONSE_BYTES = 256 * 1024
 const HISTORY_DAYS = 14
+const MAX_HOURLY_GROUPS = HISTORY_DAYS * 24
 const ZONE_ID_RE = /^[a-f0-9]{32}$/i
 const HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
+const HOUR_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/
 
 type JsonRecord = Record<string, unknown>
+type GraphQLErrorCode = 'graphql-access-denied' | 'graphql-query-limit' | 'graphql-error'
 
 interface SiteDay {
   date: string
@@ -24,7 +27,9 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
     const token = checkedToken(env.CLOUDFLARE_ANALYTICS_TOKEN)
     const hostname = checkedHostname(env.SITE_HOSTNAME)
     const days = completeDays(nowMs)
-    const query = analyticsQuery(days)
+    const lastDay = days[days.length - 1]!
+    const start = `${days[0]}T00:00:00Z`
+    const end = new Date(Date.parse(`${lastDay}T00:00:00Z`) + 24 * 60 * 60_000).toISOString()
     const response = await fetch(API_URL, {
       method: 'POST',
       headers: {
@@ -32,7 +37,10 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
         authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ query, variables: { zoneTag: zoneId, hostname } }),
+      body: JSON.stringify({
+        query: analyticsQuery(),
+        variables: { zoneTag: zoneId, hostname, start, end },
+      }),
       signal: AbortSignal.timeout(15_000),
     })
     if (!response.ok) {
@@ -40,15 +48,7 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
       throw new CloudflareRequestError(response.status)
     }
 
-    const length = Number(response.headers.get('content-length') ?? 0)
-    if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
-      await response.body?.cancel()
-      throw new RangeError('Cloudflare response was too large')
-    }
-    const text = await response.text()
-    if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
-      throw new RangeError('Cloudflare response was too large')
-    }
+    const text = await boundedResponseText(response)
     const rows = parseAnalyticsResponse(JSON.parse(text) as unknown, days)
     const observedAt = new Date(nowMs).toISOString()
     await env.DB.batch(
@@ -77,7 +77,7 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
     )
     await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, true, '14-day traffic window')
   } catch (error) {
-    await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, false, 'traffic request failed')
+    await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, false, siteCollectorFailureCode(error))
     throw error
   }
 }
@@ -91,28 +91,25 @@ function completeDays(nowMs: number): string[] {
   })
 }
 
-function analyticsQuery(days: string[]): string {
-  const selections = days.map((date, index) => {
-    const start = `${date}T00:00:00Z`
-    const end = new Date(Date.parse(start) + 24 * 60 * 60_000).toISOString()
-    return `day${index}: httpRequestsAdaptiveGroups(
-      limit: 1
-      filter: {
-        datetime_geq: "${start}"
-        datetime_lt: "${end}"
-        clientRequestHTTPHost: $hostname
-        requestSource: "eyeball"
-      }
-    ) {
-      count
-      avg { sampleInterval }
-      sum { visits edgeResponseBytes }
-    }`
-  })
-  return `query SiteTraffic($zoneTag: string, $hostname: string) {
+function analyticsQuery(): string {
+  return `query SiteTraffic($zoneTag: string, $hostname: string, $start: Time, $end: Time) {
     viewer {
       zones(filter: { zoneTag: $zoneTag }) {
-        ${selections.join('\n')}
+        traffic: httpRequestsAdaptiveGroups(
+          limit: 10000
+          orderBy: [datetimeHour_ASC]
+          filter: {
+            datetime_geq: $start
+            datetime_lt: $end
+            clientRequestHTTPHost: $hostname
+            requestSource: "eyeball"
+          }
+        ) {
+          count
+          avg { sampleInterval }
+          sum { visits edgeResponseBytes }
+          dimensions { datetimeHour }
+        }
       }
     }
   }`
@@ -121,30 +118,121 @@ function analyticsQuery(days: string[]): string {
 function parseAnalyticsResponse(value: unknown, days: string[]): SiteDay[] {
   const root = record(value, 'Cloudflare response')
   const errors = root['errors']
-  if (Array.isArray(errors) && errors.length > 0) throw new TypeError('Cloudflare returned GraphQL errors')
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new CloudflareGraphQLError(graphQLErrorCode(errors))
+  }
   const data = record(root['data'], 'Cloudflare data')
   const viewer = record(data['viewer'], 'Cloudflare viewer')
   const zones = viewer['zones']
   if (!Array.isArray(zones) || zones.length !== 1) throw new TypeError('Cloudflare zone was not unique')
   const zone = record(zones[0], 'Cloudflare zone')
+  const groups = zone['traffic']
+  if (!Array.isArray(groups) || groups.length > MAX_HOURLY_GROUPS) {
+    throw new TypeError('Cloudflare traffic window was not bounded')
+  }
 
-  return days.map((date, index) => {
-    const groups = zone[`day${index}`]
-    if (!Array.isArray(groups) || groups.length > 1) throw new TypeError('Cloudflare day was not bounded')
-    if (groups.length === 0) {
-      return { date, requests: 0, visits: 0, responseBytes: 0, sampleInterval: 1 }
-    }
-    const group = record(groups[0], 'Cloudflare traffic group')
+  const byDate = new Map<string, SiteDay>(
+    days.map((date) => [date, { date, requests: 0, visits: 0, responseBytes: 0, sampleInterval: 1 }])
+  )
+  const seenHours = new Set<string>()
+  for (const raw of groups) {
+    const group = record(raw, 'Cloudflare traffic group')
+    const dimensions = record(group['dimensions'], 'Cloudflare traffic dimensions')
+    const hour = checkedHour(dimensions['datetimeHour'])
+    const day = byDate.get(hour.slice(0, 10))
+    if (!day || seenHours.has(hour)) throw new TypeError('Cloudflare traffic hour was outside the window')
+    seenHours.add(hour)
     const sum = record(group['sum'], 'Cloudflare traffic sum')
     const avg = record(group['avg'], 'Cloudflare traffic average')
-    return {
-      date,
-      requests: nonNegativeInt(group['count'], 'request count'),
-      visits: nonNegativeInt(sum['visits'], 'visit count'),
-      responseBytes: nonNegativeInt(sum['edgeResponseBytes'], 'response bytes'),
-      sampleInterval: positiveNumber(avg['sampleInterval'], 'sample interval'),
-    }
+    day.requests = safeAdd(day.requests, nonNegativeInt(group['count'], 'request count'))
+    day.visits = safeAdd(day.visits, nonNegativeInt(sum['visits'], 'visit count'))
+    day.responseBytes = safeAdd(
+      day.responseBytes,
+      nonNegativeInt(sum['edgeResponseBytes'], 'response bytes')
+    )
+    day.sampleInterval = Math.max(
+      day.sampleInterval,
+      positiveNumber(avg['sampleInterval'], 'sample interval')
+    )
+  }
+
+  return days.map((date) => {
+    const day = byDate.get(date)
+    if (!day) throw new TypeError('Cloudflare traffic day was missing')
+    return day
   })
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const length = Number(response.headers.get('content-length') ?? 0)
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel()
+    throw new RangeError('Cloudflare response was too large')
+  }
+  if (!response.body) return ''
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel()
+      throw new RangeError('Cloudflare response was too large')
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+export function siteCollectorFailureCode(error: unknown): string {
+  if (error instanceof CloudflareRequestError) return `http-${error.status}`
+  if (error instanceof CloudflareGraphQLError) return error.code
+  if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return 'request-timeout'
+  }
+  if (error instanceof RangeError) return 'response-too-large'
+  if (error instanceof SyntaxError) return 'invalid-json'
+  if (error instanceof TypeError) return 'invalid-response'
+  if (
+    error instanceof Error &&
+    (error.message.includes('is not configured') || error.message.includes('is invalid'))
+  ) {
+    return 'configuration-error'
+  }
+  return 'unexpected-error'
+}
+
+function graphQLErrorCode(errors: unknown[]): GraphQLErrorCode {
+  const message = errors
+    .map((error) => {
+      if (typeof error !== 'object' || error === null || Array.isArray(error)) return ''
+      const value = (error as JsonRecord)['message']
+      return typeof value === 'string' ? value.toLowerCase() : ''
+    })
+    .join(' ')
+  if (/(auth|permission|access denied|not authorized|forbidden)/.test(message)) {
+    return 'graphql-access-denied'
+  }
+  if (/(limit|complex|resource|budget|timeout|too many)/.test(message)) {
+    return 'graphql-query-limit'
+  }
+  return 'graphql-error'
+}
+
+function checkedHour(value: unknown): string {
+  if (typeof value !== 'string' || !HOUR_RE.test(value)) {
+    throw new TypeError('datetimeHour was not an hour')
+  }
+  return value
 }
 
 function checkedZoneId(value: string | undefined): string {
@@ -169,6 +257,12 @@ function nonNegativeInt(value: unknown, label: string): number {
   return value as number
 }
 
+function safeAdd(left: number, right: number): number {
+  const total = left + right
+  if (!Number.isSafeInteger(total)) throw new TypeError('Cloudflare traffic total was too large')
+  return total
+}
+
 function positiveNumber(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
     throw new TypeError(`${label} was not positive`)
@@ -186,7 +280,15 @@ function record(value: unknown, label: string): JsonRecord {
 class CloudflareRequestError extends Error {
   override name = 'CloudflareRequestError'
 
-  constructor(status: number) {
+  constructor(readonly status: number) {
     super(`Cloudflare returned HTTP ${status}`)
+  }
+}
+
+class CloudflareGraphQLError extends Error {
+  override name = 'CloudflareGraphQLError'
+
+  constructor(readonly code: GraphQLErrorCode) {
+    super('Cloudflare returned GraphQL errors')
   }
 }

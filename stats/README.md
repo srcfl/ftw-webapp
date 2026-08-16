@@ -36,11 +36,15 @@ npx wrangler secret put CLOUDFLARE_ANALYTICS_TOKEN --config stats/wrangler.jsonc
 npx wrangler secret put RELAY_INGEST_SECRET --config stats/wrangler.jsonc
 ```
 
-Set `CLOUDFLARE_ZONE_ID` as a Worker variable. Scope the Cloudflare token to
-Account Analytics Read and only the account that holds `ftw.energy`. The daily
-query asks for Cloudflare's server-side visits, requests and response bytes for
-the apex host. It sends no browser script and stores no request rows, IP
-addresses or visitor ids.
+Set `CLOUDFLARE_ZONE_ID` as a Worker variable. Give the Cloudflare token
+`Account > Account Analytics > Read` and make sure its resource scope includes
+the `ftw.energy` zone. The hourly query asks for Cloudflare's server-side
+visits, requests and response bytes for the last 14 complete UTC days. It sends
+no browser script and stores no request rows, IP addresses or visitor ids.
+
+The GitHub repository snapshot and site query run each hour. GitHub traffic
+runs once a day because GitHub exposes it as a rolling daily window. The relay
+pushes one aggregate snapshot every five minutes.
 
 Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. Protect
 `stats.ftw.energy/admin*` and `stats.ftw.energy/api/admin*` with one Cloudflare

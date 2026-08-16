@@ -2,7 +2,7 @@ import { accessIdentity } from './access.ts'
 import { dashboardDocument } from './dashboard.ts'
 import { collectGitHub } from './github.ts'
 import { ingestRelay } from './relay.ts'
-import { collectSiteTraffic } from './site.ts'
+import { collectSiteTraffic, siteCollectorFailureCode } from './site.ts'
 import { dashboardData } from './store.ts'
 import type { AppEnv } from './types.ts'
 
@@ -79,15 +79,14 @@ export default {
         kind: error instanceof Error ? error.name : 'unknown',
       })
     }
-    if (daily) {
-      try {
-        await collectSiteTraffic(env, controller.scheduledTime)
-      } catch (error) {
-        failures.push('site')
-        console.error('stats: scheduled site collection failed', {
-          kind: error instanceof Error ? error.name : 'unknown',
-        })
-      }
+    try {
+      await collectSiteTraffic(env, controller.scheduledTime)
+    } catch (error) {
+      failures.push('site')
+      console.error('stats: scheduled site collection failed', {
+        kind: error instanceof Error ? error.name : 'unknown',
+        code: siteCollectorFailureCode(error),
+      })
     }
     await env.DB.prepare('DELETE FROM collector_runs WHERE finished_at < ?')
       .bind(new Date(controller.scheduledTime - 90 * 24 * 60 * 60_000).toISOString())

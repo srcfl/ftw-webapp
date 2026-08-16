@@ -261,23 +261,23 @@ describe('project stats Worker', () => {
       expect(body.variables).toEqual({
         zoneTag: '0123456789abcdef0123456789abcdef',
         hostname: 'ftw.energy',
+        start: `${firstDay}T00:00:00Z`,
+        end: new Date(todayMs).toISOString(),
       })
-      expect(body.query).toContain('day0: httpRequestsAdaptiveGroups')
-      expect(body.query).toContain('day13: httpRequestsAdaptiveGroups')
+      expect(body.query.match(/httpRequestsAdaptiveGroups/g) ?? []).toHaveLength(1)
+      expect(body.query).toContain('orderBy: [datetimeHour_ASC]')
       expect(body.query).toContain('clientRequestHTTPHost: $hostname')
-      const zone = Object.fromEntries(
-        Array.from({ length: 14 }, (_, index) => [
-          `day${index}`,
-          [
-            {
-              count: 100 + index,
-              avg: { sampleInterval: index === 13 ? 5 : 1 },
-              sum: { visits: index + 1, edgeResponseBytes: 1000 * (index + 1) },
-            },
-          ],
-        ])
-      )
-      return githubResponse({ data: { viewer: { zones: [zone] } }, errors: null })
+      expect(body.query).toContain('dimensions { datetimeHour }')
+      const traffic = Array.from({ length: 14 }, (_, index) => {
+        const date = new Date(todayMs - (14 - index) * 86400000).toISOString().slice(0, 10)
+        return {
+          count: 100 + index,
+          avg: { sampleInterval: index === 13 ? 5 : 1 },
+          sum: { visits: index + 1, edgeResponseBytes: 1000 * (index + 1) },
+          dimensions: { datetimeHour: `${date}T12:00:00Z` },
+        }
+      })
+      return githubResponse({ data: { viewer: { zones: [{ traffic }] } }, errors: null })
     })
 
     await collectSiteTraffic(env, nowMs)
@@ -304,6 +304,70 @@ describe('project stats Worker', () => {
       totals: { visits_14d: 105, requests_14d: 1491, response_bytes_14d: 105000 },
     })
     expect(JSON.stringify(data.site)).not.toContain('visitor_id')
+  })
+
+  it('stores a safe cause when Cloudflare rejects an expensive GraphQL query', async () => {
+    vi.stubGlobal('fetch', async () =>
+      githubResponse({
+        data: null,
+        errors: [{ message: 'query exceeded the resource budget for an internal account' }],
+      })
+    )
+
+    await expect(collectSiteTraffic(env, Date.UTC(2026, 7, 16, 12))).rejects.toMatchObject({
+      name: 'CloudflareGraphQLError',
+    })
+
+    const run = await env.DB.prepare(
+      'SELECT ok, detail FROM collector_runs WHERE source = ? ORDER BY finished_at DESC LIMIT 1'
+    )
+      .bind('site:ftw.energy')
+      .first<{ ok: number; detail: string }>()
+    expect(run).toEqual({ ok: 0, detail: 'graphql-query-limit' })
+    expect(JSON.stringify(run)).not.toContain('internal account')
+  })
+
+  it('retries site traffic on the hourly schedule', async () => {
+    let siteCalls = 0
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
+      if (url.hostname === 'api.cloudflare.com') {
+        siteCalls += 1
+        return githubResponse({ data: { viewer: { zones: [{ traffic: [] }] } }, errors: null })
+      }
+      if (url.pathname === '/repos/srcfl/ftw') {
+        return githubResponse({
+          stargazers_count: 0,
+          forks_count: 0,
+          subscribers_count: 0,
+          pushed_at: null,
+        })
+      }
+      if (
+        url.pathname === '/repos/srcfl/ftw/pulls' ||
+        url.pathname === '/repos/srcfl/ftw/issues' ||
+        url.pathname === '/repos/srcfl/ftw/contributors'
+      ) {
+        return githubResponse([])
+      }
+      if (url.pathname === '/search/issues') return githubResponse({ total_count: 0 })
+      if (url.pathname === '/repos/srcfl/ftw/releases/latest') return new Response(null, { status: 404 })
+      return new Response(null, { status: 404 })
+    })
+
+    await worker.scheduled(
+      { cron: '3 * * * *', scheduledTime: Date.UTC(2026, 7, 16, 9, 3), noRetry() {} },
+      env
+    )
+
+    expect(siteCalls).toBe(1)
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM site_traffic_daily').first('count')).toBe(14)
+    const run = await env.DB.prepare(
+      'SELECT ok, detail FROM collector_runs WHERE source = ? ORDER BY finished_at DESC LIMIT 1'
+    )
+      .bind('site:ftw.energy')
+      .first<{ ok: number; detail: string }>()
+    expect(run).toEqual({ ok: 1, detail: '14-day traffic window' })
   })
 })
 
