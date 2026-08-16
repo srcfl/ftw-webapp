@@ -417,7 +417,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       setText('fleet-total', number(view.reports_30d) + ' / 30d');
       note.textContent = privateMode
         ? 'Private aggregate view. Reports are daily check-ins, not users or unique boxes.'
-        : 'Public counts use a minimum group size of ' + view.minimum + '. Version and integration names appear only after the overall report threshold; each label count has the same limit.';
+        : 'Public totals use a minimum group size of ' + view.minimum + '. A version or integration appears only when its own count reaches the same limit.';
     }
     if (!privateMode && view.state === 'withheld') {
       const chart = $('fleet-chart');
@@ -453,7 +453,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       'fleet-dimension-note',
       privateMode
         ? 'Driver totals count integrations present in reports, not physical devices. One report can include more than one integration.'
-        : 'After the overall report threshold, names show what appeared in aggregate reports. Each count below the public limit stays hidden. An integration type is not a physical device count.'
+        : 'Each version or integration name and count stays hidden until its own count reaches the public limit. An integration type is not a physical device count.'
     );
   }
 

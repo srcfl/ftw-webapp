@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
 import { collectGitHub } from '../src/github.ts'
 import { ingestRelay } from '../src/relay.ts'
-import { pruneStoredData, retentionCutoffs } from '../src/retention.ts'
+import { pruneStoredData, retentionCutoffs, utcDayCutoff } from '../src/retention.ts'
 import { collectSiteTraffic } from '../src/site.ts'
+import { publicFleet } from '../src/store.ts'
 import type { AppEnv, RelayIngestBody } from '../src/types.ts'
 
 interface TestEnv extends AppEnv {
@@ -140,23 +141,53 @@ describe('project stats Worker', () => {
     expect(data.freshness.fleet).toBe(now.toISOString())
   })
 
-  it('shows a public total at ten reports but still drops small labels', async () => {
+  it('shows only version and driver labels whose own count reaches ten', async () => {
     const now = new Date()
-    const payload = relayPayload(now, 10)
-    payload.fleet.days[0]!.channels = { beta: 9, unknown: 1 }
-    payload.fleet.days[0]!.drivers = { easee_cloud: 10 }
+    const payload = relayPayload(now, 20)
+    payload.fleet.days[0]!.channels = { beta: 9, unknown: 11 }
+    payload.fleet.days[0]!.ftw_versions = { 'common-version': 10, 'rare-version': 9, 'other-version': 1 }
+    payload.fleet.days[0]!.drivers = { easee_cloud: 10, solis: 9, modbus: 1 }
     await sendRelay(payload, now)
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await response.json<Record<string, any>>()
-    expect(data.fleet.reports_30d).toBe(10)
-    expect(data.fleet.days[0].reports).toBe(10)
-    expect(data.fleet.dimensions.channels).toEqual({})
+    expect(data.fleet.reports_30d).toBe(20)
+    expect(data.fleet.days[0].reports).toBe(20)
+    expect(data.fleet.dimensions.channels).toEqual({ unknown: 11 })
+    expect(data.fleet.dimensions.ftw_versions).toEqual({ 'common-version': 10 })
     expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 10 })
     expect(data.fleet.observed).toEqual({
-      ftw_versions: ['v1.16.1-beta.22'],
+      ftw_versions: ['common-version'],
       drivers: ['easee_cloud'],
     })
+    for (const label of ['rare-version', 'other-version', 'solis', 'modbus']) {
+      expect(JSON.stringify(data.fleet)).not.toContain(label)
+    }
+  })
+
+  it('uses exactly 30 UTC dates in the public fleet window at midday', () => {
+    const nowMs = Date.parse('2026-08-16T12:00:00.000Z')
+    expect(utcDayCutoff(nowMs, 30, true)).toBe('2026-07-18')
+    const days = Array.from({ length: 31 }, (_, index) => {
+      const date = new Date(Date.UTC(2026, 6, 17 + index)).toISOString().slice(0, 10)
+      return {
+        date,
+        reports: 1,
+        ftw_versions: {},
+        channels: {},
+        drivers: {},
+        battery_kwh: {},
+        price_zones: {},
+        install_age: {},
+        observed_at: `${date}T12:00:00.000Z`,
+      }
+    })
+
+    const fleet = publicFleet(days, 1, nowMs) as Record<string, any>
+    expect(fleet.reports_30d).toBe(30)
+    expect(fleet.days).toHaveLength(30)
+    expect(fleet.days[0].date).toBe('2026-07-18')
+    expect(fleet.days.at(-1).date).toBe('2026-08-16')
   })
 
   it('rejects a changed body after it has been signed', async () => {

@@ -1,5 +1,5 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
-import { retentionCutoffs } from './retention.ts'
+import { retentionCutoffs, utcDayCutoff } from './retention.ts'
 
 interface GitHubRow {
   repo: string
@@ -283,13 +283,9 @@ function siteSummary(rows: SiteTrafficRow[], hostname: string, nowMs: number): R
 }
 
 export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: number): Record<string, unknown> {
-  const cutoff = new Date(nowMs - 30 * 24 * 60 * 60_000).toISOString().slice(0, 10)
+  const cutoff = utcDayCutoff(nowMs, 30, true)
   const recent = days.filter((day) => day.date >= cutoff)
   const reports = recent.reduce((total, day) => total + day.reports, 0)
-  const observed = {
-    ftw_versions: observedLabels(recent, 'ftw_versions'),
-    drivers: observedLabels(recent, 'drivers'),
-  }
   if (reports < minimum) {
     return {
       state: reports === 0 ? 'empty' : 'withheld',
@@ -304,9 +300,14 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
 
   const aggregate = emptyDimensions()
   for (const day of recent) addDimensions(aggregate, day)
-  const safeDimensions = Object.fromEntries(
-    Object.entries(aggregate).map(([key, values]) => [key, visibleCounts(values, minimum)])
-  )
+  const safeDimensions: FleetDimensions = {
+    ftw_versions: visibleCounts(aggregate.ftw_versions, minimum),
+    channels: visibleCounts(aggregate.channels, minimum),
+    drivers: visibleCounts(aggregate.drivers, minimum),
+    battery_kwh: visibleCounts(aggregate.battery_kwh, minimum),
+    price_zones: visibleCounts(aggregate.price_zones, minimum),
+    install_age: visibleCounts(aggregate.install_age, minimum),
+  }
   return {
     state: 'visible',
     meaning: 'daily reports, not users or unique boxes',
@@ -314,7 +315,10 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
     reports_30d: reports,
     days: recent.map((day) => ({ date: day.date, reports: day.reports >= minimum ? day.reports : null })),
     dimensions: safeDimensions,
-    observed,
+    observed: {
+      ftw_versions: visibleLabels(safeDimensions.ftw_versions),
+      drivers: visibleLabels(safeDimensions.drivers),
+    },
   }
 }
 
@@ -549,14 +553,10 @@ function visibleCounts(values: Record<string, number>, minimum: number): Record<
   )
 }
 
-function observedLabels(days: StoredFleetDay[], key: 'ftw_versions' | 'drivers'): string[] {
-  const labels = new Set<string>()
-  for (const day of days) {
-    for (const [label, count] of Object.entries(day[key])) {
-      if (count > 0) labels.add(label)
-    }
-  }
-  return [...labels].sort((a, b) => a.localeCompare(b)).slice(0, 32)
+function visibleLabels(values: Record<string, number>): string[] {
+  return Object.keys(values)
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 32)
 }
 
 function smallCountBand(value: number): string {

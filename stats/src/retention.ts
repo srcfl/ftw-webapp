@@ -50,7 +50,7 @@ function rollingCutoff(nowMs: number, days: number): string {
   return new Date(nowMs - days * DAY_MS).toISOString()
 }
 
-function utcDayCutoff(nowMs: number, days: number, includeToday: boolean): string {
+export function utcDayCutoff(nowMs: number, days: number, includeToday: boolean): string {
   const today = new Date(nowMs)
   const todayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
   const offset = includeToday ? days - 1 : days
