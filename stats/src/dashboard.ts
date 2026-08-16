@@ -409,7 +409,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     const note = $('fleet-note');
     if (!privateMode && view.state === 'withheld') {
       setText('fleet-total', '< ' + number(view.minimum));
-      note.textContent = 'A few reports exist. Versions and integration types appear below, but counts stay hidden until ' + view.minimum + ' reports are in the 30-day window.';
+      note.textContent = 'A few reports exist. Totals, versions and integration types stay hidden until ' + view.minimum + ' reports are in the 30-day window.';
     } else if (view.state === 'empty') {
       setText('fleet-total', '0');
       note.textContent = 'Waiting for the first daily report. A report is not a user or a unique box.';
@@ -417,7 +417,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       setText('fleet-total', number(view.reports_30d) + ' / 30d');
       note.textContent = privateMode
         ? 'Private aggregate view. Reports are daily check-ins, not users or unique boxes.'
-        : 'Public counts use a minimum group size of ' + view.minimum + '. Version and integration names may appear without counts.';
+        : 'Public counts use a minimum group size of ' + view.minimum + '. Version and integration names appear only after the overall report threshold; each label count has the same limit.';
     }
     if (!privateMode && view.state === 'withheld') {
       const chart = $('fleet-chart');
@@ -453,7 +453,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       'fleet-dimension-note',
       privateMode
         ? 'Driver totals count integrations present in reports, not physical devices. One report can include more than one integration.'
-        : 'Names show what appeared in aggregate reports. Counts below the public limit stay hidden. An integration type is not a physical device count.'
+        : 'After the overall report threshold, names show what appeared in aggregate reports. Each count below the public limit stays hidden. An integration type is not a physical device count.'
     );
   }
 

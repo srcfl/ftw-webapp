@@ -1,4 +1,5 @@
 import type { AppEnv, FleetDay, FleetDimensions, RelayIngestBody } from './types.ts'
+import { retentionCutoffs } from './retention.ts'
 
 const MAX_BODY_BYTES = 256 * 1024
 const MAX_CLOCK_SKEW_SECONDS = 5 * 60
@@ -93,6 +94,7 @@ export function relayBody(value: unknown, nowMs: number): RelayIngestBody {
 
 async function saveRelay(db: D1Database, body: RelayIngestBody, nowMs: number): Promise<void> {
   const receivedAt = new Date(nowMs).toISOString()
+  const cutoff = retentionCutoffs(nowMs)
   const statements = [
     db
       .prepare(
@@ -124,13 +126,15 @@ async function saveRelay(db: D1Database, body: RelayIngestBody, nowMs: number): 
            ON CONFLICT(date) DO UPDATE SET
             reports = excluded.reports,
             dimensions_json = excluded.dimensions_json,
-            observed_at = excluded.observed_at`
+            observed_at = excluded.observed_at
+           WHERE excluded.observed_at >= fleet_daily.observed_at`
         )
         .bind(day.date, day.reports, JSON.stringify(dimensions(day)), body.observed_at)
     ),
     db
       .prepare('DELETE FROM relay_snapshots WHERE observed_at < ?')
-      .bind(new Date(nowMs - 90 * 24 * 60 * 60_000).toISOString()),
+      .bind(cutoff.relaySnapshots),
+    db.prepare('DELETE FROM fleet_daily WHERE date < ?').bind(cutoff.fleetDaily),
   ]
   await db.batch(statements)
 }

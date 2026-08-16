@@ -1,4 +1,5 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
+import { retentionCutoffs } from './retention.ts'
 
 interface GitHubRow {
   repo: string
@@ -98,10 +99,12 @@ export async function dashboardData(
   privateView: boolean,
   nowMs = Date.now()
 ): Promise<Record<string, unknown>> {
-  const githubCutoff = new Date(nowMs - 90 * 24 * 60 * 60_000).toISOString()
-  const trafficCutoff = new Date(nowMs - 30 * 24 * 60 * 60_000).toISOString().slice(0, 10)
+  const retention = retentionCutoffs(nowMs)
+  const githubCutoff = retention.githubSnapshots
+  const trafficCutoff = retention.githubTraffic
+  const siteTrafficCutoff = retention.siteTraffic
   const relayCutoff = new Date(nowMs - 24 * 60 * 60_000).toISOString()
-  const fleetCutoff = new Date(nowMs - 90 * 24 * 60 * 60_000).toISOString().slice(0, 10)
+  const fleetCutoff = retention.fleetDaily
 
   const [latest, history, traffic, siteTraffic, relay, fleet, referrers, paths, collectors] =
     await Promise.all([
@@ -141,7 +144,7 @@ export async function dashboardData(
       `SELECT date, hostname, requests, visits, response_bytes, sample_interval, observed_at
        FROM site_traffic_daily WHERE date >= ? AND hostname = ? ORDER BY date ASC`
     )
-      .bind(trafficCutoff, env.SITE_HOSTNAME)
+      .bind(siteTrafficCutoff, env.SITE_HOSTNAME)
       .all<SiteTrafficRow>(),
     env.DB.prepare(
       `SELECT observed_at, uptime_seconds, rooms, sockets, frames_routed, bytes_routed
@@ -295,7 +298,7 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
       reports_30d: null,
       days: [],
       dimensions: {},
-      observed,
+      observed: { ftw_versions: [], drivers: [] },
     }
   }
 

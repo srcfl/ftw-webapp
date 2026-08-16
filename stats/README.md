@@ -7,12 +7,13 @@ public and a private dashboard at `stats.ftw.energy`.
 
 The public view shows repository data, site traffic, coarse relay activity and
 privacy-bounded fleet data. Relay rooms, sockets, frames and bytes appear only
-as ranges. Fleet versions and device integration types may appear without
-counts, while totals and per-label counts stay hidden until at least
-`PUBLIC_MIN_REPORTS` reports exist in the chosen period. Battery, price-zone and
-install-age labels also stay hidden below that limit. A report is one daily
-check-in, not one user or one box. The private view may show smaller aggregate
-counts, but it requires a valid Cloudflare Access JWT.
+as ranges. Fleet totals, versions and device integration types stay hidden
+until at least `PUBLIC_MIN_REPORTS` reports exist in the chosen period. After
+that total threshold, version and integration names may appear without counts;
+each per-label count still needs to meet the same threshold. Battery,
+price-zone and install-age labels also stay hidden below that limit. A report
+is one daily check-in, not one user or one box. The private view may show
+smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
 
 The service never accepts routed frames, room handles, box ids, serials, IP
 addresses, site names, or raw fleet reports. The relay signs one body made from
@@ -66,6 +67,19 @@ RELAY_STATS_EXPORT_SECRET=replace_with_the_same_secret
 
 The relay keeps working if export fails. It tries once at startup and then once
 every five minutes.
+
+## Retention
+
+The hourly cleanup keeps only the data each dashboard window needs:
+
+- 90 days of GitHub snapshots, relay snapshots, fleet daily totals and
+  collector results;
+- 30 UTC days of GitHub traffic, referrers and popular paths;
+- the last 7 complete UTC days of site traffic.
+
+Relay ingest also applies the 90-day relay and fleet limits, so those two
+tables stay bounded even if a scheduled collection fails. Rows outside these
+windows are deleted, not only hidden from dashboard queries.
 
 ## Metric meanings
 

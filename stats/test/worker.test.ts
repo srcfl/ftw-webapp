@@ -3,6 +3,8 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
 import { collectGitHub } from '../src/github.ts'
+import { ingestRelay } from '../src/relay.ts'
+import { pruneStoredData, retentionCutoffs } from '../src/retention.ts'
 import { collectSiteTraffic } from '../src/site.ts'
 import type { AppEnv, RelayIngestBody } from '../src/types.ts'
 
@@ -115,11 +117,10 @@ describe('project stats Worker', () => {
     const publicResponse = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await publicResponse.json<Record<string, any>>()
     expect(data.fleet).toMatchObject({ state: 'withheld', reports_30d: null, minimum: 10 })
-    expect(data.fleet.observed).toEqual({
-      ftw_versions: ['v1.16.1-beta.22'],
-      drivers: ['easee_cloud'],
-    })
+    expect(data.fleet.observed).toEqual({ ftw_versions: [], drivers: [] })
     expect(data.fleet.dimensions).toEqual({})
+    expect(JSON.stringify(data.fleet)).not.toContain('v1.16.1-beta.22')
+    expect(JSON.stringify(data.fleet)).not.toContain('easee_cloud')
     expect(JSON.stringify(data.fleet)).not.toContain('SE3')
     expect(JSON.stringify(data.fleet)).not.toContain('5-15')
     expect(JSON.stringify(data.fleet)).not.toContain('0-1m')
@@ -179,6 +180,160 @@ describe('project stats Worker', () => {
     )
     expect(response.status).toBe(401)
     expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM relay_snapshots').first('count')).toBe(0)
+  })
+
+  it('does not let a replayed older fleet snapshot replace newer daily totals', async () => {
+    const now = new Date()
+    const earlier = new Date(now.getTime() - 60_000)
+    const olderPayload = relayPayload(earlier, 1)
+    const newerPayload = relayPayload(now, 2)
+
+    expect((await ingestRelay(await relayRequest(olderPayload, earlier), env, earlier.getTime())).status).toBe(204)
+    expect((await ingestRelay(await relayRequest(newerPayload, now), env, now.getTime())).status).toBe(204)
+    expect((await ingestRelay(await relayRequest(olderPayload, earlier), env, now.getTime())).status).toBe(204)
+
+    const stored = await env.DB.prepare('SELECT reports, observed_at FROM fleet_daily')
+      .first<{ reports: number; observed_at: string }>()
+    expect(stored).toEqual({ reports: 2, observed_at: now.toISOString() })
+  })
+
+  it('rejects expired signatures, stale observations and oversized bodies', async () => {
+    const now = new Date()
+    const expired = new Date(now.getTime() - 301_000)
+    const stale = new Date(now.getTime() - 15 * 60_000 - 1)
+
+    expect(
+      (await ingestRelay(await relayRequest(relayPayload(now, 1), expired), env, now.getTime())).status
+    ).toBe(401)
+    expect(
+      (await ingestRelay(await relayRequest(relayPayload(stale, 1), now), env, now.getTime())).status
+    ).toBe(400)
+    expect(
+      (
+        await ingestRelay(
+          new Request('https://stats.ftw.energy/api/ingest/relay', {
+            method: 'POST',
+            body: 'x'.repeat(256 * 1024 + 1),
+          }),
+          env,
+          now.getTime()
+        )
+      ).status
+    ).toBe(413)
+  })
+
+  it('deletes fleet aggregates outside the 90 UTC-day window during ingest', async () => {
+    const now = new Date('2026-08-16T12:00:00.000Z')
+    await env.DB.prepare(
+      `INSERT INTO fleet_daily (date, reports, dimensions_json, observed_at)
+       VALUES (?, ?, ?, ?)`
+    )
+      .bind('2026-05-18', 1, '{}', '2026-05-18T12:00:00.000Z')
+      .run()
+
+    expect((await ingestRelay(await relayRequest(relayPayload(now, 1), now), env, now.getTime())).status).toBe(204)
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM fleet_daily').first('count')).toBe(1)
+    expect(await env.DB.prepare('SELECT date FROM fleet_daily').first('date')).toBe('2026-08-16')
+  })
+
+  it('deletes every stored series outside its declared retention window', async () => {
+    const nowMs = Date.parse('2026-08-16T12:00:00.000Z')
+    expect(retentionCutoffs(nowMs)).toEqual({
+      githubSnapshots: '2026-05-18T12:00:00.000Z',
+      githubTraffic: '2026-07-18',
+      githubDiscovery: '2026-07-18',
+      siteTraffic: '2026-08-09',
+      relaySnapshots: '2026-05-18T12:00:00.000Z',
+      fleetDaily: '2026-05-19',
+      collectorRuns: '2026-05-18T12:00:00.000Z',
+    })
+
+    await env.DB.batch([
+      ...['2026-05-17T12:00:00.000Z', '2026-05-18T12:00:00.000Z'].map((captured) =>
+        env.DB
+          .prepare(
+            `INSERT INTO github_snapshots
+              (repo, captured_hour, captured_at, stars, forks, watchers, open_prs, draft_prs,
+               dependency_prs, open_issues, merged_prs_30d, closed_issues_30d, contributors)
+             VALUES ('ftw', ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)`
+          )
+          .bind(captured, captured)
+      ),
+      ...['2026-07-17', '2026-07-18'].map((date) =>
+        env.DB
+          .prepare(
+            `INSERT INTO github_traffic_daily
+              (repo, date, views, unique_visitors, clones, unique_cloners, observed_at)
+             VALUES ('ftw', ?, 0, 0, 0, 0, ?)`
+          )
+          .bind(date, `${date}T12:00:00.000Z`)
+      ),
+      ...['2026-07-17', '2026-07-18'].map((date) =>
+        env.DB
+          .prepare(
+            `INSERT INTO github_referrers (repo, date, referrer, visits, unique_visitors)
+             VALUES ('ftw', ?, 'github.com', 0, 0)`
+          )
+          .bind(date)
+      ),
+      ...['2026-07-17', '2026-07-18'].map((date) =>
+        env.DB
+          .prepare(
+            `INSERT INTO github_paths (repo, date, path, title, views, unique_visitors)
+             VALUES ('ftw', ?, '/', 'FTW', 0, 0)`
+          )
+          .bind(date)
+      ),
+      ...['2026-08-08', '2026-08-09'].map((date) =>
+        env.DB
+          .prepare(
+            `INSERT INTO site_traffic_daily
+              (date, hostname, requests, visits, response_bytes, sample_interval, observed_at)
+             VALUES (?, 'app.ftw.energy', 0, 0, 0, 1, ?)`
+          )
+          .bind(date, `${date}T12:00:00.000Z`)
+      ),
+      ...['2026-05-17T12:00:00.000Z', '2026-05-18T12:00:00.000Z'].map((observed) =>
+        env.DB
+          .prepare(
+            `INSERT INTO relay_snapshots
+              (observed_at, received_at, uptime_seconds, rooms, sockets, frames_routed, bytes_routed)
+             VALUES (?, ?, 0, 0, 0, 0, 0)`
+          )
+          .bind(observed, observed)
+      ),
+      ...['2026-05-18', '2026-05-19'].map((date) =>
+        env.DB
+          .prepare(
+            `INSERT INTO fleet_daily (date, reports, dimensions_json, observed_at)
+             VALUES (?, 0, '{}', ?)`
+          )
+          .bind(date, `${date}T12:00:00.000Z`)
+      ),
+      ...['2026-05-17T12:00:00.000Z', '2026-05-18T12:00:00.000Z'].map((finished) =>
+        env.DB
+          .prepare(
+            `INSERT INTO collector_runs (source, started_at, finished_at, ok, detail)
+             VALUES (?, ?, ?, 1, 'test')`
+          )
+          .bind(`source:${finished}`, finished, finished)
+      ),
+    ])
+
+    await pruneStoredData(env.DB, nowMs)
+
+    for (const table of [
+      'github_snapshots',
+      'github_traffic_daily',
+      'github_referrers',
+      'github_paths',
+      'site_traffic_daily',
+      'relay_snapshots',
+      'fleet_daily',
+      'collector_runs',
+    ]) {
+      expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count')).toBe(1)
+    }
   })
 
   it('rejects fields that could turn an aggregate into an identity log', async () => {
@@ -416,21 +571,22 @@ function relayPayload(now: Date, reports: number): RelayIngestBody {
 }
 
 async function sendRelay(payload: unknown, now: Date): Promise<Response> {
+  return worker.fetch(await relayRequest(payload, now), env)
+}
+
+async function relayRequest(payload: unknown, signedAt: Date): Promise<Request> {
   const body = JSON.stringify(payload)
-  const timestamp = String(Math.floor(now.getTime() / 1000))
+  const timestamp = String(Math.floor(signedAt.getTime() / 1000))
   const signature = await sign(timestamp, body)
-  return worker.fetch(
-    new Request('https://stats.ftw.energy/api/ingest/relay', {
-      method: 'POST',
-      body,
-      headers: {
-        'content-type': 'application/json',
-        'x-ftw-timestamp': timestamp,
-        'x-ftw-signature': `v1=${signature}`,
-      },
-    }),
-    env
-  )
+  return new Request('https://stats.ftw.energy/api/ingest/relay', {
+    method: 'POST',
+    body,
+    headers: {
+      'content-type': 'application/json',
+      'x-ftw-timestamp': timestamp,
+      'x-ftw-signature': `v1=${signature}`,
+    },
+  })
 }
 
 async function sign(timestamp: string, body: string): Promise<string> {

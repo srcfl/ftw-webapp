@@ -2,6 +2,7 @@ import { accessIdentity } from './access.ts'
 import { dashboardDocument } from './dashboard.ts'
 import { collectGitHub } from './github.ts'
 import { ingestRelay } from './relay.ts'
+import { pruneStoredData } from './retention.ts'
 import { collectSiteTraffic, siteCollectorFailureCode } from './site.ts'
 import { dashboardData } from './store.ts'
 import type { AppEnv } from './types.ts'
@@ -88,9 +89,7 @@ export default {
         code: siteCollectorFailureCode(error),
       })
     }
-    await env.DB.prepare('DELETE FROM collector_runs WHERE finished_at < ?')
-      .bind(new Date(controller.scheduledTime - 90 * 24 * 60 * 60_000).toISOString())
-      .run()
+    await pruneStoredData(env.DB, controller.scheduledTime)
     if (failures.length > 0) throw new Error('one or more scheduled collectors failed')
   },
 } satisfies ExportedHandler<AppEnv>
