@@ -213,14 +213,13 @@ export async function dashboardData(
         days: fleetDays,
       }
     : publicFleet(fleetDays, minimum, nowMs)
-  const fleetVisible = privateView || fleetView.state === 'visible'
   const freshness: Record<string, string | null> = {
     github: latestTimestamp(latest.results.map((row) => row.captured_at)),
     github_traffic: latestTimestamp(traffic.results.map((row) => row.observed_at)),
     site: latestTimestamp(siteTraffic.results.map((row) => row.observed_at)),
-    fleet: fleetVisible ? latestTimestamp(fleet.results.map((row) => row.observed_at)) : null,
+    fleet: latestTimestamp(fleet.results.map((row) => row.observed_at)),
+    relay: relay.results[0]?.observed_at ?? null,
   }
-  if (privateView) freshness['relay'] = relay.results[0]?.observed_at ?? null
 
   const result: Record<string, unknown> = {
     schema: 'ftw.project-dashboard/1',
@@ -231,6 +230,7 @@ export async function dashboardData(
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),
     fleet: fleetView,
     relay_status: relayStatus(relay.results, nowMs),
+    relay_activity: publicRelayActivity(relay.results, nowMs),
   }
 
   if (privateView) {
@@ -283,6 +283,10 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
   const cutoff = new Date(nowMs - 30 * 24 * 60 * 60_000).toISOString().slice(0, 10)
   const recent = days.filter((day) => day.date >= cutoff)
   const reports = recent.reduce((total, day) => total + day.reports, 0)
+  const observed = {
+    ftw_versions: observedLabels(recent, 'ftw_versions'),
+    drivers: observedLabels(recent, 'drivers'),
+  }
   if (reports < minimum) {
     return {
       state: reports === 0 ? 'empty' : 'withheld',
@@ -291,6 +295,7 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
       reports_30d: null,
       days: [],
       dimensions: {},
+      observed,
     }
   }
 
@@ -306,6 +311,7 @@ export function publicFleet(days: StoredFleetDay[], minimum: number, nowMs: numb
     reports_30d: reports,
     days: recent.map((day) => ({ date: day.date, reports: day.reports >= minimum ? day.reports : null })),
     dimensions: safeDimensions,
+    observed,
   }
 }
 
@@ -385,9 +391,14 @@ function changeForRepositories(
   return change
 }
 
-function relaySummary(rows: RelayRow[]): Record<string, unknown> {
+function currentRelayWindow(rows: RelayRow[]): {
+  latest: RelayRow
+  baseline: RelayRow
+  frames: number
+  bytes: number
+} | null {
   const latest = rows[0]
-  if (!latest) return { state: 'empty', latest: null, window: null, series: [] }
+  if (!latest) return null
   let baseline = latest
   let previous = latest
   for (const row of rows.slice(1)) {
@@ -402,19 +413,58 @@ function relaySummary(rows: RelayRow[]): Record<string, unknown> {
     previous = row
   }
   return {
-    state: 'visible',
     latest,
+    baseline,
+    frames: Math.max(0, latest.frames_routed - baseline.frames_routed),
+    bytes: Math.max(0, latest.bytes_routed - baseline.bytes_routed),
+  }
+}
+
+function relaySummary(rows: RelayRow[]): Record<string, unknown> {
+  const current = currentRelayWindow(rows)
+  if (!current) return { state: 'empty', latest: null, window: null, series: [] }
+  return {
+    state: 'visible',
+    latest: current.latest,
     window: {
-      from: baseline.observed_at,
-      to: latest.observed_at,
-      frames: latest.frames_routed - baseline.frames_routed,
-      bytes: latest.bytes_routed - baseline.bytes_routed,
+      from: current.baseline.observed_at,
+      to: current.latest.observed_at,
+      frames: current.frames,
+      bytes: current.bytes,
     },
     series: [...rows].reverse().map((row) => ({
       observed_at: row.observed_at,
       rooms: row.rooms,
       sockets: row.sockets,
     })),
+  }
+}
+
+function publicRelayActivity(rows: RelayRow[], nowMs: number): Record<string, unknown> {
+  const current = currentRelayWindow(rows)
+  const status = relayStatus(rows, nowMs)
+  if (!current) {
+    return {
+      ...status,
+      meaning: 'coarse aggregate process activity; not users or unique boxes',
+      window: null,
+      rooms_band: null,
+      sockets_band: null,
+      frames_band: null,
+      bytes_band: null,
+    }
+  }
+  return {
+    ...status,
+    meaning: 'coarse aggregate process activity; not users or unique boxes',
+    window: {
+      from: current.baseline.observed_at,
+      to: current.latest.observed_at,
+    },
+    rooms_band: smallCountBand(current.latest.rooms),
+    sockets_band: smallCountBand(current.latest.sockets),
+    frames_band: eventCountBand(current.frames),
+    bytes_band: byteCountBand(current.bytes),
   }
 }
 
@@ -494,6 +544,42 @@ function visibleCounts(values: Record<string, number>, minimum: number): Record<
       .filter(([, count]) => count >= minimum)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   )
+}
+
+function observedLabels(days: StoredFleetDay[], key: 'ftw_versions' | 'drivers'): string[] {
+  const labels = new Set<string>()
+  for (const day of days) {
+    for (const [label, count] of Object.entries(day[key])) {
+      if (count > 0) labels.add(label)
+    }
+  }
+  return [...labels].sort((a, b) => a.localeCompare(b)).slice(0, 32)
+}
+
+function smallCountBand(value: number): string {
+  if (value === 0) return '0'
+  if (value < 10) return '<10'
+  if (value < 100) return '10–99'
+  if (value < 1000) return '100–999'
+  return '1k+'
+}
+
+function eventCountBand(value: number): string {
+  if (value === 0) return '0'
+  if (value < 1000) return '<1k'
+  if (value < 10_000) return '1k–9.9k'
+  if (value < 100_000) return '10k–99k'
+  if (value < 1_000_000) return '100k–999k'
+  return '1m+'
+}
+
+function byteCountBand(value: number): string {
+  if (value === 0) return '0 B'
+  if (value < 1_000_000) return '<1 MB'
+  if (value < 10_000_000) return '1–9 MB'
+  if (value < 100_000_000) return '10–99 MB'
+  if (value < 1_000_000_000) return '100–999 MB'
+  return '1 GB+'
 }
 
 function publicMinimum(value: string): number {

@@ -42,14 +42,14 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section aria-labelledby="overview-title">
       <div class="section-head">
         <div><p class="eyebrow">OVERVIEW</p><h2 id="overview-title">Project at a glance</h2></div>
-        <p class="section-copy">Public figures are broad aggregates. Exact relay load and fleet groups below ten reports stay private.</p>
+        <p class="section-copy">Public figures are broad aggregates. Small fleet counts stay private; relay activity is shown only as ranges.</p>
       </div>
       <div class="overview-grid">
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
         <article class="metric-card overview-card"><span>Project work</span><strong id="overview-merges">—</strong><small id="overview-prs">Merged PRs in 30d</small></article>
         <article class="metric-card overview-card"><span>Site visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 14 complete days</small></article>
         <article class="metric-card overview-card"><span>Fleet</span><strong id="overview-fleet">—</strong><small id="overview-fleet-note">Daily reports in 30d</small></article>
-        <article class="metric-card overview-card status-card"><span>Relay stats</span><strong id="overview-relay">—</strong><small id="overview-relay-note">Aggregate heartbeat only</small></article>
+        <article class="metric-card overview-card status-card"><span>Relay activity</span><strong id="overview-relay">—</strong><small id="overview-relay-note">Aggregate ranges only</small></article>
       </div>
     </section>
 
@@ -112,18 +112,19 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <p id="fleet-note" class="panel-copy">A report is one daily check-in, not one user or one unique box.</p>
       <div id="fleet-chart" class="bars compact" role="img" aria-label="Daily fleet reports"></div>
       <div id="fleet-dimensions" class="dimension-grid"></div>
+      <p id="fleet-dimension-note" class="footnote">Versions and device integrations describe aggregate reports, not physical device counts.</p>
     </section>
 
     <section id="relay-section" class="panel" aria-labelledby="relay-title" hidden>
-      <div class="panel-head"><div><p class="eyebrow">RELAY</p><h2 id="relay-title">Blind relay load</h2></div><span id="relay-age" class="muted"></span></div>
+      <div class="panel-head"><div><p class="eyebrow">RELAY</p><h2 id="relay-title">Relay activity</h2></div><span id="relay-age" class="muted"></span></div>
       <div class="mini-grid">
-        <div><span>Rooms now</span><strong id="relay-rooms">—</strong></div>
-        <div><span>Sockets now</span><strong id="relay-sockets">—</strong></div>
-        <div><span>Frames in window</span><strong id="relay-frames">—</strong></div>
-        <div><span>Bytes in window</span><strong id="relay-bytes">—</strong></div>
+        <div><span id="relay-rooms-label">Rooms now</span><strong id="relay-rooms">—</strong></div>
+        <div><span id="relay-sockets-label">Sockets now</span><strong id="relay-sockets">—</strong></div>
+        <div><span id="relay-frames-label">Frames in window</span><strong id="relay-frames">—</strong></div>
+        <div><span id="relay-bytes-label">Data in window</span><strong id="relay-bytes">—</strong></div>
       </div>
       <div id="relay-chart" class="bars compact" role="img" aria-label="Relay rooms over time"></div>
-      <p class="footnote">Counts only. The stats service never receives handles, addresses or routed frames.</p>
+      <p id="relay-note" class="footnote">Aggregate ranges only. The stats service never receives handles, addresses or routed frames.</p>
     </section>
 
     <section id="private-grid" class="two-col" hidden>
@@ -186,8 +187,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
   }
 
   function renderFreshness(freshness) {
-    const labels = [['github', 'GitHub'], ['github_traffic', 'Repo traffic'], ['site', 'Site'], ['fleet', 'Fleet']];
-    if (endpoint.includes('admin')) labels.push(['relay', 'Relay']);
+    const labels = [['github', 'GitHub'], ['github_traffic', 'Repo traffic'], ['site', 'Site'], ['fleet', 'Fleet'], ['relay', 'Relay']];
     const host = $('freshness');
     host.replaceChildren();
     for (const [key, label] of labels) {
@@ -232,24 +232,36 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('overview-site-note', typeof visits === 'number' ? 'Last 14 complete days' : 'First daily count pending');
 
     const fleet = data.mode === 'private' ? privateFleet(data.fleet || {}) : (data.fleet || {});
+    const observed = fleet.observed || {};
+    const versions = observed.ftw_versions || [];
+    const integrations = observed.drivers || [];
+    const fleetSignal = versions.length || integrations.length
+      ? (versions.length === 1 ? versions[0] : number(versions.length) + ' versions') +
+        ' · ' + number(integrations.length) + ' integration type' + (integrations.length === 1 ? '' : 's')
+      : null;
     if (data.mode !== 'private' && fleet.state === 'withheld') {
       setText('overview-fleet', '< ' + number(fleet.minimum));
-      setText('overview-fleet-note', 'Reports in 30d · exact count private');
+      setText('overview-fleet-note', fleetSignal || 'Reports in 30d · exact count private');
     } else if (fleet.state === 'empty') {
       setText('overview-fleet', '0');
       setText('overview-fleet-note', 'No daily reports yet');
     } else {
       setText('overview-fleet', number(fleet.reports_30d));
-      setText('overview-fleet-note', 'Daily reports in 30d · not unique boxes');
+      setText('overview-fleet-note', fleetSignal || 'Daily reports in 30d · not unique boxes');
     }
 
-    const relay = data.relay_status || {};
-    const relayLabel = relay.state === 'reporting' ? 'Fresh' : relay.state === 'delayed' ? 'Delayed' : 'Waiting';
-    setText('overview-relay', relayLabel);
-    setText(
-      'overview-relay-note',
-      relay.observed_at ? 'Aggregate heartbeat ' + age(relay.observed_at) : 'First aggregate heartbeat pending'
-    );
+    const relay = data.relay_activity || data.relay_status || {};
+    if (relay.state === 'reporting' && relay.rooms_band) {
+      setText('overview-relay', relay.rooms_band + ' rooms');
+      setText('overview-relay-note', relay.frames_band + ' frames in window · ' + age(relay.observed_at));
+    } else {
+      const relayLabel = relay.state === 'delayed' ? 'Delayed' : 'Waiting';
+      setText('overview-relay', relayLabel);
+      setText(
+        'overview-relay-note',
+        relay.observed_at ? 'Last aggregate ' + age(relay.observed_at) : 'First aggregate pending'
+      );
+    }
   }
 
   function renderRepositories(repositories) {
@@ -397,7 +409,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     const note = $('fleet-note');
     if (!privateMode && view.state === 'withheld') {
       setText('fleet-total', '< ' + number(view.minimum));
-      note.textContent = 'A few reports exist, but public totals stay hidden until ' + view.minimum + ' reports are in the 30-day window.';
+      note.textContent = 'A few reports exist. Versions and integration types appear below, but counts stay hidden until ' + view.minimum + ' reports are in the 30-day window.';
     } else if (view.state === 'empty') {
       setText('fleet-total', '0');
       note.textContent = 'Waiting for the first daily report. A report is not a user or a unique box.';
@@ -405,38 +417,80 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       setText('fleet-total', number(view.reports_30d) + ' / 30d');
       note.textContent = privateMode
         ? 'Private aggregate view. Reports are daily check-ins, not users or unique boxes.'
-        : 'Public counts use a minimum group size of ' + view.minimum + '. Small daily values and labels stay hidden.';
+        : 'Public counts use a minimum group size of ' + view.minimum + '. Version and integration names may appear without counts.';
     }
-    renderBars('fleet-chart', (view.days || []).map((day) => ({ date: day.date, value: day.reports })), number);
+    if (!privateMode && view.state === 'withheld') {
+      const chart = $('fleet-chart');
+      chart.replaceChildren(node('p', 'Daily counts stay hidden while the public sample is small.', 'empty'));
+    } else {
+      renderBars('fleet-chart', (view.days || []).map((day) => ({ date: day.date, value: day.reports })), number);
+    }
     const host = $('fleet-dimensions');
     host.replaceChildren();
-    const labels = { ftw_versions: 'Versions', channels: 'Channels', drivers: 'Drivers', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age' };
+    const labels = privateMode
+      ? { ftw_versions: 'FTW versions', drivers: 'Device integrations', channels: 'Channels', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age' }
+      : { ftw_versions: 'FTW versions', drivers: 'Device integrations' };
     for (const [key, title] of Object.entries(labels)) {
-      const values = Object.entries((view.dimensions && view.dimensions[key]) || {}).sort((a, b) => b[1] - a[1]);
+      const counts = (view.dimensions && view.dimensions[key]) || {};
+      const names = privateMode
+        ? Object.keys(counts)
+        : [...new Set([...(view.observed && view.observed[key] || []), ...Object.keys(counts)])];
+      const values = names
+        .map((label) => [label, counts[label]])
+        .sort((a, b) => typeof b[1] === 'number' && typeof a[1] === 'number' ? b[1] - a[1] : String(a[0]).localeCompare(String(b[0])));
       if (!values.length) continue;
       const group = node('div', undefined, 'dimension');
       group.append(node('h3', title));
       const list = node('div', undefined, 'chips');
-      for (const [label, count] of values.slice(0, 8)) list.append(node('span', label + ' · ' + number(count), 'chip'));
+      for (const [label, count] of values.slice(0, 12)) {
+        const suffix = typeof count === 'number' ? ' · ' + number(count) : '';
+        list.append(node('span', dimensionLabel(key, String(label)) + suffix, 'chip'));
+      }
       group.append(list);
       host.append(group);
     }
+    setText(
+      'fleet-dimension-note',
+      privateMode
+        ? 'Driver totals count integrations present in reports, not physical devices. One report can include more than one integration.'
+        : 'Names show what appeared in aggregate reports. Counts below the public limit stay hidden. An integration type is not a physical device count.'
+    );
   }
 
-  function renderRelay(relay) {
+  function dimensionLabel(key, label) {
+    if (key !== 'drivers') return label;
+    const names = { easee_cloud: 'Easee', growatt: 'Growatt', myuplink: 'myUplink', pixii: 'Pixii', sungrow: 'Sungrow' };
+    return names[label] || label.replaceAll('_', ' ');
+  }
+
+  function renderRelay(relay, privateMode) {
     if (!relay) return;
     $('relay-section').hidden = false;
-    if (relay.state !== 'visible' || !relay.latest) {
+    const chart = $('relay-chart');
+    chart.hidden = !privateMode;
+    if ((privateMode && (relay.state !== 'visible' || !relay.latest)) || (!privateMode && relay.state === 'empty')) {
       setText('relay-age', 'not collected');
-      renderBars('relay-chart', [], number);
+      if (privateMode) renderBars('relay-chart', [], number);
       return;
     }
-    setText('relay-age', age(relay.latest.observed_at));
-    setText('relay-rooms', number(relay.latest.rooms));
-    setText('relay-sockets', number(relay.latest.sockets));
-    setText('relay-frames', number(relay.window && relay.window.frames));
-    setText('relay-bytes', bytes(relay.window && relay.window.bytes));
-    renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
+    if (privateMode) {
+      setText('relay-title', 'Blind relay load');
+      setText('relay-age', age(relay.latest.observed_at));
+      setText('relay-rooms', number(relay.latest.rooms));
+      setText('relay-sockets', number(relay.latest.sockets));
+      setText('relay-frames', number(relay.window && relay.window.frames));
+      setText('relay-bytes', bytes(relay.window && relay.window.bytes));
+      setText('relay-note', 'Counts only. The stats service never receives handles, addresses or routed frames.');
+      renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
+      return;
+    }
+    setText('relay-title', 'Aggregate relay activity');
+    setText('relay-age', relay.state === 'delayed' ? 'delayed · ' + age(relay.observed_at) : age(relay.observed_at));
+    setText('relay-rooms', relay.rooms_band || '—');
+    setText('relay-sockets', relay.sockets_band || '—');
+    setText('relay-frames', relay.frames_band || '—');
+    setText('relay-bytes', relay.bytes_band || '—');
+    setText('relay-note', 'Coarse ranges cover the current relay process, up to the last 24 hours. They are activity bands, not user or household counts.');
   }
 
   function renderPrivate(data) {
@@ -473,7 +527,8 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       renderTraffic(data.github && data.github.traffic, data.github && data.github.repositories);
       renderSite(data.site);
       renderFleet(data.fleet, data.mode === 'private');
-      if (data.mode === 'private') { renderRelay(data.relay); renderPrivate(data); }
+      renderRelay(data.mode === 'private' ? data.relay : data.relay_activity, data.mode === 'private');
+      if (data.mode === 'private') renderPrivate(data);
     } catch (error) {
       const notice = $('notice');
       notice.hidden = false;

@@ -31,17 +31,31 @@ describe('project stats Worker', () => {
     const html = await page.text()
     expect(html).toContain('Project growth, without user tracking.')
     expect(html).toContain('Project at a glance')
+    expect(html).toContain('Aggregate relay activity')
+    expect(html).toContain('Daily counts stay hidden while the public sample is small.')
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await response.json<Record<string, any>>()
     expect(response.status).toBe(200)
     expect(data.mode).toBe('public')
     expect(data.github.repositories).toEqual([])
-    expect(data.fleet).toMatchObject({ state: 'empty', reports_30d: null, minimum: 10 })
+    expect(data.fleet).toMatchObject({
+      state: 'empty',
+      reports_30d: null,
+      minimum: 10,
+      observed: { ftw_versions: [], drivers: [] },
+    })
     expect(data.relay_status).toEqual({
       state: 'empty',
       observed_at: null,
       meaning: 'export heartbeat only; no relay load or user counts',
+    })
+    expect(data.relay_activity).toMatchObject({
+      state: 'empty',
+      rooms_band: null,
+      sockets_band: null,
+      frames_band: null,
+      bytes_band: null,
     })
   })
 
@@ -83,26 +97,46 @@ describe('project stats Worker', () => {
 
   it('accepts a signed aggregate relay body and withholds a small public fleet', async () => {
     const now = new Date()
+    const earlier = new Date(now.getTime() - 60_000)
+    const earlierPayload = relayPayload(earlier, 1)
+    await sendRelay(earlierPayload, earlier)
     const payload = relayPayload(now, 1)
+    payload.relay.uptime_seconds = 360
+    payload.relay.frames_routed = 1540
+    payload.relay.bytes_routed = 2_005_000
     const response = await sendRelay(payload, now)
     expect(response.status).toBe(204)
 
-    const stored = await env.DB.prepare('SELECT rooms, sockets FROM relay_snapshots').first<{
-      rooms: number
-      sockets: number
-    }>()
+    const stored = await env.DB.prepare(
+      'SELECT rooms, sockets FROM relay_snapshots ORDER BY observed_at DESC LIMIT 1'
+    ).first<{ rooms: number; sockets: number }>()
     expect(stored).toEqual({ rooms: 2, sockets: 3 })
 
     const publicResponse = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await publicResponse.json<Record<string, any>>()
     expect(data.fleet).toMatchObject({ state: 'withheld', reports_30d: null, minimum: 10 })
+    expect(data.fleet.observed).toEqual({
+      ftw_versions: ['v1.16.1-beta.22'],
+      drivers: ['easee_cloud'],
+    })
+    expect(data.fleet.dimensions).toEqual({})
+    expect(JSON.stringify(data.fleet)).not.toContain('SE3')
+    expect(JSON.stringify(data.fleet)).not.toContain('5-15')
+    expect(JSON.stringify(data.fleet)).not.toContain('0-1m')
     expect(data.relay_status).toMatchObject({ state: 'reporting', observed_at: now.toISOString() })
-    expect(JSON.stringify(data)).not.toContain('easee_cloud')
-    for (const field of ['rooms', 'sockets', 'frames_routed', 'bytes_routed']) {
-      expect(JSON.stringify(data)).not.toContain('"' + field + '"')
+    expect(data.relay_activity).toMatchObject({
+      state: 'reporting',
+      observed_at: now.toISOString(),
+      rooms_band: '<10',
+      sockets_band: '<10',
+      frames_band: '1k–9.9k',
+      bytes_band: '1–9 MB',
+    })
+    for (const field of ['rooms', 'sockets', 'frames_routed', 'bytes_routed', 'latest', 'series']) {
+      expect(JSON.stringify(data.relay_activity)).not.toContain('"' + field + '"')
     }
-    expect(data.freshness.relay).toBeUndefined()
-    expect(data.freshness.fleet).toBeNull()
+    expect(data.freshness.relay).toBe(now.toISOString())
+    expect(data.freshness.fleet).toBe(now.toISOString())
   })
 
   it('shows a public total at ten reports but still drops small labels', async () => {
@@ -118,6 +152,10 @@ describe('project stats Worker', () => {
     expect(data.fleet.days[0].reports).toBe(10)
     expect(data.fleet.dimensions.channels).toEqual({})
     expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 10 })
+    expect(data.fleet.observed).toEqual({
+      ftw_versions: ['v1.16.1-beta.22'],
+      drivers: ['easee_cloud'],
+    })
   })
 
   it('rejects a changed body after it has been signed', async () => {
@@ -209,7 +247,12 @@ describe('project stats Worker', () => {
   })
 
   it('collects 14 complete days of server-side site traffic without visitor ids', async () => {
-    const nowMs = Date.UTC(2026, 7, 14, 12)
+    const now = new Date()
+    now.setUTCHours(12, 0, 0, 0)
+    const nowMs = now.getTime()
+    const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    const firstDay = new Date(todayMs - 14 * 86400000).toISOString().slice(0, 10)
+    const lastDay = new Date(todayMs - 86400000).toISOString().slice(0, 10)
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://api.cloudflare.com/client/v4/graphql')
       const headers = new Headers(init?.headers)
@@ -243,9 +286,9 @@ describe('project stats Worker', () => {
       'SELECT date, requests, visits, response_bytes, sample_interval FROM site_traffic_daily ORDER BY date'
     ).all<Record<string, unknown>>()
     expect(rows.results).toHaveLength(14)
-    expect(rows.results[0]).toMatchObject({ date: '2026-07-31', requests: 100, visits: 1 })
+    expect(rows.results[0]).toMatchObject({ date: firstDay, requests: 100, visits: 1 })
     expect(rows.results.at(-1)).toMatchObject({
-      date: '2026-08-13',
+      date: lastDay,
       requests: 113,
       visits: 14,
       response_bytes: 14000,

@@ -5,11 +5,14 @@ configured GitHub repositories, reads server-side traffic counts for
 `ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
-The public view shows repository data, site traffic, a relay export heartbeat
-and privacy-bounded fleet totals. It never shows relay load. Fleet totals stay
-hidden until at least `PUBLIC_MIN_REPORTS` reports exist in the chosen period.
-A report is one daily check-in, not one user or one box. The private view may
-show smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
+The public view shows repository data, site traffic, coarse relay activity and
+privacy-bounded fleet data. Relay rooms, sockets, frames and bytes appear only
+as ranges. Fleet versions and device integration types may appear without
+counts, while totals and per-label counts stay hidden until at least
+`PUBLIC_MIN_REPORTS` reports exist in the chosen period. Battery, price-zone and
+install-age labels also stay hidden below that limit. A report is one daily
+check-in, not one user or one box. The private view may show smaller aggregate
+counts, but it requires a valid Cloudflare Access JWT.
 
 The service never accepts routed frames, room handles, box ids, serials, IP
 addresses, site names, or raw fleet reports. The relay signs one body made from
@@ -70,6 +73,9 @@ every five minutes.
   count the same person more than once.
 - Contributor identities are also per repository and include bots. The same
   person can appear in more than one repository total.
-- Fleet reports are daily reports, not users or unique installs.
-- Relay rooms and sockets are current aggregate process counts. Frames and
-  bytes are totals since the relay process started.
+- Fleet reports are daily reports, not users or unique installs. Public version
+  and device integration names show which broad labels appeared in those
+  reports. A device integration is a type, not a count of physical devices.
+- Public relay figures are coarse ranges over the current relay process, capped
+  to the last 24 hours of stored snapshots. The private view shows current room
+  and socket counts plus frame and byte deltas for the same window.
