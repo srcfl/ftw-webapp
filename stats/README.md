@@ -2,7 +2,7 @@
 
 This Worker keeps project growth data in one small D1 database. It polls the
 configured GitHub repositories, reads server-side traffic counts for
-`ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
+`app.ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
 The public view shows repository data, site traffic, coarse relay activity and
@@ -38,9 +38,11 @@ npx wrangler secret put RELAY_INGEST_SECRET --config stats/wrangler.jsonc
 
 Set `CLOUDFLARE_ZONE_ID` as a Worker variable. Give the Cloudflare token
 `Account > Account Analytics > Read` and make sure its resource scope includes
-the `ftw.energy` zone. The hourly query asks for Cloudflare's server-side
-visits, requests and response bytes for the last 14 complete UTC days. It sends
-no browser script and stores no request rows, IP addresses or visitor ids.
+the `ftw.energy` zone. The hourly collection asks for Cloudflare's server-side
+visits, requests and response bytes for `app.ftw.energy` over the last 7 complete
+UTC days. It uses one aggregate query per day to fit the zone's one-day query
+limit. It sends no
+browser script and stores no request rows, IP addresses or visitor ids.
 
 The GitHub repository snapshot and site query run each hour. GitHub traffic
 runs once a day because GitHub exposes it as a rolling daily window. The relay

@@ -252,7 +252,7 @@ export async function dashboardData(
 }
 
 function siteSummary(rows: SiteTrafficRow[], hostname: string, nowMs: number): Record<string, unknown> {
-  const cutoff = new Date(nowMs - 14 * 24 * 60 * 60_000).toISOString().slice(0, 10)
+  const cutoff = new Date(nowMs - 7 * 24 * 60 * 60_000).toISOString().slice(0, 10)
   const recent = rows.filter((row) => row.date >= cutoff)
   const days = recent.map((row) => ({
     date: row.date,
@@ -269,11 +269,11 @@ function siteSummary(rows: SiteTrafficRow[], hostname: string, nowMs: number): R
     totals:
       days.length > 0
         ? {
-            visits_14d: recent.reduce((sum, row) => sum + row.visits, 0),
-            requests_14d: recent.reduce((sum, row) => sum + row.requests, 0),
-            response_bytes_14d: recent.reduce((sum, row) => sum + row.response_bytes, 0),
+            visits_7d: recent.reduce((sum, row) => sum + row.visits, 0),
+            requests_7d: recent.reduce((sum, row) => sum + row.requests, 0),
+            response_bytes_7d: recent.reduce((sum, row) => sum + row.response_bytes, 0),
           }
-        : { visits_14d: null, requests_14d: null, response_bytes_14d: null },
+        : { visits_7d: null, requests_7d: null, response_bytes_7d: null },
     days,
     note: 'Visits are entry visits, not unique people. Cloudflare may sample these server-side counts.',
   }

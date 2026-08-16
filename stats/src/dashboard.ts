@@ -47,7 +47,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <div class="overview-grid">
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
         <article class="metric-card overview-card"><span>Project work</span><strong id="overview-merges">—</strong><small id="overview-prs">Merged PRs in 30d</small></article>
-        <article class="metric-card overview-card"><span>Site visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 14 complete days</small></article>
+        <article class="metric-card overview-card"><span>Site visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 7 complete days</small></article>
         <article class="metric-card overview-card"><span>Fleet</span><strong id="overview-fleet">—</strong><small id="overview-fleet-note">Daily reports in 30d</small></article>
         <article class="metric-card overview-card status-card"><span>Relay activity</span><strong id="overview-relay">—</strong><small id="overview-relay-note">Aggregate ranges only</small></article>
       </div>
@@ -83,7 +83,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section class="panel" aria-labelledby="site-title">
       <div class="panel-head">
         <div><p class="eyebrow">FTW.ENERGY</p><h2 id="site-title">Server-side site traffic</h2></div>
-        <span class="muted">Last 14 complete days</span>
+        <span class="muted">Last 7 complete days</span>
       </div>
       <div class="mini-grid site-grid">
         <div><span>Visits</span><strong id="site-visits">—</strong></div>
@@ -227,9 +227,9 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('overview-prs', 'Merged PRs in 30d · ' + number(totals.open_prs) + ' open now');
 
     const site = data.site || {};
-    const visits = site.totals && site.totals.visits_14d;
+    const visits = site.totals && site.totals.visits_7d;
     setText('overview-visits', number(visits));
-    setText('overview-site-note', typeof visits === 'number' ? 'Last 14 complete days' : 'First daily count pending');
+    setText('overview-site-note', typeof visits === 'number' ? 'Last 7 complete days' : 'First daily count pending');
 
     const fleet = data.mode === 'private' ? privateFleet(data.fleet || {}) : (data.fleet || {});
     const observed = fleet.observed || {};
@@ -379,9 +379,9 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
 
   function renderSite(site) {
     const totals = site && site.totals || {};
-    setText('site-visits', number(totals.visits_14d));
-    setText('site-requests', number(totals.requests_14d));
-    setText('site-bytes', bytes(totals.response_bytes_14d));
+    setText('site-visits', number(totals.visits_7d));
+    setText('site-requests', number(totals.requests_7d));
+    setText('site-bytes', bytes(totals.response_bytes_7d));
     renderBars('site-chart', (site && site.days || []).map((day) => ({ date: day.date, value: day.visits })), number);
     setText(
       'site-note',

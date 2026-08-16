@@ -246,52 +246,61 @@ describe('project stats Worker', () => {
     expect(calls).toHaveLength(7)
   })
 
-  it('collects 14 complete days of server-side site traffic without visitor ids', async () => {
+  it('collects 7 complete days of server-side site traffic without visitor ids', async () => {
     const now = new Date()
     now.setUTCHours(12, 0, 0, 0)
     const nowMs = now.getTime()
     const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-    const firstDay = new Date(todayMs - 14 * 86400000).toISOString().slice(0, 10)
+    const firstDay = new Date(todayMs - 7 * 86400000).toISOString().slice(0, 10)
     const lastDay = new Date(todayMs - 86400000).toISOString().slice(0, 10)
+    const trafficWindows: Array<{ start: string; end: string }> = []
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://api.cloudflare.com/client/v4/graphql')
       const headers = new Headers(init?.headers)
       expect(headers.get('authorization')).toBe('Bearer cloudflare-analytics-test-token')
       const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> }
-      expect(body.variables).toEqual({
-        zoneTag: '0123456789abcdef0123456789abcdef',
-        hostname: 'ftw.energy',
-        start: `${firstDay}T00:00:00Z`,
-        end: new Date(todayMs).toISOString(),
-      })
+      expect(body.variables.zoneTag).toBe('0123456789abcdef0123456789abcdef')
+      expect(body.variables.hostname).toBe('app.ftw.energy')
+      const start = body.variables.start!
+      const end = body.variables.end!
+      expect(Date.parse(end) - Date.parse(start)).toBe(86400000)
+      trafficWindows.push({ start, end })
       expect(body.query.match(/httpRequestsAdaptiveGroups/g) ?? []).toHaveLength(1)
       expect(body.query).toContain('orderBy: [datetimeHour_ASC]')
       expect(body.query).toContain('clientRequestHTTPHost: $hostname')
       expect(body.query).toContain('dimensions { datetimeHour }')
-      const traffic = Array.from({ length: 14 }, (_, index) => {
-        const date = new Date(todayMs - (14 - index) * 86400000).toISOString().slice(0, 10)
-        return {
+      const index = Math.floor(
+        (Date.parse(start) - Date.parse(`${firstDay}T00:00:00Z`)) / 86400000
+      )
+      const date = start.slice(0, 10)
+      const traffic = [
+        {
           count: 100 + index,
-          avg: { sampleInterval: index === 13 ? 5 : 1 },
+          avg: { sampleInterval: index === 6 ? 5 : 1 },
           sum: { visits: index + 1, edgeResponseBytes: 1000 * (index + 1) },
           dimensions: { datetimeHour: `${date}T12:00:00Z` },
-        }
-      })
+        },
+      ]
       return githubResponse({ data: { viewer: { zones: [{ traffic }] } }, errors: null })
     })
 
     await collectSiteTraffic(env, nowMs)
 
+    expect(trafficWindows).toHaveLength(7)
+    const starts = trafficWindows.map((window) => window.start).sort()
+    expect(starts[0]).toBe(`${firstDay}T00:00:00Z`)
+    expect(starts.at(-1)).toBe(`${lastDay}T00:00:00Z`)
+
     const rows = await env.DB.prepare(
       'SELECT date, requests, visits, response_bytes, sample_interval FROM site_traffic_daily ORDER BY date'
     ).all<Record<string, unknown>>()
-    expect(rows.results).toHaveLength(14)
+    expect(rows.results).toHaveLength(7)
     expect(rows.results[0]).toMatchObject({ date: firstDay, requests: 100, visits: 1 })
     expect(rows.results.at(-1)).toMatchObject({
       date: lastDay,
-      requests: 113,
-      visits: 14,
-      response_bytes: 14000,
+      requests: 106,
+      visits: 7,
+      response_bytes: 7000,
       sample_interval: 5,
     })
 
@@ -301,7 +310,7 @@ describe('project stats Worker', () => {
       state: 'visible',
       meaning: 'Cloudflare visits, not users or unique people',
       sampled: true,
-      totals: { visits_14d: 105, requests_14d: 1491, response_bytes_14d: 105000 },
+      totals: { visits_7d: 28, requests_7d: 721, response_bytes_7d: 28000 },
     })
     expect(JSON.stringify(data.site)).not.toContain('visitor_id')
   })
@@ -310,7 +319,12 @@ describe('project stats Worker', () => {
     vi.stubGlobal('fetch', async () =>
       githubResponse({
         data: null,
-        errors: [{ message: 'query exceeded the resource budget for an internal account' }],
+        errors: [
+          {
+            message:
+              'zone 0123456789abcdef0123456789abcdef cannot request a time range wider than 1d but your query time range spans 2w',
+          },
+        ],
       })
     )
 
@@ -324,7 +338,7 @@ describe('project stats Worker', () => {
       .bind('site:ftw.energy')
       .first<{ ok: number; detail: string }>()
     expect(run).toEqual({ ok: 0, detail: 'graphql-query-limit' })
-    expect(JSON.stringify(run)).not.toContain('internal account')
+    expect(JSON.stringify(run)).not.toContain('0123456789abcdef0123456789abcdef')
   })
 
   it('retries site traffic on the hourly schedule', async () => {
@@ -360,14 +374,14 @@ describe('project stats Worker', () => {
       env
     )
 
-    expect(siteCalls).toBe(1)
-    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM site_traffic_daily').first('count')).toBe(14)
+    expect(siteCalls).toBe(7)
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM site_traffic_daily').first('count')).toBe(7)
     const run = await env.DB.prepare(
       'SELECT ok, detail FROM collector_runs WHERE source = ? ORDER BY finished_at DESC LIMIT 1'
     )
       .bind('site:ftw.energy')
       .first<{ ok: number; detail: string }>()
-    expect(run).toEqual({ ok: 1, detail: '14-day traffic window' })
+    expect(run).toEqual({ ok: 1, detail: '7-day traffic window' })
   })
 })
 

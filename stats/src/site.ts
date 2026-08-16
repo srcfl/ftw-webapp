@@ -3,8 +3,8 @@ import type { AppEnv } from './types.ts'
 
 const API_URL = 'https://api.cloudflare.com/client/v4/graphql'
 const MAX_RESPONSE_BYTES = 256 * 1024
-const HISTORY_DAYS = 14
-const MAX_HOURLY_GROUPS = HISTORY_DAYS * 24
+const HISTORY_DAYS = 7
+const MAX_HOURLY_GROUPS_PER_DAY = 24
 const ZONE_ID_RE = /^[a-f0-9]{32}$/i
 const HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
 const HOUR_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/
@@ -27,29 +27,32 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
     const token = checkedToken(env.CLOUDFLARE_ANALYTICS_TOKEN)
     const hostname = checkedHostname(env.SITE_HOSTNAME)
     const days = completeDays(nowMs)
-    const lastDay = days[days.length - 1]!
-    const start = `${days[0]}T00:00:00Z`
-    const end = new Date(Date.parse(`${lastDay}T00:00:00Z`) + 24 * 60 * 60_000).toISOString()
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        query: analyticsQuery(),
-        variables: { zoneTag: zoneId, hostname, start, end },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    })
-    if (!response.ok) {
-      await response.body?.cancel()
-      throw new CloudflareRequestError(response.status)
-    }
+    const rows = await Promise.all(
+      days.map(async (date) => {
+        const start = `${date}T00:00:00Z`
+        const end = new Date(Date.parse(start) + 24 * 60 * 60_000).toISOString()
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: analyticsQuery(),
+            variables: { zoneTag: zoneId, hostname, start, end },
+          }),
+          signal: AbortSignal.timeout(15_000),
+        })
+        if (!response.ok) {
+          await response.body?.cancel()
+          throw new CloudflareRequestError(response.status)
+        }
 
-    const text = await boundedResponseText(response)
-    const rows = parseAnalyticsResponse(JSON.parse(text) as unknown, days)
+        const text = await boundedResponseText(response)
+        return parseAnalyticsResponse(JSON.parse(text) as unknown, [date])[0]!
+      })
+    )
     const observedAt = new Date(nowMs).toISOString()
     await env.DB.batch(
       rows.map((row) =>
@@ -75,7 +78,7 @@ export async function collectSiteTraffic(env: AppEnv, nowMs = Date.now()): Promi
         )
       )
     )
-    await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, true, '14-day traffic window')
+    await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, true, '7-day traffic window')
   } catch (error) {
     await saveCollectorRun(env.DB, 'site:ftw.energy', startedAt, false, siteCollectorFailureCode(error))
     throw error
@@ -127,7 +130,7 @@ function parseAnalyticsResponse(value: unknown, days: string[]): SiteDay[] {
   if (!Array.isArray(zones) || zones.length !== 1) throw new TypeError('Cloudflare zone was not unique')
   const zone = record(zones[0], 'Cloudflare zone')
   const groups = zone['traffic']
-  if (!Array.isArray(groups) || groups.length > MAX_HOURLY_GROUPS) {
+  if (!Array.isArray(groups) || groups.length > days.length * MAX_HOURLY_GROUPS_PER_DAY) {
     throw new TypeError('Cloudflare traffic window was not bounded')
   }
 
@@ -222,7 +225,11 @@ function graphQLErrorCode(errors: unknown[]): GraphQLErrorCode {
   if (/(auth|permission|access denied|not authorized|forbidden)/.test(message)) {
     return 'graphql-access-denied'
   }
-  if (/(limit|complex|resource|budget|timeout|too many)/.test(message)) {
+  if (
+    /(limit|complex|resource|budget|timeout|too many|time range|wider than|spans|older than)/.test(
+      message
+    )
+  ) {
     return 'graphql-query-limit'
   }
   return 'graphql-error'
