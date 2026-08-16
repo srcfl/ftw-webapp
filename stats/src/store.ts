@@ -540,7 +540,17 @@ function emptyDimensions(): FleetDimensions {
 function addDimensions(target: FleetDimensions, source: FleetDimensions): void {
   for (const key of Object.keys(target) as Array<keyof FleetDimensions>) {
     for (const [label, count] of Object.entries(source[key])) {
-      target[key][label] = (target[key][label] ?? 0) + count
+      const values = target[key]
+      const previous = Object.prototype.hasOwnProperty.call(values, label) ? values[label]! : 0
+      // A driver label is data, including names such as "constructor" or
+      // "__proto__". Define an own value so Object's inherited keys and legacy
+      // prototype setter cannot change or discard the aggregate.
+      Object.defineProperty(values, label, {
+        value: previous + count,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      })
     }
   }
 }

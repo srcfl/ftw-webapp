@@ -165,6 +165,22 @@ describe('project stats Worker', () => {
     }
   })
 
+  it('counts driver labels that match inherited Object keys', async () => {
+    const now = new Date()
+    const payload = relayPayload(now, 20)
+    payload.fleet.days[0]!.drivers = JSON.parse('{"__proto__":10,"constructor":10}') as Record<string, number>
+    await sendRelay(payload, now)
+
+    const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
+    const data = await response.json<Record<string, any>>()
+
+    expect(Object.prototype.hasOwnProperty.call(data.fleet.dimensions.drivers, '__proto__')).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(data.fleet.dimensions.drivers, 'constructor')).toBe(true)
+    expect(data.fleet.dimensions.drivers['__proto__']).toBe(10)
+    expect(data.fleet.dimensions.drivers['constructor']).toBe(10)
+    expect(data.fleet.observed.drivers).toEqual(['__proto__', 'constructor'])
+  })
+
   it('uses exactly 30 UTC dates in the public fleet window at midday', () => {
     const nowMs = Date.parse('2026-08-16T12:00:00.000Z')
     expect(utcDayCutoff(nowMs, 30, true)).toBe('2026-07-18')
