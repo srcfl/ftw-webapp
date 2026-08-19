@@ -9,11 +9,14 @@
 <script lang="ts">
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
-  import { untrack } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
-  import { flowReadings } from '$lib/state/flow'
+  import { flowReadings, loadpointChargeW, withLoadpointEv } from '$lib/state/flow'
+  import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
+  import { askWhenLive } from '$lib/state/ask.svelte'
+  import { LoadpointsStore } from '$lib/state/loadpoints.svelte'
   import EvPanel from './EvPanel.svelte'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
@@ -61,6 +64,39 @@
     site.session.phase === 'streaming' && site.carrier !== 'cache' && site.srcState === 'live'
   )
 
+  // The chargers, asked over the passthrough so a box that still folds the
+  // car into the house on field 10 can be split the same way the LAN page
+  // splits it. Five seconds is slower than the 1 Hz stream and fast enough
+  // that a charge starting does not sit in the house node for a minute.
+  const chargers = new LoadpointsStore(untrack(() => site))
+  onDestroy(() => chargers.destroy())
+  let chargerEpoch = $state(Math.floor(Date.now() / 5_000))
+  $effect(() => {
+    if (!active) return
+    const t = setInterval(() => {
+      chargerEpoch = Math.floor(Date.now() / 5_000)
+    }, 5_000)
+    return () => clearInterval(t)
+  })
+  askWhenLive(
+    untrack(() => site),
+    () => {
+      if (!active) return null
+      if (!site.session.caps.has(CAP_API_PASSTHROUGH)) return null
+      return `now-ev ${chargerEpoch}`
+    },
+    () => chargers.loadChargers()
+  )
+
+  const flowFields = $derived(withLoadpointEv(site.session.fields, loadpointChargeW(chargers.points)))
+  const headline = $derived(
+    explain({
+      fields: flowFields,
+      dispatchBlockedBy: site.session.dispatchBlockedBy,
+      ceilingW: site.ceilingW,
+    }).headline
+  )
+
   let flow = $state<FtwEnergyFlowElement | null>(null)
   let lastFlow: FtwEnergyFlowElement | null = null
   let lastFlowFields: ReadonlyMap<number, number> | null = null
@@ -72,7 +108,7 @@
   // nobody can see — and because the effect reads the fields as they are
   // when `active` returns, coming back starts from the present.
   $effect(() => {
-    const fields = site.session.fields
+    const fields = flowFields
     if (!active || !flow || (flow === lastFlow && fields === lastFlowFields)) return
     flow.setReadings(flowReadings(fields))
     lastFlow = flow
@@ -210,7 +246,7 @@
   {/if}
 
   <section class="explanation">
-    <p class="headline">{site.explanation.headline}</p>
+    <p class="headline">{headline}</p>
   </section>
 
   <div class="flow">
@@ -225,7 +261,7 @@
   {/if}
 
   {#if liveRole}
-    <LivePanel {site} role={liveRole} onclose={() => (liveRole = null)} />
+    <LivePanel {site} role={liveRole} fields={flowFields} onclose={() => (liveRole = null)} />
   {/if}
 {/if}
 

@@ -22,9 +22,14 @@
     site: SiteStore
     role: LiveRole
     onclose: () => void
+    /**
+     * Readings to plot. The Now view may have put the car back on its own
+     * field; without this the house line would still be house+car.
+     */
+    fields?: ReadonlyMap<number, number>
   }
 
-  let { site, role, onclose }: Props = $props()
+  let { site, role, onclose, fields }: Props = $props()
 
   // What each bubble is, in the terms this panel needs: the field to read,
   // the words for each direction, whether the line may cross zero, and the
@@ -77,7 +82,7 @@
   // The raw signed watts, straight off the current frame. Solar reads
   // negative while generating (site convention); the panel plots and prints
   // its magnitude, because solar only ever produces.
-  const raw = $derived(site.session.fields.get(spec.fid))
+  const raw = $derived((fields ?? site.session.fields).get(spec.fid))
   const plotValue = $derived(
     raw === undefined ? null : spec.signed ? raw : Math.abs(raw)
   )

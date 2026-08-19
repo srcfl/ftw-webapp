@@ -181,7 +181,14 @@ export class LoadpointsStore {
    * has no other way to tell an answer from a swallowed failure. A failed
    * plan read alone does not reject — it is noted and the ask succeeded.
    */
-  async load(): Promise<void> {
+  /**
+   * The chargers, without the plan decoration.
+   *
+   * Now uses this so the live diagram can split the car from the house even
+   * when field 10 on the stream is still idle. The panel's load() asks for
+   * the plan too; that is decoration, and a live overlay must not wait on it.
+   */
+  async loadChargers(): Promise<void> {
     const token = ++this.#token
     this.loading = true
     this.error = null
@@ -208,8 +215,13 @@ export class LoadpointsStore {
     } finally {
       if (token === this.#token) this.loading = false
     }
+  }
+
+  async load(): Promise<void> {
+    await this.loadChargers()
 
     // The decoration, after the panel is safe. Its failure is a note.
+    const token = this.#token
     try {
       const wire = await callBox<{
         plan?: { actions?: WireAction[] }
