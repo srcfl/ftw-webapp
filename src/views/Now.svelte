@@ -9,17 +9,15 @@
 <script lang="ts">
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
-  import { onDestroy, untrack } from 'svelte'
+  import { untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
-  import { flowReadings, loadpointChargeW, withLoadpointEv } from '$lib/state/flow'
+  import { flowReadings, withLoadpointEv } from '$lib/state/flow'
   import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
-  import { askWhenLive } from '$lib/state/ask.svelte'
-  import { LoadpointsStore } from '$lib/state/loadpoints.svelte'
-  import EvPanel from './EvPanel.svelte'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
+  import type { Component } from 'svelte'
 
   interface Props {
     site: SiteStore
@@ -64,31 +62,28 @@
     site.session.phase === 'streaming' && site.carrier !== 'cache' && site.srcState === 'live'
   )
 
-  // The chargers, asked over the passthrough so a box that still folds the
-  // car into the house on field 10 can be split the same way the LAN page
-  // splits it. Five seconds is slower than the 1 Hz stream and fast enough
-  // that a charge starting does not sit in the house node for a minute.
-  const chargers = new LoadpointsStore(untrack(() => site))
-  onDestroy(() => chargers.destroy())
-  let chargerEpoch = $state(Math.floor(Date.now() / 5_000))
+  // Charger watts from /api/loadpoints, for a box whose 1 Hz stream still
+  // folds the car into the house. Fetched in a later chunk so callBox does
+  // not sit in the first frame.
+  let evFromLp = $state(0)
   $effect(() => {
     if (!active) return
-    const t = setInterval(() => {
-      chargerEpoch = Math.floor(Date.now() / 5_000)
-    }, 5_000)
-    return () => clearInterval(t)
+    const s = untrack(() => site)
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void import('$lib/state/now-ev-overlay').then((m) => {
+      if (cancelled) return
+      stop = m.watchLoadpointCharge(s, (w) => {
+        evFromLp = w
+      })
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
   })
-  askWhenLive(
-    untrack(() => site),
-    () => {
-      if (!active) return null
-      if (!site.session.caps.has(CAP_API_PASSTHROUGH)) return null
-      return `now-ev ${chargerEpoch}`
-    },
-    () => chargers.loadChargers()
-  )
 
-  const flowFields = $derived(withLoadpointEv(site.session.fields, loadpointChargeW(chargers.points)))
+  const flowFields = $derived(withLoadpointEv(site.session.fields, evFromLp))
   const headline = $derived(
     explain({
       fields: flowFields,
@@ -115,8 +110,16 @@
     lastFlowFields = fields
   })
 
-  /** The charger's sheet, opened by a tap on its bubble. */
+  /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
+   *  so callBox and the loadpoint store stay out of the first frame. */
   let evOpen = $state(false)
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void }> | null>(null)
+  $effect(() => {
+    if (!evOpen || EvPanel) return
+    void import('./EvPanel.svelte').then((m) => {
+      EvPanel = m.default
+    })
+  })
 
   /** The live-line sheet for one part of the house, or null. */
   let liveRole = $state<LiveRole | null>(null)
@@ -256,7 +259,7 @@
     ></ftw-energy-flow>
   </div>
 
-  {#if evOpen}
+  {#if evOpen && EvPanel}
     <EvPanel {site} onclose={() => (evOpen = false)} />
   {/if}
 
