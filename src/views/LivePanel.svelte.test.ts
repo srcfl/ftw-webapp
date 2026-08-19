@@ -77,6 +77,10 @@ describe('a live line behind a bubble', () => {
     const api = vi.spyOn(site, 'api')
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
+    // Now asks for chargers so the house/car split can match the LAN page.
+    // The live line itself still needs only the stream — clear those asks
+    // before tapping, or they would look like the panel reaching the API.
+    api.mockClear()
 
     openBubble('pv')
     await vi.advanceTimersByTimeAsync(200)

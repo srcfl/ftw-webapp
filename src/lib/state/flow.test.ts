@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { flowReadings } from './flow'
+import { flowReadings, loadpointChargeW, withLoadpointEv } from './flow'
 import { FID } from '$lib/format/explanation'
 
 // The mapping between frozen fields and the vendored hero component. The
@@ -115,5 +115,43 @@ describe('flowReadings', () => {
       (p) => p.id === 'battery'
     )!
     expect(resting.sub).toBe('idle')
+  })
+})
+
+describe('withLoadpointEv', () => {
+  it('leaves a live field 10 alone', () => {
+    const src = fields([...FULL])
+    const out = withLoadpointEv(src, 11_400)
+    expect(out).toBe(src)
+    expect(flowReadings(out).planets.find((p) => p.id === 'ev')!.kw).toBeCloseTo(7.2)
+  })
+
+  it('splits a silent stream so the car is not the house', () => {
+    // The phone bug: field 10 at 0 W, house holding house+car (~12.7 kW).
+    const folded = fields([
+      [FID.GRID_W, 0],
+      [FID.PV_W, -3300],
+      [FID.BATTERY_W, -9900],
+      [FID.LOAD_W, 12_700],
+      [FID.EV_W, 0],
+    ])
+    const out = withLoadpointEv(folded, 11_400)
+    const r = flowReadings(out)
+    expect(r.load).toBeCloseTo(1.3)
+    const ev = r.planets.find((p) => p.id === 'ev')!
+    expect(ev.kw).toBeCloseTo(11.4)
+    expect(ev.sub).toBe('charging')
+  })
+
+  it('draws the EV node when the stream never sent field 10', () => {
+    const without = fields(FULL.filter(([fid]) => fid !== FID.EV_W))
+    const r = flowReadings(withLoadpointEv(without, 7200))
+    expect(r.planets.find((p) => p.id === 'ev')?.kw).toBeCloseTo(7.2)
+  })
+})
+
+describe('loadpointChargeW', () => {
+  it('sums only chargers that are actually drawing', () => {
+    expect(loadpointChargeW([{ powerW: 11_400 }, { powerW: 20 }, { powerW: 0 }])).toBe(11_400)
   })
 })

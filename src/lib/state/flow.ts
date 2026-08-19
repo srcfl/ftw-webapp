@@ -117,3 +117,41 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
 
   return { load: (fields.get(FID.LOAD_W) ?? 0) / 1000, planets }
 }
+
+/**
+ * Charger watts the box's HTTP API already knows, summed.
+ *
+ * Loadpoints carry the same SmoothedW the dashboard uses. Field 10 on the
+ * 1 Hz stream is supposed to be that sum; until a box counts a charger that
+ * cannot take a command, this is the number that stream is missing.
+ */
+export function loadpointChargeW(points: readonly { powerW: number }[]): number {
+  let sum = 0
+  for (const p of points) {
+    if (p.powerW > FLOW_IDLE_W) sum += p.powerW
+  }
+  return sum
+}
+
+/**
+ * Put the car back on its own node when the 1 Hz stream folded it into the
+ * house.
+ *
+ * The overlay fires only when the stream is silent or idle and a loadpoint
+ * is not. A box that already sends field 10 is left alone, so the two
+ * sources cannot fight.
+ */
+export function withLoadpointEv(
+  fields: ReadonlyMap<number, number>,
+  evW: number
+): ReadonlyMap<number, number> {
+  if (evW <= FLOW_IDLE_W) return fields
+  const wire = fields.get(FID.EV_W)
+  if (wire !== undefined && Math.abs(wire) > FLOW_IDLE_W) return fields
+
+  const out = new Map(fields)
+  const load = out.get(FID.LOAD_W) ?? 0
+  out.set(FID.EV_W, Math.round(evW))
+  out.set(FID.LOAD_W, Math.max(0, load - evW))
+  return out
+}
