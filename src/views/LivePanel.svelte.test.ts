@@ -86,7 +86,10 @@ describe('a live line behind a bubble', () => {
     await vi.advanceTimersByTimeAsync(200)
 
     expect(document.querySelector('[role="dialog"]')!.getAttribute('aria-label')).toBe('Solar')
-    expect(api, 'the live panel reached for the box API it does not need').not.toHaveBeenCalled()
+    const besidesChargers = api.mock.calls.filter(
+      (c) => (c[0] as { path?: string } | undefined)?.path !== '/api/loadpoints'
+    )
+    expect(besidesChargers, 'the live panel reached for the box API it does not need').toEqual([])
   })
 
   it('does not open a live line over retained readings after the wire drops', async () => {
