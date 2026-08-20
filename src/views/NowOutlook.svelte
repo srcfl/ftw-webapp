@@ -245,12 +245,18 @@
       {#if savings}
         <div class="tile">
           <span>Saved <small class="ccy">{currency}</small></span>
-          <strong
-            class="num"
-            class:is-export={savings.today.savedMinor >= 0}
-            class:is-import={savings.today.savedMinor < 0}
-          >{formatCompactMinor(savings.today.savedMinor)}</strong>
-          <em class="week">{formatCompactMinor(savings.week.savedMinor)} this week</em>
+          {#if savings.today.available}
+            <strong
+              class="num"
+              class:is-export={savings.today.savedMinor >= 0}
+              class:is-import={savings.today.savedMinor < 0}
+            >{formatCompactMinor(savings.today.savedMinor)}</strong>
+          {:else}
+            <strong class="num">—</strong>
+          {/if}
+          {#if savings.week.available}
+            <em class="week">{formatCompactMinor(savings.week.savedMinor)} this week</em>
+          {/if}
         </div>
       {/if}
     </div>
@@ -484,9 +490,11 @@
     background: var(--energy-export);
   }
 
+  /* Direction first, load after: a phase that both exports and sits on
+     the fuse must still read as a warning, not as a calm storage colour. */
+  .fill.is-out { background: var(--energy-storage); }
   .fill.warn { background: var(--energy-generation); }
   .fill.crit { background: var(--energy-import); }
-  .fill.is-out { background: var(--energy-storage); }
 
   .fallback {
     flex-direction: row;

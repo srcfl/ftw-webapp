@@ -17,6 +17,15 @@ describe('buildSavingsPeriods', () => {
     expect(p.month.savedMinor).toBe(600)
   })
 
+  it('marks today unavailable when the latest day has no prices', () => {
+    const p = buildSavingsPeriods([
+      { day: '2026-07-14', savedOre: 200, resolution: 'slot' },
+      { day: '2026-07-15', savedOre: 0, resolution: 'no_prices' },
+    ])
+    expect(p.today.available).toBe(false)
+    expect(p.week.available).toBe(true)
+  })
+
   it('ignores a row the box did not date', () => {
     expect(toSavingsDay({ saved_ore: 10 })).toBeNull()
     expect(toSavingsDay({ day: '2026-07-15', saved_ore: 12.4 })?.savedOre).toBe(12.4)

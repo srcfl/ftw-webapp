@@ -374,7 +374,11 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
       const soc = num(d.bat_soc)
       planets.push({
         id: `bat-${name}`, corner: 'top-right', title: 'BATTERY', role: 'battery', name,
-        kw: Math.abs(batW) / 1000, toHub: batW < 0,
+        // Signed, as the dashboard sends it: the hero folds several packs
+        // into one bubble by summing kw, then names the total from the
+        // sign. Magnitude here made two discharging packs look like a
+        // charge.
+        kw: batW / 1000, toHub: batW < 0,
         color: bIdle ? 'var(--cyan)' : batW >= 0 ? 'var(--green-e)' : 'var(--red-e)',
         sub: d.observe_only === true ? 'observe only' : bIdle ? 'idle' : batW >= 0 ? 'charging' : 'discharging',
         soc: soc === null ? null : Math.round(soc * 100),

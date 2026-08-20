@@ -222,7 +222,21 @@ describe('flowReadingsFromStatus', () => {
     expect(r.selfPoweredPctToday).toBeCloseTo((1 - 5.2 / 14) * 100)
   })
 
-  it('never hands the component a negative number to draw', () => {
+  it('keeps battery sign so two discharging packs do not look like charging', () => {
+    const r = flowReadingsFromStatus({
+      grid_w: 0,
+      load_w: 3500,
+      drivers: {
+        a: { status: 'ok', bat_w: -2000, bat_soc: 0.4 },
+        b: { status: 'ok', bat_w: -1500, bat_soc: 0.5 },
+      },
+    })
+    const bats = r.planets.filter((p) => p.role === 'battery')
+    expect(bats.reduce((sum, p) => sum + p.kw, 0)).toBeCloseTo(-3.5)
+    expect(bats.every((p) => p.sub === 'discharging')).toBe(true)
+  })
+
+  it('keeps grid, solar and the charger as magnitudes', () => {
     const r = flowReadingsFromStatus({
       grid_w: -3400,
       load_w: 900,
@@ -232,7 +246,7 @@ describe('flowReadingsFromStatus', () => {
         easee: { status: 'ok', ev_w: 0 },
       },
     })
-    for (const p of r.planets) {
+    for (const p of r.planets.filter((x) => x.role !== 'battery')) {
       expect(p.kw, `${p.id} carried the wire's sign into the hero`).toBeGreaterThanOrEqual(0)
     }
     expect(r.planets.find((p) => p.id === 'grid')?.sub).toBe('exporting')
