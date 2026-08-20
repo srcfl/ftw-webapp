@@ -155,4 +155,54 @@ describe('the Now screen', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(fed, 'a changed reading did not reach the diagram').toHaveBeenCalledTimes(1)
   })
+
+  it('draws kWh today on the hero once the dashboard snapshot arrives', async () => {
+    // Frozen fields are five aggregates. The box page is per-driver planets
+    // plus today's totals, from GET /api/status. This is the feed that makes
+    // those two screens the same diagram.
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    render(Now, { props: { site, active: true } })
+    for (let i = 0; i < 100 && !flowEl(); i++) await vi.advanceTimersByTimeAsync(20)
+    expect(flowEl()).not.toBeNull()
+    box.tick(1_000)
+
+    const fed = vi.spyOn(flowEl()!, 'setReadings')
+    await vi.advanceTimersByTimeAsync(2_200)
+
+    const rich = fed.mock.calls
+      .map((c) => c[0] as { selfPoweredPctToday?: number | null; planets?: { id: string }[] })
+      .find((r) => r.selfPoweredPctToday != null)
+    expect(rich, 'the dashboard snapshot never reached the hero').toBeTruthy()
+    expect(rich!.planets?.some((p) => p.id === 'pv-sungrow')).toBe(true)
+  })
+
+  it('draws price, the next plan step, today and the fuse under the house', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    render(Now, { props: { site, active: true } })
+    box.tick(1_000)
+
+    const text = () => document.body.textContent ?? ''
+    for (let i = 0; i < 300 && !/\bFuse\b/.test(text()); i++) {
+      await vi.advanceTimersByTimeAsync(20)
+    }
+
+    expect(text()).toMatch(/What FTW does next/)
+    expect(text()).toMatch(/\bToday\b/)
+    expect(text()).toMatch(/\bFuse\b/)
+    const chart = document.querySelector('ftw-price-chart')
+    expect(chart, 'the compact price chart never mounted').not.toBeNull()
+    expect(chart!.hasAttribute('fed'), 'the chart fetched /api/prices on this origin').toBe(true)
+    expect(chart!.hasAttribute('compact')).toBe(true)
+  })
 })

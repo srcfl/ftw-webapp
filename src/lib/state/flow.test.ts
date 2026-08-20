@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { flowReadings, loadpointChargeW, withLoadpointEv } from './flow'
+import {
+  flowReadings,
+  flowReadingsFromStatus,
+  fmtKwhShort,
+  fuseView,
+  loadpointChargeW,
+  withLoadpointEv,
+  type SiteStatus,
+} from './flow'
 import { FID } from '$lib/format/explanation'
 
 // The mapping between frozen fields and the vendored hero component. The
@@ -153,5 +161,120 @@ describe('withLoadpointEv', () => {
 describe('loadpointChargeW', () => {
   it('sums only chargers that are actually drawing', () => {
     expect(loadpointChargeW([{ powerW: 11_400 }, { powerW: 20 }, { powerW: 0 }])).toBe(11_400)
+  })
+})
+
+const STATUS: SiteStatus = {
+  grid_w: 500,
+  load_w: 970,
+  energy: {
+    today: {
+      import_wh: 5200,
+      export_wh: 12_400,
+      pv_wh: 18_100,
+      load_wh: 14_000,
+      bat_charged_wh: 4100,
+      bat_discharged_wh: 2800,
+    },
+  },
+  drivers: {
+    east: { status: 'ok', pv_w: -1800 },
+    west: { status: 'ok', pv_w: -500 },
+    lynx: { status: 'ok', bat_w: 1800, bat_soc: 0.687 },
+    easee: { status: 'ok', ev_w: 7200 },
+    dead: { status: 'offline', pv_w: -900 },
+  },
+}
+
+describe('flowReadingsFromStatus', () => {
+  it('draws one planet per live driver, not one aggregate per corner', () => {
+    const r = flowReadingsFromStatus(STATUS)
+    expect(r.planets.map((p) => p.id).sort()).toEqual([
+      'bat-lynx',
+      'ev-easee',
+      'grid',
+      'pv-east',
+      'pv-west',
+    ])
+    expect(r.planets.some((p) => p.id === 'pv-dead'), 'an offline inverter became a planet').toBe(
+      false,
+    )
+    expect(r.load).toBeCloseTo(0.97)
+  })
+
+  it('keeps a faulted charger on the diagram, the way the dashboard does', () => {
+    const r = flowReadingsFromStatus({
+      grid_w: 0,
+      load_w: 200,
+      drivers: { easee: { status: 'fault', ev_w: 11_400 } },
+    })
+    expect(r.planets.find((p) => p.id === 'ev-easee')?.kw).toBeCloseTo(11.4)
+  })
+
+  it('writes today onto the bubbles and the self-powered share', () => {
+    const r = flowReadingsFromStatus(STATUS)
+    const grid = r.planets.find((p) => p.id === 'grid')!
+    expect(grid.dailyKwhParts?.map((p) => p.text)).toEqual(['↓ 5.20', '↑ 12.4'])
+    const solar = r.planets.find((p) => p.id === 'pv-east')!
+    expect(solar.dailyKwh).toBe('18.1 kWh')
+    expect(solar.dailyScope).toBe('aggregate')
+    expect(solar.dailyAggregateMembers).toBe(3)
+    expect(r.selfPoweredPctToday).toBeCloseTo((1 - 5.2 / 14) * 100)
+  })
+
+  it('never hands the component a negative number to draw', () => {
+    const r = flowReadingsFromStatus({
+      grid_w: -3400,
+      load_w: 900,
+      drivers: {
+        sungrow: { status: 'ok', pv_w: -2300 },
+        lynx: { status: 'ok', bat_w: -2000, bat_soc: 0.4 },
+        easee: { status: 'ok', ev_w: 0 },
+      },
+    })
+    for (const p of r.planets) {
+      expect(p.kw, `${p.id} carried the wire's sign into the hero`).toBeGreaterThanOrEqual(0)
+    }
+    expect(r.planets.find((p) => p.id === 'grid')?.sub).toBe('exporting')
+    expect(r.planets.find((p) => p.id === 'bat-lynx')?.sub).toBe('discharging')
+    expect(r.planets.find((p) => p.id === 'bat-lynx')?.soc).toBe(40)
+  })
+})
+
+describe('fmtKwhShort', () => {
+  it('matches the dashboard bubble rounding', () => {
+    expect(fmtKwhShort(5.2)).toBe('5.20')
+    expect(fmtKwhShort(12.4)).toBe('12.4')
+    expect(fmtKwhShort(100.6)).toBe('101')
+  })
+})
+
+describe('fuseView', () => {
+  it('draws one bar per live phase', () => {
+    const v = fuseView({
+      fuse: { max_amps: 20, phases: 3, voltage: 230 },
+      phase_amps: [12, -3, 18],
+      phase_powers: [2700, -700, 4100],
+    })
+    expect(v?.phases.map((p) => p.label)).toEqual(['L1', 'L2', 'L3'])
+    expect(v?.phases[2]?.pct).toBeCloseTo(90)
+    expect(v?.phases[1]?.exporting).toBe(true)
+    expect(v?.fallback).toBeNull()
+  })
+
+  it('falls back to throughput when the meter has no phases', () => {
+    const v = fuseView({
+      grid_w: 6900,
+      pv_w: 0,
+      bat_w: 0,
+      fuse: { max_amps: 20, phases: 3, voltage: 230 },
+    })
+    expect(v?.phases).toEqual([])
+    expect(v?.fallback?.amps).toBeCloseTo(10)
+    expect(v?.fallback?.pct).toBeCloseTo(50)
+  })
+
+  it('stays absent without a fuse rating', () => {
+    expect(fuseView({ grid_w: 1000 })).toBeNull()
   })
 })

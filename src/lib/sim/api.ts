@@ -27,7 +27,7 @@
  * test here passed while a real box refused what the app had drawn.
  */
 
-import { DAY_ANCHOR_PERMILLE, sample, stepSoc, type HouseConfig } from './energy'
+import { DAY_ANCHOR_PERMILLE, sample, stepSoc, type HouseConfig, type Reading } from './energy'
 import { OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/messages'
 import { roleHasScope } from '$lib/protocol/contract'
 import { wireBytes } from '$lib/protocol/frame'
@@ -93,6 +93,7 @@ const ROUTES: Record<string, RouteFacts> = {
   // Reads the app makes, and one it never will.
   'GET /api/status': { tier: 'read' },
   'GET /api/energy/daily': { tier: 'read' },
+  'GET /api/savings/daily': { tier: 'read' },
   'GET /api/app-link/devices': { tier: 'read' },
   // A read that answers with a gzipped archive. Priced read because it hands
   // back nothing replayable — the session refuses it later, at the status
@@ -235,6 +236,11 @@ export interface SimApiOptions {
    * loadpoints answer must describe the same household the stream does.
    */
   loadpointState?: () => { holdW: number | null; boostActive: boolean }
+  /**
+   * The live sample the 1 Hz stream is already sending. Status must describe
+   * the same moment or the hero and the charger sheet disagree.
+   */
+  liveReading?: () => Reading | null
 }
 
 const DAY_MS = 86_400_000
@@ -460,7 +466,9 @@ export class SimApi {
   ): ApiAnswer {
     const route = matched.pattern
 
+    if (route === 'GET /api/status') return this.#status()
     if (route === 'GET /api/energy/daily') return this.#energyDaily(req.query)
+    if (route === 'GET /api/savings/daily') return this.#savingsDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()
     if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
     if (route === 'PUT /api/loadpoints/{id}/schedule') {
@@ -536,6 +544,60 @@ export class SimApi {
     // on a box, where a tier is written on the same line as the handler, and
     // no test should lean on it.
     return json(404, { error: 'not found' })
+  }
+
+  /**
+   * The dashboard's own snapshot. Field names match handleStatus: snake_case,
+   * SoC as a 0–1 fraction, energy.today in watt-hours, one object per driver.
+   */
+  #status(): ApiAnswer {
+    const now = this.#opts.now()
+    const live = this.#opts.liveReading?.()
+    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    let r = live ?? sample(this.#opts.house, now, DAY_ANCHOR_PERMILLE, this.#opts.ceilingW)
+    if (!live && door.holdW !== null) {
+      r = { ...r, evW: door.holdW, gridW: r.gridW - r.evW + door.holdW }
+    }
+
+    const todayMidnight = new Date(now).setHours(0, 0, 0, 0)
+    const today = this.#integrate(todayMidnight, now)
+
+    const drivers: Record<string, Record<string, unknown>> = {}
+    if (this.#opts.house.pvPeakW > 0) {
+      drivers['sungrow'] = { status: 'ok', pv_w: r.pvW }
+    }
+    if (this.#opts.house.batteryCapacityWh > 0) {
+      drivers['lynx'] = {
+        status: 'ok',
+        bat_w: r.batteryW,
+        bat_soc: r.batterySocPermille / 1000,
+      }
+    }
+    drivers['easee'] = { status: 'ok', ev_w: r.evW }
+
+    return json(200, {
+      grid_w: r.gridW,
+      pv_w: r.pvW,
+      bat_w: r.batteryW,
+      ev_w: r.evW,
+      load_w: r.loadW,
+      bat_soc: r.batterySocPermille / 1000,
+      fuse: {
+        max_amps: this.#opts.house.fuseA,
+        phases: this.#opts.house.phases,
+        voltage: 230,
+      },
+      phase_amps: Array.from(
+        { length: this.#opts.house.phases },
+        () => r.gridW / 230 / this.#opts.house.phases,
+      ),
+      phase_powers: Array.from(
+        { length: this.#opts.house.phases },
+        () => r.gridW / this.#opts.house.phases,
+      ),
+      energy: { today },
+      drivers,
+    })
   }
 
   /**
@@ -822,6 +884,38 @@ export class SimApi {
     }
 
     return json(200, { days: out, tz: 'Local' })
+  }
+
+  /**
+   * Site savings vs a no-PV/no-battery baseline, as handleSavingsDaily
+   * answers them. Costs are in öre. The numbers are a shape, not a tariff
+   * model: enough for the compact card to have something true to print.
+   */
+  #savingsDaily(query: Record<string, string>): ApiAnswer {
+    let days = 7
+    const asked = Number.parseInt(query['days'] ?? '', 10)
+    if (Number.isFinite(asked) && asked > 0) days = asked
+    if (days > 90) days = 90
+
+    const nowMs = this.#opts.now()
+    const todayMidnight = new Date(nowMs).setHours(0, 0, 0, 0)
+    const out = []
+    for (let i = days - 1; i >= 0; i--) {
+      const dayStart = new Date(todayMidnight).setDate(new Date(todayMidnight).getDate() - i)
+      const dayEnd = Math.min(new Date(dayStart).setDate(new Date(dayStart).getDate() + 1), nowMs)
+      const e = this.#integrate(dayStart, dayEnd)
+      const baselineOre = Math.round((e.load_wh / 1000) * 150)
+      const actualOre = Math.round((e.import_wh / 1000) * 150 - (e.export_wh / 1000) * 60)
+      out.push({
+        day: dayKey(dayStart),
+        ...e,
+        actual_cost_ore: actualOre,
+        baseline_cost_ore: baselineOre,
+        saved_ore: baselineOre - actualOre,
+        resolution: 'slot',
+      })
+    }
+    return json(200, { days: out, tz: 'Local', value_scope: 'site_total' })
   }
 
   #integrate(fromMs: number, toMs: number) {

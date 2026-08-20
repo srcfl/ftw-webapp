@@ -370,6 +370,7 @@ export class SimBox {
         holdW: this.#evHold?.powerW ?? null,
         boostActive: this.#evBoost !== null,
       }),
+      liveReading: () => this.#lastReading,
     })
   }
 
