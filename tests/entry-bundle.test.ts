@@ -131,6 +131,16 @@ describe('what a cold start downloads before it can paint', () => {
     expect(chunkWith(ENCODER)).toContain(ENCODER)
   })
 
+  it('does not carry the Overview cards under Now', () => {
+    // Price, plan, today and the fuse are the rest of a glance, and they
+    // wait until the house has painted. A plain import from Now would put
+    // the price chart on every cold start.
+    expect(launchPath, 'Overview cards entered the static launch closure').not.toContain(
+      'What FTW does next',
+    )
+    expect(chunkWith('What FTW does next')).toContain('What FTW does next')
+  })
+
   it('does not carry the QR decoder', () => {
     // jsQR is 130 kB and runs when a camera is pointed at something. The
     // pairing screen imports it on demand and this is what keeps it there.

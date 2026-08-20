@@ -12,7 +12,7 @@
   import { untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
-  import { flowReadings, withLoadpointEv } from '$lib/state/flow'
+  import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
   import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
@@ -83,6 +83,27 @@
     }
   })
 
+  // The box page's own snapshot. Same later-chunk rule as the charger
+  // overlay: callBox is not on the path to the first frame. Frozen fields
+  // keep drawing until one lands, and after a drop.
+  let status = $state<SiteStatus | null>(null)
+  $effect(() => {
+    if (!active) return
+    const s = untrack(() => site)
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void import('$lib/state/now-status').then((m) => {
+      if (cancelled) return
+      stop = m.watchStatus(s, (next) => {
+        status = next
+      })
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  })
+
   const flowFields = $derived(withLoadpointEv(site.session.fields, evFromLp))
   const headline = $derived(
     explain({
@@ -91,10 +112,13 @@
       ceilingW: site.ceilingW,
     }).headline
   )
+  const liveReadings = $derived(
+    status ? flowReadingsFromStatus(status) : flowReadings(flowFields)
+  )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
   let lastFlow: FtwEnergyFlowElement | null = null
-  let lastFlowFields: ReadonlyMap<number, number> | null = null
+  let lastReadings: typeof liveReadings | null = null
 
   // The component takes data by method, the way the dashboard feeds it.
   // An effect rather than an attribute because setReadings() is the
@@ -103,11 +127,11 @@
   // nobody can see — and because the effect reads the fields as they are
   // when `active` returns, coming back starts from the present.
   $effect(() => {
-    const fields = flowFields
-    if (!active || !flow || (flow === lastFlow && fields === lastFlowFields)) return
-    flow.setReadings(flowReadings(fields))
+    const readings = liveReadings
+    if (!active || !flow || (flow === lastFlow && readings === lastReadings)) return
+    flow.setReadings(readings)
     lastFlow = flow
-    lastFlowFields = fields
+    lastReadings = readings
   })
 
   /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
@@ -118,6 +142,20 @@
     if (!evOpen || EvPanel) return
     void import('./EvPanel.svelte').then((m) => {
       EvPanel = m.default
+    })
+  })
+
+  /** Price, plan, today, fuse — the rest of Overview. Same later-chunk
+   *  rule: none of it sits on the path to the first reading. */
+  let Outlook = $state<Component<{
+    site: SiteStore
+    status: SiteStatus | null
+    active?: boolean
+  }> | null>(null)
+  $effect(() => {
+    if (!active || site.session.fields.size === 0 || Outlook) return
+    void import('./NowOutlook.svelte').then((m) => {
+      Outlook = m.default
     })
   })
 
@@ -258,6 +296,10 @@
     <ftw-energy-flow bind:this={flow} embedded static={live && active ? undefined : true}
     ></ftw-energy-flow>
   </div>
+
+  {#if Outlook}
+    <Outlook {site} {status} {active} />
+  {/if}
 
   {#if evOpen && EvPanel}
     <EvPanel {site} onclose={() => (evOpen = false)} />
