@@ -13,6 +13,13 @@ export type Route = 'now' | 'plan' | 'history' | 'box'
 
 const ROUTES: Route[] = ['now', 'plan', 'history', 'box']
 
+/** Position of a route in the tab bar. The shell reads slide direction from
+ * it: a tap further down the bar arrives from the right, back up it from
+ * the left. */
+export function routeIndex(route: Route): number {
+  return ROUTES.indexOf(route)
+}
+
 function fromHash(hash: string): Route {
   const name = hash.replace(/^#\/?/, '')
   return ROUTES.find((r) => r === name) ?? 'now'

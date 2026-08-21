@@ -335,12 +335,17 @@
   {:else if stage === 'pairing'}
     <h1>Securing this phone</h1>
     <p>Confirm with Face ID or Touch ID if your phone asks.</p>
+    <!-- The ceremony usually answers by itself. When it stalls instead, this
+         is the way out that does not need the OS: the screen steps back, and
+         a result that lands anyway still applies. -->
+    <button class="quiet" onclick={cancel}>Cancel</button>
   {:else if stage === 'demoing'}
     <h1>Starting the demo</h1>
     <p>Loading a simulated home.</p>
   {:else if stage === 'recovering'}
     <h1>Checking</h1>
     <p>Asking your passkey what it can open.</p>
+    <button class="quiet" onclick={cancel}>Cancel</button>
   {:else if stage === 'choosing'}
     <!-- Named by fingerprint as well as label, for the same reason the offer
          above a scanned link is: two homes with the same name are two

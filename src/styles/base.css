@@ -52,11 +52,34 @@ body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  /* iOS Safari's long-press card is a browser affordance on an app shell.
+     .selectable opts back in with the selection it belongs to. */
+  -webkit-touch-callout: none;
 }
 
 .selectable {
   -webkit-user-select: text;
   user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Tap targets answer at tap speed: manipulation drops iOS's double-tap-zoom
+   wait without touching pinch zoom. */
+button,
+a,
+[role='button'],
+label[for],
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+/* One quiet press response for every tappable control, so no component has
+   to style its own :active to avoid feeling dead. */
+button:active:not(:disabled),
+[role='button']:active {
+  opacity: 0.6;
 }
 
 button {
