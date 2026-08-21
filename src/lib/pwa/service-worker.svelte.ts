@@ -49,6 +49,12 @@ export async function registerServiceWorker(): Promise<void> {
     currentRegistration = registration
     armReload()
     watch(registration)
+
+    // A page kept in the foreground never hides, so visibilitychange never
+    // gives it a reason to look for a newer build — it would only learn of
+    // one at the next launch. Check once now; this already runs after `load`,
+    // so nothing moves onto the critical path.
+    void checkForAppUpdate()
   } catch {
     // No worker means no offline launch, and nothing else. Every other path in
     // the app already treats the network as optional, so there is no failure

@@ -45,6 +45,12 @@
 
   let canvas = $state<HTMLCanvasElement | null>(null)
 
+  /** Reduced motion steps straight to each new reading: no easing, no axis
+   *  drift. Read per use, so a mid-session OS change is honoured. */
+  function motionReduced(): boolean {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  }
+
   // The rolling history and the eased leading edge live outside Svelte's
   // reactivity: they change every animation frame, and routing that through
   // signals would be a repaint a frame for nothing on screen to gain.
@@ -72,6 +78,7 @@
   }
 
   function eased(at: number): number {
+    if (motionReduced()) return targetV
     const t = Math.min(1, (at - transitionAt) / EASE_MS)
     const e = 1 - Math.pow(1 - t, 3)
     return prevV + (targetV - prevV) * e
@@ -89,6 +96,11 @@
     const pad = (hi - lo) * 0.08
     lo -= pad
     hi += pad
+    if (motionReduced()) {
+      minY = lo
+      maxY = hi
+      return
+    }
     minY += (lo - minY) * BOUNDS_SPEED
     maxY += (hi - maxY) * BOUNDS_SPEED
   }
@@ -124,11 +136,13 @@
     // The line colour is resolved by the browser from the design role the
     // host set inline; the fill is that same colour, faint. Reading it off
     // the canvas means one source of truth for the hue.
-    const line = getComputedStyle(el).getPropertyValue('--live-line').trim() || color
+    const styles = getComputedStyle(el)
+    const line = styles.getPropertyValue('--live-line').trim() || color
 
-    // The zero line, where the data can sit on both sides of it.
+    // The zero line, where the data can sit on both sides of it. The same
+    // rule the borders read, so neither theme gets a hand-picked grey.
     if (signed && minY < 0 && maxY > 0) {
-      ctx.strokeStyle = 'rgba(128,128,128,0.3)'
+      ctx.strokeStyle = styles.getPropertyValue('--line').trim() || 'rgba(128,128,128,0.3)'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, yOf(0))

@@ -15,3 +15,21 @@ markLinkPhase('app-open')
 addEventListener('load', () => void registerServiceWorker())
 
 export default mount(App, { target })
+
+// The boot script resolves the theme once and never listens, so a switch of
+// the OS scheme mid-session would go unnoticed. Follow it for installs with
+// no stored choice; an explicit choice always wins. Same storage policy as
+// the boot script: blocked storage keeps the theme already resolved.
+try {
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', ({ matches }) => {
+    try {
+      if (!localStorage.getItem('ftw.theme')) {
+        document.documentElement.dataset.theme = matches ? 'light' : 'dark'
+      }
+    } catch {
+      /* Storage blocked: leave the boot script's resolution in place. */
+    }
+  })
+} catch {
+  /* No live media queries here: the boot script's resolution stands. */
+}

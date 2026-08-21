@@ -329,13 +329,15 @@
     margin-bottom: var(--space-3);
   }
 
+  /* Kicker follows the shared .label grammar from base.css; the margin is
+     the only thing this card adds. */
   .kicker {
     font-family: var(--mono);
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-muted);
-    margin-bottom: 4px;
+    margin-bottom: var(--space-1);
   }
 
   h2 {
@@ -429,7 +431,7 @@
     min-height: 74px;
     flex-direction: column;
     justify-content: center;
-    gap: 5px;
+    gap: var(--space-1);
     padding: 12px 14px;
     background: var(--surface-sunken);
     border: 1px solid var(--line);
@@ -439,14 +441,14 @@
   .tile span {
     color: var(--fg-muted);
     font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.1em;
+    font-size: 10px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   .tile strong {
     overflow: hidden;
-    font-size: 1.05rem;
+    font-size: 17px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -482,8 +484,8 @@
   .fallback {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: var(--space-1);
+    padding: var(--pad-card-tight);
     background: var(--surface-sunken);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
@@ -491,26 +493,26 @@
 
   .phase-lab {
     font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.1em;
+    font-size: 10px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-muted);
   }
 
   .phase-val {
-    font-size: 1rem;
+    font-size: 16px;
   }
 
   .bar {
     height: 6px;
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     background: var(--line);
     overflow: hidden;
   }
 
   .fill {
     height: 100%;
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     background: var(--energy-export);
   }
 

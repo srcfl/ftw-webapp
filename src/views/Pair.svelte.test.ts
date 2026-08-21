@@ -130,6 +130,25 @@ describe('bringing a home back from a sealed copy', () => {
     // Still on the screen it started on, with the scan still offered.
     expect(screen.getByRole('button', { name: /open with your passkey/i })).toBeTruthy()
   })
+
+  it('offers a way back when the passkey ceremony stalls', async () => {
+    mock = installMockAuthenticator()
+    // A ceremony that never answers: no sheet ever came and the promise
+    // never settles. The screen must still have an exit that is not the OS.
+    Object.defineProperty(navigator, 'credentials', {
+      value: { get: () => new Promise(() => {}) },
+      configurable: true,
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })))
+
+    render(Pair, { props: { onPaired: vi.fn() } })
+    ;(await screen.findByRole('button', { name: /open with your passkey/i })).click()
+
+    expect(await screen.findByRole('heading', { name: /checking/i })).toBeTruthy()
+    ;(await screen.findByRole('button', { name: /cancel/i })).click()
+    // Back where it started, with every way in offered again.
+    expect(await screen.findByRole('button', { name: /open with your passkey/i })).toBeTruthy()
+  })
 })
 
 /* A phone that still has its home can either open it or scan a fresh QR.

@@ -339,8 +339,8 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgb(0 0 0 / 45%);
-    z-index: 40;
+    background: var(--scrim);
+    z-index: var(--z-overlay);
   }
 
   .sheet {
@@ -348,7 +348,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 41;
+    z-index: var(--z-sheet);
     background: var(--surface-raised);
     border-top: 1px solid var(--line);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
