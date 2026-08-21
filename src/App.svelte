@@ -198,7 +198,8 @@
    *
    * The token makes a slow History import unable to win after a later Box
    * tap. The first tick mounts the target hidden; the second restores that
-   * tab's own scroll position after it becomes the one layout can see.
+   * tab's own scroll position after it becomes the one layout can see —
+   * except Now, which always opens on the house.
    */
   async function showRoute(route: Route): Promise<void> {
     const request = ++routeRequest
@@ -215,7 +216,12 @@
     routeSavedFrom = null
     displayedRoute = route
     await tick()
-    if (request === routeRequest && scrollPane) scrollPane.scrollTop = scrollByRoute[route]
+    if (request === routeRequest && scrollPane) {
+      // Now is a glance at the house. Restoring a scroll that had walked
+      // down to the fuse would hide the thing someone opened the tab for —
+      // the box's own Overview resets to the top for the same reason.
+      scrollPane.scrollTop = route === 'now' ? 0 : scrollByRoute[route]
+    }
   }
 
   $effect(() => {

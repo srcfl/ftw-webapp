@@ -12,6 +12,8 @@ import Now from './Now.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { FID } from '$lib/format/explanation'
+import { planetColor } from '$lib/state/flow'
 
 // jsdom has no canvas 2d context; the panel's chrome is what is under test,
 // not its pixels, so a quiet stub keeps the chart's effect from throwing.
@@ -127,5 +129,32 @@ describe('a live line behind a bubble', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await vi.advanceTimersByTimeAsync(50)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('wears the bubble colour, and does not sit inside the scrolling house', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const site = await streaming()
+
+    const scroller = document.createElement('main')
+    document.body.append(scroller)
+    render(Now, { target: scroller, props: { site } })
+    await vi.advanceTimersByTimeAsync(50)
+
+    scroller.scrollTop = 280
+    openBubble('battery')
+    await vi.advanceTimersByTimeAsync(50)
+
+    const sheet = document.querySelector('[role="dialog"]')
+    expect(sheet, 'the battery bubble opened nothing').not.toBeNull()
+    expect(
+      scroller.contains(sheet),
+      'the sheet stayed in the scroller, so a tap walks the house off screen'
+    ).toBe(false)
+    expect(scroller.scrollTop, 'opening the line scrolled the house away').toBe(280)
+
+    const watts = site.session.fields.get(FID.BATTERY_W)
+    const reading = sheet!.querySelector('.reading')
+    expect(reading?.getAttribute('style') ?? '').toContain(planetColor('battery', watts))
   })
 })

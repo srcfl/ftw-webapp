@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { planHeadline, slotAction, reasonText, formatPrice, modeLabel, modeHelp } from './plan'
+import {
+  planHeadline,
+  planBrief,
+  slotAction,
+  reasonText,
+  formatPrice,
+  modeLabel,
+  modeHelp,
+} from './plan'
 import { formatPrice as boxPrice, unitLabel } from '$vendor/ftw/price-units.js'
 import type { Plan, PlanSlot, PlanReason, ModeInfo } from '$lib/protocol/messages'
 
@@ -116,6 +124,50 @@ describe('planHeadline', () => {
       expect(text.endsWith('.')).toBe(true)
       expect(text[0]).toBe(text[0]!.toUpperCase())
     }
+  })
+})
+
+describe('planBrief', () => {
+  // The Overview card on the box: a command, a clock, a reason — never a
+  // present-tense claim that fights the live reading above it.
+  it('says the act as a command, until the run ends', () => {
+    const p = plan([
+      slot(0, 3000, 'solar_surplus'),
+      slot(1, 3000, 'solar_surplus'),
+      slot(2, 0, 'idle'),
+    ])
+    const b = planBrief(p, T0 + 60_000, { mode: 'planner_passive_arbitrage' })
+    expect(b.action).toBe('Charge battery at 3.0 kW')
+    expect(b.action).not.toMatch(/is charging/)
+    expect(b.time).toMatch(/Now, until/)
+    expect(b.reason).toBe('Spare solar')
+    expect(b.state).toEqual({ label: 'Plan active', tone: 'active' })
+  })
+
+  it('names a future act when the battery is resting now', () => {
+    const p = plan([slot(0, 0, 'reserve_held'), slot(1, -2000, 'expensive_import')])
+    const b = planBrief(p, T0, { mode: 'planner_arbitrage' })
+    expect(b.action).toBe('Use battery at 2.0 kW')
+    expect(b.time).toMatch(/^At /)
+    expect(b.reason).toBe('Power is expensive')
+  })
+
+  it('admits fallback without claiming a live charge', () => {
+    const b = planBrief(plan([slot(0, 3000)], { stale: true }), T0, {
+      mode: 'planner_passive_arbitrage',
+    })
+    expect(b.state.tone).toBe('warn')
+    expect(b.state.label).toBe('Fallback active')
+    expect(b.action).not.toMatch(/is charging/)
+    expect(b.constraint).toMatch(/safe live balancing/)
+  })
+
+  it('says when safety has paused dispatch', () => {
+    const b = planBrief(plan([slot(0, 3000)]), T0, {
+      mode: 'planner_passive_arbitrage',
+      dispatchBlockedBy: ['meter.p1'],
+    })
+    expect(b.constraint).toMatch(/meter stopped reporting/)
   })
 })
 
