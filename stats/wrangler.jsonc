@@ -1,0 +1,41 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ftw-project-stats",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-14",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "stats.ftw.energy",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "GITHUB_OWNER": "srcfl",
+    "GITHUB_REPOS": "ftw,ftw-webapp,device-drivers",
+    "SITE_HOSTNAME": "app.ftw.energy",
+    "PUBLIC_MIN_REPORTS": "10",
+    "CLOUDFLARE_ZONE_ID": "b8e2cf4b19abbeb535cca652750916c9",
+    "ACCESS_TEAM_DOMAIN": "https://sourceful.cloudflareaccess.com",
+    "ACCESS_AUD": "980a936eae5215f4484780b68996a4985f435a0e19cd8d11c13225b3f74844cd"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ftw-project-stats",
+      "database_id": "0c4e65ba-58a8-4ae4-8874-83d130a2f516",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["3 * * * *", "17 0 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
+}
