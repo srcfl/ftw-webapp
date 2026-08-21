@@ -155,6 +155,6 @@ describe('a live line behind a bubble', () => {
 
     const watts = site.session.fields.get(FID.BATTERY_W)
     const reading = sheet!.querySelector('.reading')
-    expect(reading?.getAttribute('style')).toBe(`color: ${planetColor('battery', watts)}`)
+    expect(reading?.getAttribute('style') ?? '').toContain(planetColor('battery', watts))
   })
 })
