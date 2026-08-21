@@ -22,6 +22,7 @@
     type Loadpoint,
   } from '$lib/format/ev'
   import { formatPower } from '$lib/format/power'
+  import { portal } from '$lib/ui/portal'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   interface Props {
@@ -146,11 +147,14 @@
 
 <svelte:window {onkeydown} />
 
+<!-- Parked on the app shell, with the live-line sheet: inside the scrolling
+     view a "fixed" sheet is the bottom of the page. -->
+<div class="layer" use:portal>
 <!-- The backdrop is the close control, as every sheet's is. The sheet itself
      is a dialog, so what is behind it is inert to a screen reader. -->
 <div class="backdrop" onclick={onclose} aria-hidden="true"></div>
 
-<div class="sheet" role="dialog" aria-modal="true" aria-label="EV charger">
+<div class="sheet" role="dialog" aria-modal="true" aria-label="EV charger" tabindex="-1">
   <header>
     <h2>EV charger</h2>
     <button class="close" onclick={onclose} aria-label="Close">Close</button>
@@ -325,8 +329,13 @@
     {/each}
   {/if}
 </div>
+</div>
 
 <style>
+  .layer {
+    isolation: isolate;
+  }
+
   .backdrop {
     position: fixed;
     inset: 0;
@@ -350,6 +359,8 @@
     gap: var(--space-3);
     max-height: 75dvh;
     overflow-y: auto;
+    overflow-anchor: none;
+    outline: none;
   }
 
   header {

@@ -83,6 +83,33 @@ export interface SiteStatus {
 
 const idle = (w: number) => Math.abs(w) <= FLOW_IDLE_W
 
+/** Role colours the hero and the live sheet share, so a tap cannot disagree. */
+export type FlowColorRole = 'grid' | 'pv' | 'battery' | 'ev' | 'load'
+
+/**
+ * The colour a planet (and its live line) wears for this reading.
+ *
+ * Direction on grid and battery, identity on solar / battery-at-rest / the
+ * house. Same tokens the box's dashboard feeds the same component.
+ */
+export function planetColor(role: FlowColorRole, watts: number | undefined): string {
+  if (watts === undefined) {
+    if (role === 'grid' || role === 'pv') return 'var(--fg-muted)'
+    if (role === 'battery') return 'var(--cyan)'
+    if (role === 'ev') return 'var(--white-s)'
+    return 'var(--fg)'
+  }
+  if (role === 'grid') {
+    return idle(watts) ? 'var(--fg-muted)' : watts >= 0 ? 'var(--red-e)' : 'var(--green-e)'
+  }
+  if (role === 'pv') return idle(watts) ? 'var(--fg-muted)' : 'var(--amber)'
+  if (role === 'battery') {
+    return idle(watts) ? 'var(--cyan)' : watts >= 0 ? 'var(--green-e)' : 'var(--red-e)'
+  }
+  if (role === 'ev') return idle(watts) ? 'var(--white-s)' : 'var(--green-e)'
+  return 'var(--fg)'
+}
+
 /**
  * Build the component's readings from the field map.
  *
@@ -107,7 +134,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     planets.push({
       id: 'grid', corner: 'bottom-left', title: 'GRID', role: 'grid',
       kw: g, toHub: gridW >= 0,
-      color: idle(gridW) ? 'var(--fg-muted)' : gridW >= 0 ? 'var(--red-e)' : 'var(--green-e)',
+      color: planetColor('grid', gridW),
       sub: idle(gridW) ? 'balanced' : gridW >= 0 ? 'importing' : 'exporting',
       clickable: true,
     })
@@ -121,7 +148,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     planets.push({
       id: 'pv', corner: 'top-left', title: 'SOLAR', role: 'pv',
       kw: p, toHub: true,
-      color: idle(pvW) ? 'var(--fg-muted)' : 'var(--amber)',
+      color: planetColor('pv', pvW),
       // One-directional: the number already says generating or idle.
       sub: '',
       clickable: true,
@@ -138,9 +165,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     planets.push({
       id: 'battery', corner: 'top-right', title: 'BATTERY', role: 'battery',
       kw: b, toHub: batteryW < 0,
-      // Direction also in the value's colour: charge green (filling),
-      // discharge red (draining), idle the battery's identity cyan.
-      color: idle(batteryW) ? 'var(--cyan)' : batteryW >= 0 ? 'var(--green-e)' : 'var(--red-e)',
+      color: planetColor('battery', batteryW),
       sub: idle(batteryW) ? 'idle' : batteryW >= 0 ? 'charging' : 'discharging',
       soc: socPermille === undefined ? null : Math.round(socPermille / 10),
       clickable: true,
@@ -156,7 +181,7 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     planets.push({
       id: 'ev', corner: 'bottom-right', title: 'EV CHARGER', role: 'ev',
       kw: e, toHub: false,
-      color: active ? 'var(--green-e)' : 'var(--white-s)',
+      color: planetColor('ev', evW),
       sub: active ? 'charging' : 'idle',
       // The one bubble that opens something: the charger's sheet. The hero
       // makes a clickable planet a button with a name, so the tap target
@@ -330,7 +355,7 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
       // Magnitude only: the sign is wire convention. Direction travels as
       // toHub and as the sub line, never as a minus on the number.
       kw: Math.abs(gridW) / 1000, toHub: gridW >= 0,
-      color: gIdle ? 'var(--fg-muted)' : gridW >= 0 ? 'var(--red-e)' : 'var(--green-e)',
+      color: planetColor('grid', gridW),
       sub: gIdle ? 'balanced' : gridW >= 0 ? 'importing' : 'exporting',
       dailyKwhParts: gridDailyParts,
       clickable: true,
@@ -355,11 +380,10 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
     const pvW = num(d.pv_w)
     if (pvW !== null) {
       const pvKw = -pvW / 1000
-      const pvGen = !idle(pvW)
       planets.push({
         id: `pv-${name}`, corner: 'top-left', title: 'SOLAR', role: 'pv', name,
         kw: pvKw, toHub: true,
-        color: pvGen ? 'var(--amber)' : 'var(--fg-muted)',
+        color: planetColor('pv', pvW),
         sub: '',
         dailyKwh: pvDailyStr,
         dailyScope: 'aggregate',
@@ -379,7 +403,7 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
         // sign. Magnitude here made two discharging packs look like a
         // charge.
         kw: batW / 1000, toHub: batW < 0,
-        color: bIdle ? 'var(--cyan)' : batW >= 0 ? 'var(--green-e)' : 'var(--red-e)',
+        color: planetColor('battery', batW),
         sub: d.observe_only === true ? 'observe only' : bIdle ? 'idle' : batW >= 0 ? 'charging' : 'discharging',
         soc: soc === null ? null : Math.round(soc * 100),
         dailyKwhParts: batDailyParts,
@@ -395,7 +419,7 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
       planets.push({
         id: `ev-${name}`, corner: 'bottom-right', title: 'EV CHARGER', role: 'ev', name,
         kw: Math.abs(evW) / 1000, toHub: false,
-        color: active ? 'var(--green-e)' : 'var(--white-s)',
+        color: planetColor('ev', evW),
         sub: active ? 'charging' : 'idle',
         clickable: true,
       })

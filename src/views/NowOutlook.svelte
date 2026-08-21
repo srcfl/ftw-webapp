@@ -9,7 +9,7 @@
   import { onDestroy, onMount, untrack } from 'svelte'
   import { PlanStore } from '$lib/state/plan.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
-  import { planHeadline, reasonText, slotAction } from '$lib/format/plan'
+  import { planBrief } from '$lib/format/plan'
   import { formatEnergy, wholeWh } from '$lib/format/energy'
   import { chartPrices, hasHole } from '$lib/state/price'
   import { callBox } from '$lib/state/box-api'
@@ -52,17 +52,12 @@
     () => plan.load(),
   )
 
-  const headline = $derived(planHeadline(plan.plan, nowMs))
-  const currentSlot = $derived.by(() => {
-    const slots = plan.plan?.slots ?? []
-    return slots.find((s) => nowMs >= s.startMs && nowMs < s.startMs + s.durationMs) ?? null
-  })
-  const nextChange = $derived.by(() => {
-    if (!currentSlot) return null
-    const action = slotAction(currentSlot)
-    const slots = plan.plan?.slots ?? []
-    return slots.find((s) => s.startMs > nowMs && slotAction(s) !== action) ?? null
-  })
+  const brief = $derived(
+    planBrief(plan.plan, nowMs, {
+      mode: plan.actualMode,
+      dispatchBlockedBy: site.session.dispatchBlockedBy,
+    })
+  )
 
   function openPlan(): void {
     location.hash = '#/plan'
@@ -198,20 +193,16 @@
         <p class="kicker">Automation</p>
         <h2>What FTW does next</h2>
       </div>
+      <span class="badge" data-tone={brief.state.tone}>{brief.state.label}</span>
     </div>
-    <p class="plan-action">{headline.text}</p>
-    {#if nextChange}
-      <p class="plan-time">
-        Next change {new Date(nextChange.startMs).toLocaleTimeString(undefined, {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false,
-        })}
-      </p>
+    <p class="plan-action">{brief.action}</p>
+    {#if brief.time}
+      <p class="plan-time">{brief.time}</p>
     {/if}
-    {#if currentSlot}
-      <p class="plan-reason">{reasonText(currentSlot.reason)}.</p>
+    {#if brief.reason}
+      <p class="plan-reason">{brief.reason}.</p>
     {/if}
+    <p class="plan-constraint">{brief.constraint}</p>
     <button class="detail" type="button" onclick={openPlan}>
       Open full plan <span aria-hidden="true">→</span>
     </button>
@@ -312,6 +303,7 @@
     display: grid;
     gap: var(--space-3);
     padding: 0 var(--space-4) var(--space-3);
+    overflow-anchor: none;
   }
 
   .card {
@@ -354,24 +346,56 @@
   }
 
   .plan-action {
-    font-size: 16px;
-    line-height: 1.35;
-    letter-spacing: -0.015em;
+    font-family: var(--mono);
+    font-size: clamp(17px, 2vw, 22px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
     text-wrap: balance;
   }
 
   .plan-time {
-    margin-top: 4px;
+    margin-top: 3px;
     font-family: var(--mono);
     font-size: 11px;
     color: var(--accent);
   }
 
   .plan-reason,
+  .plan-constraint,
   .note {
     margin-top: var(--space-2);
     font-size: 12px;
     color: var(--fg-dim);
+  }
+
+  .plan-constraint {
+    margin-top: 4px;
+    color: var(--fg-muted);
+  }
+
+  .badge {
+    flex: none;
+    padding: 4px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--fg-muted);
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    text-transform: uppercase;
+  }
+
+  .badge[data-tone='active'] {
+    border-color: color-mix(in oklch, var(--energy-export) 55%, var(--line));
+    color: var(--energy-export);
+  }
+
+  .badge[data-tone='warn'] {
+    border-color: color-mix(in oklch, var(--accent) 60%, var(--line));
+    color: var(--accent);
   }
 
   .note {

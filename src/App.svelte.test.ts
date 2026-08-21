@@ -457,6 +457,21 @@ describe('signing out, from the phone', () => {
     ;(await screen.findByRole('button', { name: /^history$/i })).click()
     await vi.waitFor(() => expect(main.scrollTop).toBe(355), { timeout: 4_000 })
   })
+
+  it('opens Now at the house, not where the last glance left off', async () => {
+    // Overview on the box always lands at the top. Restoring a Now scroll
+    // that had walked down to the fuse hid the house — the thing someone
+    // opened the tab for — and made them scroll back up to see it.
+    await houseOnScreen()
+    const main = document.querySelector('main')!
+
+    main.scrollTop = 420
+    ;(await screen.findByRole('button', { name: /^plan$/i })).click()
+    await screen.findByText(/How your home is run/i, undefined, { timeout: 4_000 })
+
+    ;(await screen.findByRole('button', { name: /^now$/i })).click()
+    await vi.waitFor(() => expect(main.scrollTop).toBe(0), { timeout: 4_000 })
+  })
 })
 
 /* The state this whole screen was built for, and the one it used to get wrong.

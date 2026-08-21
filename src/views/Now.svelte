@@ -183,6 +183,19 @@
     return () => el.removeEventListener('ftw-planet-click', onPlanet)
   })
 
+  // A newly mounted dialog can still pull the scroller to itself on some
+  // WebKits. Hold the house where it was for that frame.
+  $effect(() => {
+    if (liveRole === null && !evOpen) return
+    const pane = document.querySelector('main')
+    if (!pane) return
+    const top = pane.scrollTop
+    const id = requestAnimationFrame(() => {
+      if (pane.scrollTop !== top) pane.scrollTop = top
+    })
+    return () => cancelAnimationFrame(id)
+  })
+
   /**
    * The boot phase, said in this screen's own voice.
    *

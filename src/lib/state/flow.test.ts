@@ -124,6 +124,21 @@ describe('flowReadings', () => {
     )!
     expect(resting.sub).toBe('idle')
   })
+
+  it('colours grid and battery by direction, the way the dashboard does', () => {
+    const discharging = flowReadings(fields([[FID.BATTERY_W, -2_000]])).planets.find(
+      (p) => p.id === 'battery'
+    )!
+    expect(discharging.color).toBe('var(--red-e)')
+    const charging = flowReadings(fields([[FID.BATTERY_W, 1_800]])).planets.find(
+      (p) => p.id === 'battery'
+    )!
+    expect(charging.color).toBe('var(--green-e)')
+    const exporting = flowReadings(fields([[FID.GRID_W, -800]])).planets[0]!
+    expect(exporting.color).toBe('var(--green-e)')
+    const importing = flowReadings(fields([[FID.GRID_W, 800]])).planets[0]!
+    expect(importing.color).toBe('var(--red-e)')
+  })
 })
 
 describe('withLoadpointEv', () => {

@@ -198,6 +198,8 @@ describe('the Now screen', () => {
     }
 
     expect(text()).toMatch(/What FTW does next/)
+    expect(text()).toMatch(/Plan active|Fallback active|Manual|Checking/)
+    expect(text()).not.toMatch(/The battery is charging/)
     expect(text()).toMatch(/\bToday\b/)
     expect(text()).toMatch(/\bFuse\b/)
     const chart = document.querySelector('ftw-price-chart')

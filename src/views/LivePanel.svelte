@@ -11,8 +11,10 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import LiveChart from '$lib/ui/LiveChart.svelte'
+  import { portal } from '$lib/ui/portal'
   import { formatPower } from '$lib/format/power'
   import { FID } from '$lib/format/explanation'
+  import { planetColor, type FlowColorRole } from '$lib/state/flow'
   import type { SiteStore } from '$lib/state/site.svelte'
 
   /** Which bubble was tapped. Everything else follows from it. */
@@ -32,17 +34,15 @@
   let { site, role, onclose, fields }: Props = $props()
 
   // What each bubble is, in the terms this panel needs: the field to read,
-  // the words for each direction, whether the line may cross zero, and the
-  // colour it carries on the hero. Positive is into the site throughout,
-  // FTW's one convention — the words below are the only place a person meets
-  // a direction, never a minus sign.
+  // the words for each direction, and whether the line may cross zero.
+  // Colour is not listed here — it is the same function the hero uses, so
+  // a discharging battery cannot be red on the house and cyan on its line.
   const SPECS: Record<
     LiveRole,
     {
       title: string
       fid: number
       signed: boolean
-      color: string
       /** value → the sentence under the big number. */
       words: (w: number) => string
     }
@@ -51,28 +51,24 @@
       title: 'Grid',
       fid: FID.GRID_W,
       signed: true,
-      color: 'var(--red-e)',
       words: (w) => (Math.abs(w) < 20 ? 'balanced' : w > 0 ? 'drawing from the grid' : 'exporting to the grid'),
     },
     pv: {
       title: 'Solar',
       fid: FID.PV_W,
       signed: false,
-      color: 'var(--amber)',
       words: (w) => (Math.abs(w) < 20 ? 'not producing' : 'producing'),
     },
     battery: {
       title: 'Battery',
       fid: FID.BATTERY_W,
       signed: true,
-      color: 'var(--cyan)',
       words: (w) => (Math.abs(w) < 20 ? 'resting' : w > 0 ? 'charging' : 'discharging'),
     },
     load: {
       title: 'Home',
       fid: FID.LOAD_W,
       signed: false,
-      color: 'var(--fg)',
       words: () => 'used by the house',
     },
   }
@@ -86,6 +82,12 @@
   const plotValue = $derived(
     raw === undefined ? null : spec.signed ? raw : Math.abs(raw)
   )
+  const color = $derived(planetColor(role as FlowColorRole, raw))
+  const socPct = $derived.by(() => {
+    if (role !== 'battery') return null
+    const permille = (fields ?? site.session.fields).get(FID.BATTERY_SOC)
+    return permille === undefined ? null : Math.round(permille / 10)
+  })
 
   // The line moves on news and freezes on silence. uptimeMs advances once
   // per real frame, so it is the honest tick — a repeated cache value does
@@ -104,6 +106,11 @@
     site.recentField(spec.fid).map((s) => ({ t: s.t, v: spec.signed ? s.v : Math.abs(s.v) }))
   )
 
+  let sheetEl = $state<HTMLElement | null>(null)
+  $effect(() => {
+    sheetEl?.focus({ preventScroll: true })
+  })
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
   }
@@ -111,31 +118,49 @@
 
 <svelte:window {onkeydown} />
 
-<div class="backdrop" onclick={onclose} aria-hidden="true"></div>
+<!-- Parked on the app shell: inside the scrolling view a "fixed" sheet is
+     the bottom of the page, and opening it walks the house off the screen. -->
+<div class="layer" use:portal>
+  <div class="backdrop" onclick={onclose} aria-hidden="true"></div>
 
-<div class="sheet" role="dialog" aria-modal="true" aria-label={spec.title}>
-  <header>
-    <h2>{spec.title}</h2>
-    <button class="close" onclick={onclose} aria-label="Close">Close</button>
-  </header>
+  <div
+    class="sheet"
+    bind:this={sheetEl}
+    role="dialog"
+    aria-modal="true"
+    aria-label={spec.title}
+    tabindex="-1"
+  >
+    <header>
+      <h2>{spec.title}</h2>
+      <button class="close" onclick={onclose} aria-label="Close">Close</button>
+    </header>
 
-  {#if parts === null}
-    <p class="note">No reading from your box yet.</p>
-  {:else}
-    <p class="reading" style="color: {spec.color}">
-      <span class="value">{parts.text}</span>
-      <span class="unit">{parts.unit}</span>
-    </p>
-    <p class="sub">{spec.words(spec.signed ? (raw ?? 0) : Math.abs(raw ?? 0))}{live ? '' : ' · last known'}</p>
+    {#if parts === null}
+      <p class="note">No reading from your box yet.</p>
+    {:else}
+      <p class="reading" style="color: {color}">
+        <span class="value">{parts.text}</span>
+        <span class="unit">{parts.unit}</span>
+        {#if socPct !== null}
+          <span class="soc">{socPct}%</span>
+        {/if}
+      </p>
+      <p class="sub">{spec.words(spec.signed ? (raw ?? 0) : Math.abs(raw ?? 0))}{live ? '' : ' · last known'}</p>
 
-    <div class="chart">
-      <LiveChart value={plotValue} {tick} signed={spec.signed} color={spec.color} {live} {seed} />
-    </div>
-    <p class="axis">last two minutes</p>
-  {/if}
+      <div class="chart">
+        <LiveChart value={plotValue} {tick} signed={spec.signed} {color} {live} {seed} />
+      </div>
+      <p class="axis">last two minutes</p>
+    {/if}
+  </div>
 </div>
 
 <style>
+  .layer {
+    isolation: isolate;
+  }
+
   .backdrop {
     position: fixed;
     inset: 0;
@@ -149,6 +174,9 @@
     right: 0;
     bottom: 0;
     z-index: 41;
+    max-height: 75dvh;
+    overflow-y: auto;
+    overflow-anchor: none;
     background: var(--surface-raised);
     border-top: 1px solid var(--line);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -157,6 +185,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    outline: none;
   }
 
   header {
@@ -196,6 +225,12 @@
   .unit {
     font-size: 18px;
     color: var(--fg-dim);
+  }
+
+  .soc {
+    margin-left: auto;
+    font-size: 14px;
+    color: var(--cyan);
   }
 
   .sub {
