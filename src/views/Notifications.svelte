@@ -174,7 +174,7 @@
 {:else}
   <p>
     A few words on the lock screen when something at home matters: the car is
-    charged, your box updated itself, or it went quiet. Nothing is sent until
+    charged, a device goes quiet, or the box itself. Nothing is sent until
     you turn this on.
   </p>
   <button

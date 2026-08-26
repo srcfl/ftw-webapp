@@ -12,6 +12,8 @@ export const KINDS = [
   'charging.session_complete',
   'charging.interrupted',
   'update.installed',
+  'driver.offline',
+  'fuse.over_limit',
   'box.unreachable',
 ] as const
 
@@ -33,5 +35,7 @@ export const KIND_LABELS: Record<PushKind, string> = {
   'charging.session_complete': 'When the car finishes charging',
   'charging.interrupted': 'If charging stops before it is done',
   'update.installed': 'When your box updates itself',
+  'driver.offline': 'If a device goes quiet',
+  'fuse.over_limit': 'If the house draws more than the fuse allows',
   'box.unreachable': 'If your box goes out of reach',
 }
