@@ -38,6 +38,7 @@
   import { deviceIdOnBox, openVaultStore } from '$lib/identity/vault'
   import Access from '$views/Access.svelte'
   import Notifications from '$views/Notifications.svelte'
+  import Restart from '$views/Restart.svelte'
 
   interface Props {
     site: SiteStore
@@ -266,6 +267,12 @@
   <!-- Whether this box can reach this phone when the app is closed. A fact
        about the pairing, like the roster above it. -->
   <Notifications {site} />
+
+  <!-- Recovery, not a preference: the same box this phone is paired to,
+       asked to come back up when a device is stuck and the owner is not
+       at home. Owner only, confirmed, the way signing out is. Draws its
+       own rule when visible so a viewer does not get an empty gap. -->
+  <Restart {site} />
 
   <hr />
 

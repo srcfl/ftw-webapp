@@ -48,6 +48,8 @@ const RULE_TYPES = [
   'charging.session_complete',
   'charging.interrupted',
   'update.installed',
+  'driver.offline',
+  'fuse.over_limit',
 ]
 
 /**
@@ -146,6 +148,9 @@ const ROUTES: Record<string, RouteFacts> = {
   'DELETE /api/notifications/subscriptions/{id}': { tier: 'configure' },
   'PUT /api/notifications/rules': { tier: 'configure' },
   'POST /api/notifications/test': { tier: 'configure' },
+
+  // Owner recovery: a late restart is the same instruction, only later.
+  'POST /api/restart': { tier: 'configure' },
 
   // At the box, in the house. A credential, a whole file, or a person needed
   // in the room.
@@ -306,6 +311,8 @@ export class SimApi {
   #pushRules: { enabled: boolean; events: Record<string, unknown>[] } | null = null
   /** How many test pushes were asked for, for a test to look at. */
   #testPushes = 0
+  /** How many times this box was asked to restart, for a test to look at. */
+  #restarts = 0
 
   constructor(opts: SimApiOptions) {
     this.#opts = opts
@@ -372,6 +379,11 @@ export class SimApi {
 
   get testPushes(): number {
     return this.#testPushes
+  }
+
+  /** Restarts this box was asked for, for a test to look at. */
+  get restarts(): number {
+    return this.#restarts
   }
 
   /**
@@ -499,6 +511,10 @@ export class SimApi {
       return json(200, { status: 'sent', to: this.#pushSubscriptions.size })
     }
     if (route === 'GET /api/notifications/history') return this.#pushHistory()
+    if (route === 'POST /api/restart') {
+      this.#restarts += 1
+      return json(202, { status: 'restarting' })
+    }
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year

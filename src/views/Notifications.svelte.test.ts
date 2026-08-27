@@ -155,11 +155,15 @@ describe('the notifications section', () => {
     expect(box.api.pushEnabled, 'subscribed but the box stayed switched off').toBe(true)
     expect(box.api.pushRules['charging.session_complete']).toBe(true)
     expect(box.api.pushRules['charging.interrupted']).toBe(true)
+    expect(box.api.pushRules['driver.offline']).toBe(true)
+    expect(box.api.pushRules['fuse.over_limit']).toBe(true)
 
     // And the section now offers what an enabled phone can do.
     expect(buttonSaying(/Send a test/)).toBeDefined()
     expect(buttonSaying(/Turn off notifications/)).toBeDefined()
     expect(text()).toContain('When the car finishes charging')
+    expect(text()).toContain('If a device goes quiet')
+    expect(text()).toContain('If the house draws more than the fuse allows')
   })
 
   it('shows the box’s own record of what it has sent', async () => {
@@ -186,10 +190,10 @@ describe('the notifications section', () => {
     render(Notifications, { props: { site } })
     await vi.advanceTimersByTimeAsync(500)
 
-    // Three switches: box.unreachable has none — the box cannot gate a
+    // Five switches: box.unreachable has none — the box cannot gate a
     // message about its own absence, so it follows the subscription itself.
     const boxes = [...document.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
-    expect(boxes.length).toBe(3)
+    expect(boxes.length).toBe(5)
 
     // Everything starts off, because the box seeds every rule disabled —
     // sparse by design. Two edits, and no save yet: a toggle is an edit,
