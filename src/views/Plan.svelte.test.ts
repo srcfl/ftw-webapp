@@ -890,3 +890,104 @@ describe('the notice under the price chart', () => {
     expect(document.body.textContent).toMatch(/some hours are missing their price/i)
   })
 })
+
+/* Switching how the house is run.
+ *
+ * The catalogue split (primary plan vs manual drawer) hid the way back:
+ * once Self (manual) was on, nothing said "the plan" in words a person
+ * would tap, the selected card did not say it was selected, and every
+ * card greying out on send read as the tap having done nothing.
+ */
+describe('switching how the home is run', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+  })
+
+  function choice(label: string): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll('button.choice')].find((b) =>
+      b.textContent?.includes(label)
+    ) as HTMLButtonElement | undefined
+  }
+
+  async function mount(opts: { mode?: string; latencyMs?: number } = {}) {
+    vi.spyOn(Date, 'now').mockReturnValue(MORNING)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+    const box = new SimBox({
+      now: () => MORNING,
+      ...(opts.mode ? { mode: opts.mode } : {}),
+    })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: opts.latencyMs ?? 0 }))
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull(), {
+      timeout: 2_000,
+    })
+    return { box, site }
+  }
+
+  it('keeps the plan choices when Self (manual) is on, and offers a way back', async () => {
+    const { box } = await mount({ mode: 'self_consumption' })
+
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
+    const self = choice('Self (manual)')!
+    expect(self.getAttribute('aria-pressed')).toBe('true')
+    expect(self.textContent).toMatch(/in use/i)
+
+    expect(choice('Passive arbitrage'), 'the way back to the plan was missing').toBeTruthy()
+    expect(document.body.textContent).toMatch(/the plan is not running the battery/i)
+
+    const back = [...document.querySelectorAll('button')].find((b) =>
+      /use the plan/i.test(b.textContent ?? '')
+    ) as HTMLButtonElement | undefined
+    expect(back, 'Use the plan was not offered').toBeTruthy()
+    back!.click()
+
+    await vi.waitFor(() => expect(box.mode).toBe('planner_passive_arbitrage'))
+    await vi.waitFor(() =>
+      expect(choice('Passive arbitrage')!.getAttribute('aria-pressed')).toBe('true')
+    )
+    expect(choice('Passive arbitrage')!.textContent).toMatch(/in use/i)
+    expect(document.body.textContent).not.toMatch(/the plan is not running the battery/i)
+  })
+
+  it('marks a tap at once, before the box has confirmed', async () => {
+    const { box } = await mount({ latencyMs: 80 })
+
+    const more = document.querySelector('button.more') as HTMLButtonElement | null
+    expect(more, 'the manual drawer was not offered').toBeTruthy()
+    more!.click()
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
+    const self = choice('Self (manual)')!
+    self.click()
+
+    await Promise.resolve()
+    expect(self!.getAttribute('aria-pressed')).toBe('true')
+    expect(self!.textContent).toMatch(/sending/i)
+    expect(box.mode, 'the box confirmed before the UI had anything to show').not.toBe(
+      'self_consumption'
+    )
+
+    await vi.waitFor(() => expect(box.mode).toBe('self_consumption'))
+    await vi.waitFor(() => expect(self!.textContent).toMatch(/in use/i))
+  })
+
+  it('does not offer Use the plan to a viewer', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(MORNING)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+    const site = new SiteStore('test')
+    site.connect(
+      new LoopbackCarrier(
+        new SimBox({ now: () => MORNING, role: ROLE_VIEWER, mode: 'self_consumption' }),
+        { latencyMs: 0 }
+      )
+    )
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy(), { timeout: 2_000 })
+
+    expect(document.body.textContent).toMatch(/the plan is not running the battery/i)
+    expect(document.body.textContent).not.toMatch(/use the plan/i)
+    expect(choice('Self (manual)')!.disabled).toBe(true)
+    expect(choice('Passive arbitrage')!.disabled).toBe(true)
+  })
+})

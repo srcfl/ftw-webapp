@@ -28,6 +28,11 @@ const SETTLE_MS = 4_000
 export class PlanStore {
   #site: SiteStore
   #timer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Which `setMode` call is current. A tap while another is in flight must
+   * not let the earlier result paint over the later one.
+   */
+  #cmdGen = 0
 
   /**
    * What the box intends to do, read where the session keeps it.
@@ -100,6 +105,28 @@ export class PlanStore {
     const c = this.command
     if (c.kind === 'sending' || c.kind === 'applied' || c.kind === 'unconfirmed') return c.mode
     return this.actualMode
+  }
+
+  /**
+   * True when the shown mode is a manual fallback, not a forecast plan.
+   *
+   * Uses `shownMode` so a tap on "Use the plan" hides the manual banner at
+   * once, rather than waiting for the box to confirm.
+   */
+  get inManual(): boolean {
+    const mode = this.shownMode
+    return mode !== null && this.advancedModes.some((m) => m.key === mode)
+  }
+
+  /**
+   * The recommended plan to return to: the first primary mode, which is
+   * FTW's default (`planner_passive_arbitrage` today).
+   *
+   * The app does not invent a third strategy named "optimal". It offers the
+   * same first primary the box already put at the front of the catalogue.
+   */
+  get planHome(): ModeInfo | null {
+    return this.primaryModes[0] ?? null
   }
 
   /**
@@ -202,13 +229,15 @@ export class PlanStore {
    * the toggle snaps back to the truth.
    */
   async setMode(mode: SiteMode): Promise<void> {
-    if (mode === this.actualMode) return
+    if (mode === this.shownMode) return
 
+    const mine = ++this.#cmdGen
     this.#clearTimer()
     this.command = { kind: 'sending', mode }
 
     try {
       const result: CmdResult = await this.#site.command(OP_SET_MODE, { mode })
+      if (mine !== this.#cmdGen) return
 
       switch (result.state) {
         case 'applied':
@@ -229,13 +258,14 @@ export class PlanStore {
           this.command = { kind: 'failed', help: commandHelp(result) }
       }
     } catch (err) {
+      if (mine !== this.#cmdGen) return
       this.command = {
         kind: 'failed',
         help: err instanceof CommandError ? err.help : "That didn't go through. Try again.",
       }
     }
 
-    this.#settleLater()
+    if (mine === this.#cmdGen) this.#settleLater()
   }
 
   destroy(): void {
