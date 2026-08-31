@@ -89,23 +89,18 @@
 
   function choose(mode: SiteMode) {
     void plan.setMode(mode)
+    // The selected fallback already renders when the drawer is closed.
+    // Folding the extras keeps "Use the plan" on screen instead of
+    // scrolling it off under Idle / Peak / Charge.
+    if (plan.advancedModes.some((m) => m.key === mode)) showAdvanced = false
   }
 
   // FTW's own split: forecast-driven strategies are the choice most people
-  // want, the manual fallbacks are a drawer. Open it when the box *enters*
-  // one of them, so the current setting is never hidden — but only then,
-  // so "Fewer options" is not undone by the next 1 Hz snapshot.
+  // want, the manual fallbacks are a drawer. The current fallback stays on
+  // the page even when the drawer is closed — see selectedAdvanced — so a
+  // house already on Self (manual) never needs the extras opened to see
+  // what is running, or to get back to the plan.
   let showAdvanced = $state(false)
-  let openedFor: SiteMode | null = null
-  $effect(() => {
-    const mode = plan.actualMode
-    const manual = mode !== null && plan.advancedModes.some((m) => m.key === mode)
-    if (manual && openedFor !== mode) {
-      showAdvanced = true
-      openedFor = mode
-    }
-    if (!manual) openedFor = null
-  })
 
   const selectedAdvanced = $derived(
     plan.advancedModes.find((m) => m.key === plan.shownMode) ?? null

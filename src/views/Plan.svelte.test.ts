@@ -936,6 +936,7 @@ describe('switching how the home is run', () => {
 
     expect(choice('Passive arbitrage'), 'the way back to the plan was missing').toBeTruthy()
     expect(document.body.textContent).toMatch(/the plan is not running the battery/i)
+    expect(choice('Peak'), 'the extras were open, hiding the way back').toBeUndefined()
 
     const back = [...document.querySelectorAll('button')].find((b) =>
       /use the plan/i.test(b.textContent ?? '')
@@ -958,18 +959,21 @@ describe('switching how the home is run', () => {
     expect(more, 'the manual drawer was not offered').toBeTruthy()
     more!.click()
     await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
-    const self = choice('Self (manual)')!
-    self.click()
+    choice('Self (manual)')!.click()
 
     await Promise.resolve()
-    expect(self!.getAttribute('aria-pressed')).toBe('true')
-    expect(self!.textContent).toMatch(/sending/i)
+    // Choosing a fallback folds the extras, so the button is the one the
+    // closed drawer keeps on the page — not the node that was just clicked.
+    const self = choice('Self (manual)')!
+    expect(self.getAttribute('aria-pressed')).toBe('true')
+    expect(self.textContent).toMatch(/sending/i)
+    expect(choice('Peak'), 'the extras stayed open after the tap').toBeUndefined()
     expect(box.mode, 'the box confirmed before the UI had anything to show').not.toBe(
       'self_consumption'
     )
 
     await vi.waitFor(() => expect(box.mode).toBe('self_consumption'))
-    await vi.waitFor(() => expect(self!.textContent).toMatch(/in use/i))
+    await vi.waitFor(() => expect(choice('Self (manual)')!.textContent).toMatch(/in use/i))
   })
 
   it('does not offer Use the plan to a viewer', async () => {
