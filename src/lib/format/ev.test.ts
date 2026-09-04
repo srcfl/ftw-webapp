@@ -11,6 +11,12 @@ import {
   daysWord,
   localInputToUtcMinutes,
   utcMinutesToLocalInput,
+  chargeCurrent,
+  ampsToWatts,
+  wattsToAmps,
+  currentReadout,
+  boostActiveSentence,
+  boostStoppedSentence,
   type WireLoadpoint,
 } from './ev'
 
@@ -110,5 +116,133 @@ describe('a charger described in words', () => {
     // convention must not reach the panel.
     const lp = toLoadpoint({ ...WIRE, current_power_w: -12 })
     expect(evStatusSentence(lp)).not.toContain('-')
+  })
+})
+
+describe('the current a hold may ask for', () => {
+  /** What a real box serves beside the fixture: a three-phase 16 A wallbox. */
+  const RANGE: WireLoadpoint = {
+    ...WIRE,
+    min_charge_w: 4140,
+    max_charge_w: 11000,
+    phases: 3,
+    voltage_v: 230,
+  }
+
+  it('reads the range off the box in whole amps', () => {
+    const lp = toLoadpoint(RANGE)
+    expect(chargeCurrent(lp)).toEqual({ minA: 6, maxA: 16, wattsPerAmp: 690, phases: 3 })
+    expect(ampsToWatts(lp, 10)).toBe(6900)
+    expect(currentReadout(lp, 10)).toBe('10 A · 6.9 kW')
+  })
+
+  it('never asks above the ceiling the box declared', () => {
+    // 11 000 W rounds to 16 A, and 16 A back is 11 040 W.
+    const lp = toLoadpoint(RANGE)
+    expect(ampsToWatts(lp, 16)).toBe(11000)
+    expect(currentReadout(lp, 16)).toBe('16 A · 11.0 kW')
+  })
+
+  it('falls back the way the box page does when the box says nothing', () => {
+    // No phases, no voltage, a zero floor and ceiling: three phases at
+    // 230 V, 6–16 A, and nothing to cap the top against.
+    const lp = toLoadpoint({ ...WIRE, min_charge_w: 0, max_charge_w: 0 })
+    expect(chargeCurrent(lp)).toEqual({ minA: 6, maxA: 16, wattsPerAmp: 690, phases: 3 })
+    expect(ampsToWatts(lp, 16)).toBe(11040)
+  })
+
+  it('follows a single-phase charger', () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      min_charge_w: 1380,
+      max_charge_w: 3680,
+      phases: 1,
+      voltage_v: 230,
+    })
+    expect(chargeCurrent(lp)).toEqual({ minA: 6, maxA: 16, wattsPerAmp: 230, phases: 1 })
+    expect(ampsToWatts(lp, 16)).toBe(3680)
+  })
+
+  it('keeps the floor under the ceiling when the box reports them together', () => {
+    const lp = toLoadpoint({ ...RANGE, min_charge_w: 11000 })
+    expect(chargeCurrent(lp)).toMatchObject({ minA: 16, maxA: 17 })
+  })
+
+  it('reads the running hold back in amps', () => {
+    const lp = toLoadpoint({ ...RANGE, manual_active: true, manual_charge_w: 6900 })
+    expect(lp.manualChargeW).toBe(6900)
+    expect(wattsToAmps(lp, lp.manualChargeW!)).toBe(10)
+    // A setpoint beside an inactive hold is not a running hold.
+    expect(
+      toLoadpoint({ ...RANGE, manual_active: false, manual_charge_w: 6900 }).manualChargeW
+    ).toBeNull()
+  })
+})
+
+describe('the boost, in words', () => {
+  const EXPIRES = Date.UTC(2026, 6, 15, 20, 30)
+
+  it('reads the lease off the wire and says it', () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      battery_boost: {
+        state: 'active',
+        active: true,
+        expires_at_ms: EXPIRES,
+        min_battery_soc: 0.3,
+      },
+    })
+    expect(lp.boostActive).toBe(true)
+    expect(lp.boostReservePct).toBe(30)
+    expect(lp.boostExpiresAtMs).toBe(EXPIRES)
+    const s = boostActiveSentence(lp)
+    expect(s).toContain('down to 30 %')
+    expect(s).toContain(
+      `until ${new Date(EXPIRES).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+    )
+    expect(boostStoppedSentence(lp)).toBeNull()
+  })
+
+  it('claims no figure the box did not send', () => {
+    const lp = toLoadpoint({ ...WIRE, battery_boost: { state: 'active', active: true } })
+    expect(boostActiveSentence(lp)).toBe(
+      'Battery boost is on — the house battery is helping the car.'
+    )
+  })
+
+  it('reads a reserve the box wrote as a legacy percent', () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      battery_boost: { state: 'active', active: true, min_battery_soc: 30 },
+    })
+    expect(lp.boostReservePct).toBe(30)
+  })
+
+  it("says why the box stopped the last one, in the app's words", () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      battery_boost: {
+        state: 'stopped',
+        active: false,
+        stop_reason: 'battery_reserve_reached',
+        stopped_at_ms: EXPIRES,
+      },
+    })
+    expect(lp.boostActive).toBe(false)
+    expect(boostStoppedSentence(lp)).toBe(
+      'The last boost ended because the house battery reached its reserve.'
+    )
+  })
+
+  it('still reports a stop it has no words for', () => {
+    const lp = toLoadpoint({
+      ...WIRE,
+      battery_boost: { state: 'stopped', active: false, stop_reason: 'new_reason' },
+    })
+    expect(boostStoppedSentence(lp)).toBe('The last boost ended because your box stopped it.')
+  })
+
+  it('says nothing about a boost that never ran', () => {
+    expect(boostStoppedSentence(toLoadpoint(WIRE))).toBeNull()
   })
 })
