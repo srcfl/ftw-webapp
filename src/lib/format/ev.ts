@@ -23,10 +23,21 @@ export interface WireLoadpoint {
   target_soc_pct?: unknown
   updated_at_ms?: unknown
   soc_source?: unknown
+  min_charge_w?: unknown
   max_charge_w?: unknown
+  phases?: unknown
+  voltage_v?: unknown
   manual_active?: unknown
+  manual_charge_w?: unknown
   surplus_only?: unknown
-  battery_boost?: { state?: unknown; active?: unknown }
+  battery_boost?: {
+    state?: unknown
+    active?: unknown
+    expires_at_ms?: unknown
+    min_battery_soc?: unknown
+    stop_reason?: unknown
+    stopped_at_ms?: unknown
+  }
   schedule?: {
     soc_pct?: unknown
     time_of_day_min_utc?: unknown
@@ -46,11 +57,23 @@ export interface Loadpoint {
   targetSocPct: number | null
   /** What this session has delivered, in watt-hours. */
   sessionWh: number
-  /** The charger's ceiling, for a charge-now hold. Null when unreported. */
+  /** The charger's floor and ceiling for a hold, in watts. Null when unreported. */
+  minChargeW: number | null
   maxChargeW: number | null
+  /** Phase count and phase voltage, for the amp slider. Null when the box did not say. */
+  phases: number | null
+  voltageV: number | null
   manualActive: boolean
+  /** What the running hold asks for, in watts. Null when there is none, or the box did not say. */
+  manualChargeW: number | null
   surplusOnly: boolean
   boostActive: boolean
+  /** When the running boost ends, wall clock. Null when none, or unreported. */
+  boostExpiresAtMs: number | null
+  /** The floor the running boost keeps in the house battery, whole percent. */
+  boostReservePct: number | null
+  /** The box's own token for why the last boost stopped. Null until it has. */
+  boostStopReason: string | null
   schedule: {
     socPct: number | null
     timeOfDayMinUtc: number
@@ -62,10 +85,24 @@ export interface Loadpoint {
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
+/**
+ * A state of charge off the wire, in whole percent.
+ *
+ * The box stores fractions and its status reports carry them, but its
+ * decoders also take a legacy percent, so a value above one is read the
+ * same way the box would read it. Zero is "unset" on the wire and null here.
+ */
+const pct = (v: unknown): number | null => {
+  const f = num(v)
+  if (f === null || f <= 0) return null
+  return Math.round(f > 1 ? f : f * 100)
+}
+
 /** One charger off the wire, unknown-tolerant the way every decoder here is. */
 export function toLoadpoint(w: WireLoadpoint): Loadpoint {
   const sched = w.schedule
   const schedMin = sched ? num(sched.time_of_day_min_utc) : null
+  const boost = w.battery_boost
   return {
     id: typeof w.id === 'string' ? w.id : '',
     pluggedIn: w.plugged_in === true,
@@ -73,10 +110,20 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     socPct: num(w.current_soc_pct),
     targetSocPct: num(w.target_soc_pct),
     sessionWh: Math.max(0, Math.round(num(w.delivered_wh_session) ?? 0)),
+    minChargeW: num(w.min_charge_w),
     maxChargeW: num(w.max_charge_w),
+    phases: num(w.phases),
+    voltageV: num(w.voltage_v),
     manualActive: w.manual_active === true,
+    manualChargeW: w.manual_active === true ? num(w.manual_charge_w) : null,
     surplusOnly: w.surplus_only === true,
-    boostActive: w.battery_boost?.active === true,
+    boostActive: boost?.active === true,
+    boostExpiresAtMs: boost?.active === true ? num(boost.expires_at_ms) : null,
+    boostReservePct: boost?.active === true ? pct(boost.min_battery_soc) : null,
+    boostStopReason:
+      boost?.active !== true && typeof boost?.stop_reason === 'string' && boost.stop_reason !== ''
+        ? boost.stop_reason
+        : null,
     schedule:
       schedMin === null
         ? null
@@ -180,4 +227,145 @@ export function evSessionSentence(lp: Loadpoint): string | null {
   const kwh = lp.sessionWh / 1000
   const text = kwh >= 10 ? String(Math.round(kwh)) : kwh.toFixed(1)
   return `${text} kWh this session`
+}
+
+// --------------------------------------------------------------------------
+// Charge now, in amps
+// --------------------------------------------------------------------------
+
+/** The current a hold may ask for, and what one amp costs across the phases. */
+export interface ChargeCurrent {
+  minA: number
+  maxA: number
+  /** Watts per amp: phases × volts. */
+  wattsPerAmp: number
+  phases: number
+}
+
+/**
+ * The slider's range, from what the box served.
+ *
+ * The box's own page does this sum — amps = W / (phases × volts) — and its
+ * fallbacks are copied here so both surfaces offer the same range for the
+ * same charger: three phases at 230 V when the box did not say, 6–16 A when
+ * it reported no floor or ceiling. The box omits `phases` and `voltage_v`
+ * when they are unset; `min_charge_w` and `max_charge_w` always arrive but
+ * may be zero.
+ */
+export function chargeCurrent(lp: Loadpoint): ChargeCurrent {
+  const phases = lp.phases !== null && lp.phases > 0 ? lp.phases : 3
+  const volts = lp.voltageV !== null && lp.voltageV > 0 ? lp.voltageV : 230
+  const wattsPerAmp = phases * volts
+  const toA = (w: number | null) => (w !== null && w > 0 ? Math.round(w / wattsPerAmp) : 0)
+  const minA = Math.max(1, toA(lp.minChargeW) || 6)
+  let maxA = toA(lp.maxChargeW) || 16
+  if (maxA <= minA) maxA = minA + 1
+  return { minA, maxA, wattsPerAmp, phases }
+}
+
+/**
+ * Watts for a chosen current, never above the ceiling the box declared.
+ *
+ * 11 000 W rounds to 16 A, and 16 A back is 11 040 W — more than the charger
+ * said it can do. The ceiling wins, so the top of the slider asks for exactly
+ * what the box reported, the same figure the plan is allowed to ask for.
+ */
+export function ampsToWatts(lp: Loadpoint, amps: number): number {
+  const w = Math.round(amps * chargeCurrent(lp).wattsPerAmp)
+  return lp.maxChargeW !== null && lp.maxChargeW > 0 ? Math.min(w, lp.maxChargeW) : w
+}
+
+/** A hold's watts as whole amps, for saying what runs now. */
+export function wattsToAmps(lp: Loadpoint, watts: number): number {
+  return Math.round(watts / chargeCurrent(lp).wattsPerAmp)
+}
+
+/** "16 A · 11.0 kW" — the slider's readout, one decimal like the box's page. */
+export function currentReadout(lp: Loadpoint, amps: number): string {
+  return `${amps} A · ${(ampsToWatts(lp, amps) / 1000).toFixed(1)} kW`
+}
+
+// --------------------------------------------------------------------------
+// Battery boost
+// --------------------------------------------------------------------------
+
+/**
+ * The house-battery floor offered before a person changes it.
+ *
+ * The protocol carries no default; this is the one the box's own page seeds
+ * its field with, so a household sees the same number on both surfaces.
+ */
+export const BOOST_RESERVE_DEFAULT_PCT = 30
+
+/** The box refuses a lease under this. From its own validator. */
+export const BOOST_RESERVE_MIN_PCT = 5
+
+/**
+ * How long a boost may run, as the box's page offers it.
+ *
+ * The box caps a lease at four hours — `MaxBatteryBoostDuration` — and
+ * refuses longer, so the list ends there rather than offering a choice the
+ * box would turn down.
+ */
+export const BOOST_DURATIONS = [
+  { s: 1800, label: '30 min' },
+  { s: 3600, label: '1 h' },
+  { s: 7200, label: '2 h' },
+  { s: 14400, label: '4 h' },
+] as const
+
+export const BOOST_DURATION_DEFAULT_S = 3600
+
+/**
+ * The box's stop reasons, in this app's words.
+ *
+ * Tokens from the box's `BatteryBoostStopReason`. The box sends the token;
+ * every word here is the app's.
+ */
+const BOOST_STOP: Record<string, string> = {
+  cancelled: 'it was stopped by hand',
+  expired: 'its time ran out',
+  vehicle_unplugged: 'the car was unplugged',
+  ev_target_reached: 'the car reached its target',
+  departure_reached: 'the departure time came',
+  operator_hold: 'a manual charge took over',
+  surplus_only: 'the charger went back to spare solar only',
+  site_safety_block: 'the site meter went quiet',
+  loadpoint_driver_unavailable: 'your box lost touch with the charger',
+  battery_unavailable: 'your box lost touch with the house battery',
+  battery_reserve_reached: 'the house battery reached its reserve',
+  battery_hold: 'the house battery was held for something else',
+  core_mode: 'the site mode does not allow it',
+  fuse_safety_block: 'the fuse limit stepped in',
+  restart_lease_invalid: 'your box restarted and would not resume it',
+}
+
+/**
+ * The running boost, as one sentence.
+ *
+ * Reserve and end time ride along when the box reported them. A box that
+ * says only "active" gets the bare sentence, never an invented figure.
+ */
+export function boostActiveSentence(lp: Loadpoint): string {
+  const reserve = lp.boostReservePct !== null ? ` down to ${lp.boostReservePct} %` : ''
+  const until =
+    lp.boostExpiresAtMs !== null
+      ? ` until ${new Date(lp.boostExpiresAtMs).toLocaleTimeString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}`
+      : ''
+  return `Battery boost is on — the house battery is helping the car${reserve}${until}.`
+}
+
+/**
+ * Why the last boost ended, while none runs. Null when the box has not said.
+ *
+ * A token this app has not heard of is still a stop the box reported, so
+ * the sentence says the box stopped it rather than hiding the fact.
+ */
+export function boostStoppedSentence(lp: Loadpoint): string | null {
+  if (lp.boostActive || lp.boostStopReason === null) return null
+  const why = BOOST_STOP[lp.boostStopReason] ?? 'your box stopped it'
+  return `The last boost ended because ${why}.`
 }

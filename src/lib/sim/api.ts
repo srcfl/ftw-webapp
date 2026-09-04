@@ -240,7 +240,12 @@ export interface SimApiOptions {
    * What the door has done to the charger, read live from the box. The
    * loadpoints answer must describe the same household the stream does.
    */
-  loadpointState?: () => { holdW: number | null; boostActive: boolean }
+  loadpointState?: () => {
+    holdW: number | null
+    boost: { expiresAtMs: number; minBatterySoc: number } | null
+    /** The last stop's reason, kept until the next boost, as the box keeps it. */
+    boostStop: { reason: string; atMs: number } | null
+  }
   /**
    * The live sample the 1 Hz stream is already sending. Status must describe
    * the same moment or the hero and the charger sheet disagree.
@@ -635,7 +640,7 @@ export class SimApi {
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
     // What the door has done overrides what the generator would do — the
     // stream applies the same override, so both surfaces tell one story.
-    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    const door = this.#opts.loadpointState?.() ?? { holdW: null, boost: null, boostStop: null }
     const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
@@ -671,9 +676,25 @@ export class SimApi {
           phases: 3,
           voltage_v: 230,
           manual_active: door.holdW !== null,
-          battery_boost: door.boostActive
-            ? { state: 'active', active: true }
-            : { state: 'inactive', active: false },
+          // `manual_charge_w` is omitempty on the box: absent for a 0 W
+          // pause hold, present with the setpoint for any other.
+          ...(door.holdW ? { manual_charge_w: door.holdW } : {}),
+          // The box's BatteryBoostStatus, in its three states.
+          battery_boost: door.boost
+            ? {
+                state: 'active',
+                active: true,
+                expires_at_ms: door.boost.expiresAtMs,
+                min_battery_soc: door.boost.minBatterySoc,
+              }
+            : door.boostStop
+              ? {
+                  state: 'stopped',
+                  active: false,
+                  stop_reason: door.boostStop.reason,
+                  stopped_at_ms: door.boostStop.atMs,
+                }
+              : { state: 'inactive', active: false },
           surplus_only: false,
           ...(this.#schedule ? { schedule: this.#schedule } : {}),
         },
