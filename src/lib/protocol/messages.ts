@@ -486,6 +486,8 @@ export const OP_SET_MODE = 'site.mode.set'
 export const OP_BATTERY_HOLD = 'battery.hold'
 export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
 export const OP_LOADPOINT_BOOST = 'loadpoint.boost'
+export const OP_LOADPOINT_SOC_SET = 'loadpoint.soc.set'
+export const OP_LOADPOINT_SURPLUS_ONLY_SET = 'loadpoint.surplus_only.set'
 
 export interface Guard {
   fid: Fid

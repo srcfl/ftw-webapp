@@ -44,6 +44,8 @@ import {
   OP_BATTERY_HOLD,
   OP_LOADPOINT_HOLD,
   OP_LOADPOINT_BOOST,
+  OP_LOADPOINT_SOC_SET,
+  OP_LOADPOINT_SURPLUS_ONLY_SET,
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
@@ -240,6 +242,8 @@ const OP_SCOPES: Record<string, string> = {
   [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_SOC_SET]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_SURPLUS_ONLY_SET]: 'ftw.dispatch.write',
 }
 
 const CAPS = [
