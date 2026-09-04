@@ -12,7 +12,13 @@ import EvPanel from './EvPanel.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import { ROLE_VIEWER, OP_LOADPOINT_HOLD, OP_LOADPOINT_BOOST } from '$lib/protocol/messages'
+import {
+  ROLE_VIEWER,
+  OP_LOADPOINT_HOLD,
+  OP_LOADPOINT_BOOST,
+  OP_LOADPOINT_SOC_SET,
+  OP_LOADPOINT_SURPLUS_ONLY_SET,
+} from '$lib/protocol/messages'
 import { FID } from '$lib/format/explanation'
 import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
 
@@ -450,14 +456,20 @@ describe('the charger behind its bubble', () => {
       (b) => b.textContent?.trim() === label
     )
 
-  const slider = () => document.querySelector<HTMLInputElement>('input[type="range"]')
+  const slider = () => document.querySelector<HTMLInputElement>('input[aria-label="Charging current"]')
+  const socSlider = () =>
+    document.querySelector<HTMLInputElement>('input[aria-label="Car\'s current charge, percent"]')
+  const pvOnly = () => document.querySelector<HTMLInputElement>('input[role="switch"]')
 
-  /** Move the thumb the way a browser reports it. */
-  function slide(to: number): void {
-    const s = slider()!
+  /** Move a thumb the way a browser reports it, and let go of it. */
+  function slideTo(s: HTMLInputElement, to: number): void {
     s.value = String(to)
     s.dispatchEvent(new Event('input', { bubbles: true }))
   }
+  function release(s: HTMLInputElement): void {
+    s.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+  const slide = (to: number) => slideTo(slider()!, to)
 
   it("offers the charger's own range of current, at its ceiling by default", async () => {
     vi.useFakeTimers()
@@ -589,5 +601,127 @@ describe('the charger behind its bubble', () => {
     expect(slider()).toBeNull()
     expect(button('Boost from the house battery')).toBeUndefined()
     expect(button('Stop boost')).toBeUndefined()
+    expect(socSlider()).toBeNull()
+    expect(pvOnly()).toBeNull()
+  })
+
+  it("prefills the car's level from the box and says where it came from", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    await openedFor()
+
+    const s = socSlider()
+    expect(s, 'no level slider for an owner with a plugged car').not.toBeNull()
+    expect(s!.min).toBe('0')
+    expect(s!.max).toBe('100')
+    expect(s!.value).toBe('42')
+    expect(document.body.textContent).toContain('42 %')
+    expect(document.body.textContent).toContain('Estimated from energy delivered')
+  })
+
+  it("corrects the car's level on release, and the sentence follows the box", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+
+    const sent = vi.spyOn(site, 'command')
+    slideTo(socSlider()!, 60)
+    await vi.advanceTimersByTimeAsync(20)
+    // A thumb mid-drag sends nothing; the readout follows it.
+    expect(sent).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('60 %')
+
+    release(socSlider()!)
+    // A flush, not a wait: over the 5 ms loopback the box has answered
+    // before the first timer, and what is under test is the moment before.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SOC_SET, { id: 'carport', soc: 0.6 })
+    expect(document.body.textContent).toContain('Replanning from 60 %…')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Plan updated from 60 %.')
+    expect(socSlider()!.value).toBe('60')
+
+    // The sentence gives way to the source again; the slider stays on the
+    // level the box now holds.
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).not.toContain('Plan updated')
+    expect(document.body.textContent).toContain('Estimated from energy delivered')
+    expect(socSlider()!.value).toBe('60')
+  })
+
+  it('does not let a reread snap the slider from under a thumb', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+
+    const asked = vi.spyOn(site, 'api')
+    slideTo(socSlider()!, 70)
+    // Well over a minute mid-drag: the panel's own ask comes and goes.
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(asked.mock.calls.length).toBeGreaterThan(0)
+    expect(socSlider()!.value).toBe('70')
+    expect(document.body.textContent).toContain('70 %')
+  })
+
+  it('hides the level slider for an empty bay, and keeps the PV-only switch', async () => {
+    vi.useFakeTimers()
+    // Midday: the car left with the morning commute.
+    vi.setSystemTime(Date.UTC(2026, 6, 15, 12, 0, 0))
+    await openedFor()
+
+    expect(document.body.textContent).toContain('Not plugged in')
+    expect(socSlider()).toBeNull()
+    expect(slider()).toBeNull()
+    // A standing setting outlives an unplug, so it is still offered.
+    expect(pvOnly()).not.toBeNull()
+  })
+
+  it('switches to solar surplus only through the door, and the boost offer follows', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+
+    const sw = pvOnly()
+    expect(sw, 'no PV-only switch for an owner').not.toBeNull()
+    expect(sw!.checked).toBe(false)
+    expect(button('Boost from the house battery')).toBeDefined()
+
+    const sent = vi.spyOn(site, 'command')
+    sw!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SURPLUS_ONLY_SET, {
+      id: 'carport',
+      surplus_only: true,
+    })
+    expect(pvOnly()!.checked).toBe(true)
+    expect(document.body.textContent).toContain('charges from spare solar only now')
+    // The box refuses a boost while PV only is on; the offer says so instead.
+    expect(button('Boost from the house battery')).toBeUndefined()
+    expect(document.body.textContent).toContain('Not while the charger uses spare solar only')
+
+    pvOnly()!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SURPLUS_ONLY_SET, {
+      id: 'carport',
+      surplus_only: false,
+    })
+    expect(pvOnly()!.checked).toBe(false)
+    expect(document.body.textContent).toContain('may charge the car again')
+    expect(button('Boost from the house battery')).toBeDefined()
+  })
+
+  it('puts a refused switch back where the box says it is', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box } = await openedFor()
+
+    box.faults = { ...box.faults, failPreconditions: true }
+    pvOnly()!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(document.body.textContent).toContain('Your home changed while that was sending')
+    expect(pvOnly()!.checked).toBe(false)
   })
 })

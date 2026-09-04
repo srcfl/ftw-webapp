@@ -245,6 +245,9 @@ export interface SimApiOptions {
     boost: { expiresAtMs: number; minBatterySoc: number } | null
     /** The last stop's reason, kept until the next boost, as the box keeps it. */
     boostStop: { reason: string; atMs: number } | null
+    /** The car's level as the box holds it, a 0–1 fraction. */
+    soc: number
+    surplusOnly: boolean
   }
   /**
    * The live sample the 1 Hz stream is already sending. Status must describe
@@ -254,6 +257,18 @@ export interface SimApiOptions {
 }
 
 const DAY_MS = 86_400_000
+
+/**
+ * Whether the simulated car is on the cable: from the evening commute until
+ * the morning departure, UTC. One rule for the loadpoints answer and for the
+ * door, so a level set for a car that is not there is refused the way the
+ * box refuses it.
+ */
+export function evPluggedIn(nowMs: number): boolean {
+  const d = new Date(nowMs)
+  const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
+  return hourOfDay >= 17 || hourOfDay < 7
+}
 
 /** The box's own word for a code somebody reads aloud, and its own TTL. */
 const appPairingKindSpoken = 'spoken'
@@ -631,22 +646,29 @@ export class SimApi {
    *
    * Field names are the box's own: `loadpoint.State` marshals snake_case,
    * and an app built against camelCase here would render blanks against
-   * every real box while this tree stayed green. No `current_soc_pct` on
-   * purpose — an easee without a car API genuinely does not know it, and
-   * the honest absence is a case the panel has to carry.
+   * every real box while this tree stayed green. `current_soc` is a
+   * fraction and its source is `inferred`: an easee without a car API does
+   * not know the car's level, and the box estimates one from energy
+   * delivered rather than serving none — which is what its own page
+   * prefills the slider with, and what this app's panel must meet.
    */
   #loadpoints(): ApiAnswer {
     const now = this.#opts.now()
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
     // What the door has done overrides what the generator would do — the
     // stream applies the same override, so both surfaces tell one story.
-    const door = this.#opts.loadpointState?.() ?? { holdW: null, boost: null, boostStop: null }
+    const door = this.#opts.loadpointState?.() ?? {
+      holdW: null,
+      boost: null,
+      boostStop: null,
+      soc: 0,
+      surplusOnly: false,
+    }
     const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
 
-    // Plugged in from the evening commute until the morning departure.
-    const pluggedIn = hourOfDay >= 17 || hourOfDay < 7
+    const pluggedIn = evPluggedIn(now)
 
     // What the session has delivered so far: the charging window is flat
     // ~7.2 kW, so the meter is minutes-into-window times that rate.
@@ -666,11 +688,13 @@ export class SimApi {
           id: 'carport',
           driver_name: 'easee',
           plugged_in: pluggedIn,
+          // The box's zero values for an empty bay; it omits an empty source.
+          current_soc: pluggedIn ? door.soc : 0,
+          ...(pluggedIn ? { soc_source: 'inferred' } : {}),
           current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
           target_soc_pct: 84,
           updated_at_ms: now,
-          soc_source: 'none',
           min_charge_w: 4140,
           max_charge_w: 11000,
           phases: 3,
@@ -695,7 +719,7 @@ export class SimApi {
                   stopped_at_ms: door.boostStop.atMs,
                 }
               : { state: 'inactive', active: false },
-          surplus_only: false,
+          surplus_only: door.surplusOnly,
           ...(this.#schedule ? { schedule: this.#schedule } : {}),
         },
       ],

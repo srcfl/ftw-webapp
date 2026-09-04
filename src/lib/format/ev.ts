@@ -17,6 +17,8 @@ export interface WireLoadpoint {
   id?: unknown
   driver_name?: unknown
   plugged_in?: unknown
+  /** A 0–1 fraction since srcfl/ftw#962; `current_soc_pct` is what older boxes served. */
+  current_soc?: unknown
   current_soc_pct?: unknown
   current_power_w?: unknown
   delivered_wh_session?: unknown
@@ -54,6 +56,12 @@ export interface Loadpoint {
   powerW: number
   /** The car's charge, or null for a charger that honestly does not know. */
   socPct: number | null
+  /**
+   * Where that level came from, in the box's own token: `vehicle` from the
+   * car, `completed` pinned to the target after the car stopped drawing,
+   * `inferred` from energy delivered, empty when no car is on the cable.
+   */
+  socSource: string
   targetSocPct: number | null
   /** What this session has delivered, in watt-hours. */
   sessionWh: number
@@ -107,7 +115,8 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     id: typeof w.id === 'string' ? w.id : '',
     pluggedIn: w.plugged_in === true,
     powerW: num(w.current_power_w) ?? 0,
-    socPct: num(w.current_soc_pct),
+    socPct: pct(w.current_soc) ?? num(w.current_soc_pct),
+    socSource: typeof w.soc_source === 'string' ? w.soc_source : '',
     targetSocPct: num(w.target_soc_pct),
     sessionWh: Math.max(0, Math.round(num(w.delivered_wh_session) ?? 0)),
     minChargeW: num(w.min_charge_w),
@@ -227,6 +236,33 @@ export function evSessionSentence(lp: Loadpoint): string | null {
   const kwh = lp.sessionWh / 1000
   const text = kwh >= 10 ? String(Math.round(kwh)) : kwh.toFixed(1)
   return `${text} kWh this session`
+}
+
+// --------------------------------------------------------------------------
+// The car's charge level
+// --------------------------------------------------------------------------
+
+/**
+ * Where the slider rests when the box has no level for the car — the box
+ * page's own default, so both surfaces start from the same place.
+ */
+export const SOC_DEFAULT_PCT = 50
+
+/**
+ * Where the level came from, as the box's own page says it.
+ *
+ * The token is the box's; every word is the app's. A source the app has not
+ * heard of reads as the estimate, which is what the box falls back to.
+ */
+export function socSourceSentence(lp: Loadpoint): string {
+  switch (lp.socSource) {
+    case 'vehicle':
+      return 'Live from the car. Drag only to correct drift.'
+    case 'completed':
+      return 'The car stopped asking for current, so the box assumes the target was reached. Drag to correct.'
+    default:
+      return 'Estimated from energy delivered. Drag to the real value and the plan follows.'
+  }
 }
 
 // --------------------------------------------------------------------------

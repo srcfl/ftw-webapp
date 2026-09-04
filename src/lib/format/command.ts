@@ -48,3 +48,19 @@ export function boostHelp(result: CmdResult): string {
   }
   return commandHelp(result)
 }
+
+/**
+ * The level correction's own refusal, before the door's.
+ *
+ * The box refuses a level for a car that is not on the cable with
+ * E_UNAVAILABLE naming the op and `reason: "unplugged"` — the session's
+ * spelling of the HTTP route's 409. That is not the charger being out of
+ * reach, so it gets its own sentence and everything else falls through.
+ */
+export function socHelp(result: CmdResult): string {
+  const e = result.error
+  if (e?.code === 'E_UNAVAILABLE' && e.args?.['reason'] === 'unplugged') {
+    return 'Plug the car in first — your box has no car to set a level for.'
+  }
+  return commandHelp(result)
+}

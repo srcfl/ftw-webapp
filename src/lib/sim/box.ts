@@ -49,7 +49,7 @@ import {
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
-import { SimApi } from './api'
+import { SimApi, evPluggedIn } from './api'
 import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
 import {
@@ -329,6 +329,16 @@ export class SimBox {
    * keeps its terminal status the same way, and its page reads it back.
    */
   #evBoostStop: { reason: string; atMs: number } | null = null
+  /**
+   * The car's level as the box holds it, a fraction: the plug-in anchor
+   * until an operator corrects it, which is what the box's inferred estimate
+   * is. Fixed rather than climbing with the session, because what the tests
+   * and the demo need is a level to prefill and to read back, not a battery
+   * model.
+   */
+  #evSoc = 0.42
+  /** PV-only charging, set through the door. */
+  #evSurplusOnly = false
   #subscribed = false
   #negotiatedProto = PROTO_MAX
   #bucket: 256 | 512 = 512
@@ -379,6 +389,8 @@ export class SimBox {
         holdW: this.#evHold?.powerW ?? null,
         boost: this.#liveBoost(),
         boostStop: this.#evBoostStop,
+        soc: this.#evSoc,
+        surplusOnly: this.#evSurplusOnly,
       }),
       liveReading: () => this.#lastReading,
     })
@@ -785,7 +797,8 @@ export class SimBox {
         // The box's rules, value for value: exactly one of duration_s and
         // expires_at_ms; a reserve of 5–100 % after its legacy-percent
         // reading; one minute to four hours; and a refusal, not a lease,
-        // while an operator hold is on the charger.
+        // while an operator hold is on the charger or it runs on spare
+        // solar only.
         const durS = typeof cmd.args['duration_s'] === 'number' ? cmd.args['duration_s'] : 0
         const expiresAt =
           typeof cmd.args['expires_at_ms'] === 'number' ? cmd.args['expires_at_ms'] : 0
@@ -809,7 +822,7 @@ export class SimBox {
           })
           return
         }
-        if (this.#evHold) {
+        if (this.#evHold || this.#evSurplusOnly) {
           this.#cmdResult(cmd.cmdId, 'rejected', {
             code: 'E_UNAVAILABLE',
             args: { op: cmd.op },
@@ -821,6 +834,66 @@ export class SimBox {
       }
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: this.#evBoost ? 1 : 0,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // The car's level, corrected: a fraction in [0, 1] as the box takes it,
+    // refused by name when no car is on the cable — the route's 409 — and
+    // read back as the level the box now holds.
+    if (cmd.op === OP_LOADPOINT_SOC_SET) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      const soc = cmd.args['soc']
+      if (typeof soc !== 'number' || soc < 0 || soc > 1) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'soc', value: soc ?? null },
+        })
+        return
+      }
+      if (!evPluggedIn(this.#now())) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNAVAILABLE',
+          args: { op: cmd.op, reason: 'unplugged' },
+        })
+        return
+      }
+      this.#evSoc = soc
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evSoc,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // PV only, on or off: stored, read back as 1 or 0 the way the box
+    // reports a flag, and — as the box's own tick does — a running boost is
+    // withdrawn the moment the charger goes back to spare solar only.
+    if (cmd.op === OP_LOADPOINT_SURPLUS_ONLY_SET) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      const on = cmd.args['surplus_only']
+      if (typeof on !== 'boolean') {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'surplus_only', value: on ?? null },
+        })
+        return
+      }
+      this.#evSurplusOnly = on
+      if (on) this.#stopBoost('surplus_only')
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evSurplusOnly ? 1 : 0,
         src: 'core',
         uptimeMs: this.uptimeMs,
       })
