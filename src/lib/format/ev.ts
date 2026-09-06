@@ -42,6 +42,7 @@ export interface WireLoadpoint {
   commanded_w?: unknown
   commanded_reason?: unknown
   commanded_known?: unknown
+  manual_save_error?: unknown
   manual_restore_unconfirmed?: unknown
   manual_active?: unknown
   manual_charge_w?: unknown
@@ -103,6 +104,7 @@ export interface Loadpoint {
   /** Phase count and phase voltage, for the amp slider. Null when the box did not say. */
   phases: number | null
   voltageV: number | null
+  manualSaveError?: boolean
   manualRestoreUnconfirmed?: boolean
   manualActive: boolean
   manual?: WireManualStatus
@@ -175,6 +177,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     voltageV: num(w.voltage_v),
     manualActive: w.manual_active === true,
     manualRestoreUnconfirmed: w.manual_restore_unconfirmed === true,
+    manualSaveError: w.manual_save_error === true,
     ...(w.manual ? { manual: w.manual } : {}),
     ...(w.charger ? { charger: w.charger } : {}),
     commandedW: num(w.commanded_w),
@@ -257,6 +260,8 @@ export function daysWord(mask: number): string {
   if (m === 0b1100000) return 'weekends'
   return DAY_LABELS.filter((_, i) => m & (1 << i)).join(', ')
 }
+
+export const MANUAL_SAVE_ERROR_TEXT = 'This choice is active now, but could not be saved for restart. FTW is retrying.'
 
 /**
  * The headline: what the charger is doing at this moment.

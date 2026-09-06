@@ -733,6 +733,33 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).not.toContain('Confirm how to continue after restart')
   })
 
+  it('reports unsaved charging intent until a later poll confirms recovery', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box } = await openedFor()
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const serve = box.api.serve.bind(box.api)
+    let saveFailed = true
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      const answer = serve(req)
+      if (req.path === '/api/loadpoints' && 'body' in answer) {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        payload.loadpoints[0].manual_save_error = saveFailed
+        answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
+      }
+      return answer
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(document.body.textContent).toContain('Paused by you')
+    expect(document.body.textContent).toContain('This choice is active now, but could not be saved for restart. FTW is retrying.')
+    expect(button('Save')).toBeUndefined()
+    saveFailed = false
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(document.body.textContent).not.toContain('could not be saved for restart')
+    expect(document.body.textContent).toContain('Paused by you')
+  })
+
   it('pauses without removing the goal and resumes only when asked', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)

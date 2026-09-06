@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { watchCharging, type ChargingSnapshot } from '$lib/state/charging-watch'
-  import { evStatusSentence, evPlanSentence } from '$lib/format/ev'
+  import { evStatusSentence, evPlanSentence, MANUAL_SAVE_ERROR_TEXT } from '$lib/format/ev'
   import type { SiteStore } from '$lib/state/site.svelte'
   let { site }: { site: SiteStore } = $props()
   let snapshot = $state<ChargingSnapshot>({ points: [], fresh: false })
@@ -17,6 +17,7 @@
     <div class="title" role="status">{fresh && lp.charger?.available !== false ? 'Car connected' : 'Car status is out of date'}</div>
     <p>{fresh && lp.charger?.available !== false ? evStatusSentence(lp, site.canConfigure) : 'Waiting for current charger status. The last reading cannot confirm charging.'}</p>
     {#if fresh && lp.charger?.available !== false && evPlanSentence(lp, Date.now(), site.canConfigure)}<p class="detail">{evPlanSentence(lp, Date.now(), site.canConfigure)}</p>{/if}
+    {#if lp.manualSaveError}<p class="detail" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
     <a href={`#/now?charger=${encodeURIComponent(lp.id)}`}>Check charging{lp.socSource !== 'vehicle' ? ' and battery level' : ''}</a>
   </section>
 {/each}

@@ -17,6 +17,7 @@
   import { refreshCharging } from '$lib/state/charging-watch'
   import {
     evStatusSentence,
+    MANUAL_SAVE_ERROR_TEXT,
     isPaused,
     evPlanSentence,
     evScheduleSentence,
@@ -416,6 +417,7 @@
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
+        {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
         {#if !stale && evPlanSentence(lp, now, site.canConfigure)}<p class="hint">{evPlanSentence(lp, now, site.canConfigure)}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
           <p class="hint">Charger last seen: {clock(Number(lp.charger?.updated_at_ms ?? lp.manual?.charger_updated_at_ms))}</p>
