@@ -991,6 +991,26 @@ describe('the charger behind its bubble', () => {
     expect(button('Boost from the house battery')).toBeDefined()
   })
 
+  it('names a solar save failure, preserves the previous choice and allows retry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command').mockResolvedValueOnce({
+      cmdId: 'solar-save-failed', state: 'rejected',
+      error: { code: 'E_UNAVAILABLE', args: { op: OP_LOADPOINT_SURPLUS_ONLY_SET } },
+    })
+    pvOnly()!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(pvOnly()!.checked).toBe(false)
+    expect(document.body.textContent).toContain('Solar rule not saved. Your previous choice is unchanged. Try again.')
+    expect(document.body.textContent).not.toContain("can't reach the charger")
+    sent.mockRestore()
+    pvOnly()!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(pvOnly()!.checked).toBe(true)
+    expect(document.body.textContent).toContain('Solar rule saved')
+  })
+
   it('puts a refused switch back where the box says it is', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
