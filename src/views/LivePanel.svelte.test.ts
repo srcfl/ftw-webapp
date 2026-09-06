@@ -78,10 +78,10 @@ describe('a live line behind a bubble', () => {
     // spying that no api call is made when a bubble is tapped.
     const api = vi.spyOn(site, 'api')
     render(Now, { props: { site } })
-    await vi.advanceTimersByTimeAsync(50)
-    // Now asks for chargers so the house/car split can match the LAN page.
-    // The live line itself still needs only the stream — clear those asks
-    // before tapping, or they would look like the panel reaching the API.
+    // Now's own background asks — chargers for the house/car split, the
+    // box-page snapshot the hero reads — land in chunks after mount. Let
+    // them settle, so what is judged next is what the tap alone adds.
+    await vi.advanceTimersByTimeAsync(500)
     api.mockClear()
 
     openBubble('pv')

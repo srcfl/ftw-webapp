@@ -9,12 +9,11 @@
 <script lang="ts">
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
   import { explain } from '$lib/format/explanation'
-  import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
   import type { Component } from 'svelte'
@@ -137,7 +136,36 @@
   /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
    *  so callBox and the loadpoint store stay out of the first frame. */
   let evOpen = $state(false)
-  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void }> | null>(null)
+  let selectedCharger = $state<string | null>(null)
+  let requestedCharger = $state<string | null>(null)
+  onMount(() => {
+    const read = () => {
+      const hash = location.hash
+      requestedCharger = hash.startsWith('#/now?') ? new URLSearchParams(hash.split('?')[1]).get('charger') : null
+    }
+    const message = (e: MessageEvent) => {
+      if (e.data?.type === 'ftw-open-charger' && typeof e.data.loadpointId === 'string') {
+        location.hash = '#/now?charger=' + encodeURIComponent(e.data.loadpointId)
+        requestedCharger = e.data.loadpointId
+      }
+    }
+    read(); window.addEventListener('hashchange', read)
+    navigator.serviceWorker?.addEventListener('message', message)
+    return () => { window.removeEventListener('hashchange', read); navigator.serviceWorker?.removeEventListener('message', message) }
+  })
+  $effect(() => {
+    if (active && requestedCharger) {
+      selectedCharger = requestedCharger
+      evOpen = true
+      requestedCharger = null
+    }
+  })
+  function closeEv() {
+    evOpen = false
+    selectedCharger = null
+    if (location.hash.startsWith('#/now?charger=')) history.replaceState(null, '', location.pathname + location.search + '#/now')
+  }
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null }> | null>(null)
   $effect(() => {
     if (!evOpen || EvPanel) return
     void import('./EvPanel.svelte').then((m) => {
@@ -164,17 +192,16 @@
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
 
-  // The hero says which bubble was tapped. The charger opens its own panel of
-  // controls — but only when the box's API is actually reachable, or the
-  // panel would be a door painted on a wall. Every other bubble opens its
-  // live line, which needs nothing but the stream already on screen.
+  // Preserve a charger tap while the saved home reconnects. The panel shows
+  // connection progress, then checks the capabilities the box reports.
   $effect(() => {
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
       const role = (e as CustomEvent<{ role?: string }>).detail?.role
       if (role === 'ev') {
-        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) evOpen = true
+        selectedCharger = null
+        evOpen = true
       } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
         liveRole = role as LiveRole
       }
@@ -315,7 +342,7 @@
   {/if}
 
   {#if evOpen && EvPanel}
-    <EvPanel {site} onclose={() => (evOpen = false)} />
+    <EvPanel {site} loadpointId={selectedCharger} onclose={closeEv} />
   {/if}
 
   {#if liveRole}

@@ -27,6 +27,10 @@
   --line: #2a2a2a;
   --line-soft: #222222;
 
+  /* Dim behind overlays and sheets. Darker in the dark theme so a modal
+     still reads as lifted off a near-black page. */
+  --scrim: oklch(0 0 0 / 0.45);
+
   --fg: #e8e8e8;
   --fg-label: #d8d8d8;
   --fg-dim: #a0a0a0;
@@ -115,6 +119,13 @@
   --radius-md: 14px;
   --radius-sm: 10px;
   --radius-xs: 8px;
+  --radius-pill: 999px;
+
+  /* Stacking bands, named once rather than numeric at every call site:
+     content sits below the band, the sheet above whatever overlay dims it. */
+  --z-band: 5;
+  --z-overlay: 40;
+  --z-sheet: 41;
 
   --pad-card: 14px 16px;
   --pad-card-tight: 12px 14px;
@@ -145,6 +156,8 @@ html[data-theme='light'] {
 
   --line: #cecec7;
   --line-soft: #ddddd7;
+
+  --scrim: oklch(0 0 0 / 0.32);
 
   --fg: #191919;
   --fg-label: #4f4f4b;

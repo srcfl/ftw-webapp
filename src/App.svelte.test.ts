@@ -474,6 +474,92 @@ describe('signing out, from the phone', () => {
   })
 })
 
+/* Tab transitions and the settling pane, both shell-level behaviours whose
+ * pieces live in several files and can only be judged where they meet. */
+describe('tab transitions', () => {
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    history.replaceState(null, '', '/')
+    location.hash = ''
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+    await pairPhone(SITE_ID)
+  })
+
+  afterEach(() => {
+    globalThis.ftwSim?.stop()
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('slides down the bar forward and up it backward', async () => {
+    await houseOnScreen()
+    /** Direction stamped on whichever panel is currently showing. */
+    const dir = () =>
+      [...document.querySelectorAll<HTMLElement>('.view')]
+        .find((view) => !view.hidden)
+        ?.getAttribute('data-dir')
+
+    ;(await screen.findByRole('button', { name: /^plan$/i })).click()
+    // Wait for the swap itself, not just the attribute: the outgoing panel
+    // still carries the direction it arrived with.
+    await screen.findByText(/How your home is run/i, undefined, { timeout: 4_000 })
+    expect(dir()).toBe('fwd')
+
+    ;(await screen.findByRole('button', { name: /^history$/i })).click()
+    await screen.findByText(/Last 7 days/i, undefined, { timeout: 4_000 })
+    expect(dir()).toBe('fwd')
+
+    ;(await screen.findByRole('button', { name: /^now$/i })).click()
+    // Backwards is the one case the old panel cannot fake: it left pointing
+    // the other way, so this waits for the incoming panel.
+    await vi.waitFor(() => expect(dir()).toBe('back'), { timeout: 4_000 })
+  })
+})
+
+describe('the settling pane', () => {
+  beforeEach(async () => {
+    vi.stubGlobal('localStorage', stubStorage())
+    history.replaceState(null, '', '/')
+    location.hash = ''
+    const database = await db()
+    for (const store of ['sites', 'snapshot', 'tiles', 'meta', 'keys'] as const) {
+      await database.clear(store)
+    }
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('stays quiet for a quick open, says so when it outlives a beat, then stops', async () => {
+    // Opening held open past any honest frame count: the slowest case the
+    // pane can be honest about is still a local read, so the store's start
+    // is gated rather than pointed at a network.
+    let release!: () => void
+    const gate = new Promise<void>((done) => (release = done))
+    vi.spyOn(SiteStore.prototype, 'start').mockImplementation(() => gate)
+    localStorage.setItem('ftw.site', 'slow-home')
+
+    vi.useFakeTimers()
+    render(App)
+
+    await vi.advanceTimersByTimeAsync(699)
+    expect(screen.queryByText(/opening your home/i)).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(screen.getByText(/opening your home/i)).toBeTruthy()
+
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.queryByText(/opening your home/i)).toBeNull()
+  })
+})
+
 /* The state this whole screen was built for, and the one it used to get wrong.
  *
  * A phone that is paired, cannot reach its box and has nothing cached. Not a

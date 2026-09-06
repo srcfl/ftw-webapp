@@ -462,7 +462,8 @@
     font-size: 13px;
     text-decoration: underline;
     text-underline-offset: 3px;
-    min-height: 36px;
+    /* Height comes from base.css: 44px is the smallest reliably hittable
+       target on a phone held one-handed. */
   }
 
   .choice-label {
