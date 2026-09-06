@@ -17,6 +17,10 @@ export interface WireLoadpoint {
   id?: unknown
   driver_name?: unknown
   plugged_in?: unknown
+  vehicle_capacity_wh?: unknown
+  capacity_source?: unknown
+  soc_retention?: unknown
+  charging_declined?: unknown
   /** A 0–1 fraction since srcfl/ftw#962; `current_soc_pct` is what older boxes served. */
   current_soc?: unknown
   current_soc_pct?: unknown
@@ -63,6 +67,7 @@ export interface WireManualStatus {
   active?: unknown
   state?: unknown
   requested_a?: unknown
+  requested_w?: unknown
   commanded_a?: unknown
   charger_reason?: unknown
   limit_reason?: unknown
@@ -80,10 +85,14 @@ export interface Loadpoint {
   socPct: number | null
   /**
    * Where that level came from, in the box's own token: `vehicle` from the
-   * car, `completed` pinned to the target after the car stopped drawing,
-   * `inferred` from energy delivered, empty when no car is on the cable.
+   * car, `inferred` from energy delivered, `assumed` until confirmed.
+   * Older boxes may still send `completed`; that is never a BMS reading.
    */
   socSource: string
+  vehicleCapacityWh?: number | null
+  capacitySource?: string
+  socRetention?: string
+  chargingDeclined?: boolean
   targetSocPct: number | null
   /** What this session has delivered, in watt-hours. */
   sessionWh: number
@@ -152,6 +161,10 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     socPct: w.plugged_in === false ? null : socFraction !== null && socFraction >= 0 && socFraction <= 1
       ? Math.round(socFraction * 100) : num(w.current_soc_pct),
     socSource: typeof w.soc_source === 'string' ? w.soc_source : '',
+    vehicleCapacityWh: num(w.vehicle_capacity_wh),
+    capacitySource: typeof w.capacity_source === 'string' ? w.capacity_source : '',
+    socRetention: typeof w.soc_retention === 'string' ? w.soc_retention : '',
+    chargingDeclined: w.charging_declined === true,
     targetSocPct: pct(w.target_soc) ?? num(w.target_soc_pct),
     sessionWh: Math.max(0, Math.round(num(w.delivered_wh_session) ?? 0)),
     minChargeW: num(w.min_charge_w),
@@ -257,10 +270,16 @@ export function evStatusSentence(lp: Loadpoint): string {
     const p = formatPower(lp.powerW)
     return `Charging at ${p.text} ${p.unit}`
   }
+  if (lp.chargingDeclined) return 'The car stopped asking for charge. Check its charge limit or schedule. This does not confirm the battery is full.'
   if (lp.commandedKnown && lp.commandedReason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
   if (lp.commandedKnown && lp.commandedW === 0 && ['fuse_cooldown', 'fuse_limit'].includes(lp.commandedReason ?? '')) return 'Paused: main-fuse protection. Charging resumes on its own.'
   if (lp.commandedKnown && (lp.commandedW ?? 0) > 0) return `FTW requests ${formatPower(lp.commandedW!).text} ${formatPower(lp.commandedW!).unit}. Waiting for the car to draw power.` + (lp.charger?.reason ? ` Charger reports: ${String(lp.charger.reason)}.` : '')
   return 'Plugged in — not charging right now'
+}
+
+/** A zero hold is a pause; older boxes omit their zero setpoint. */
+export function isPaused(lp: Loadpoint): boolean {
+  return lp.manualActive && (lp.manualChargeW === 0 || lp.manual?.state === 'paused' || lp.manual?.state === 'pausing' || (lp.manualChargeW === null && (lp.manual?.requested_w === 0 || lp.manual?.requested_a === 0)))
 }
 
 /** The hold is intent; only a fresh charger reading proves charging. */
@@ -274,13 +293,15 @@ export function manualStatusSentence(lp: Loadpoint): string {
     ? ` Charger reports: ${m.charger_reason}.` : ''
   if (m?.state === 'unavailable') return 'Charger status is out of date. FTW cannot confirm whether the car is charging.'
   switch (m?.state) {
+    case 'pausing': return 'Pause requested. ' + (lp.powerW >= 100 ? `${formatPower(lp.powerW).text} ${formatPower(lp.powerW).unit} is still flowing. ` : '') + 'Waiting for the charger to stop.'
+    case 'paused': return 'Paused by you. Charging stays off until you resume the plan, choose Charge now, or unplug.'
     case 'charging': {
       const p = formatPower(lp.powerW)
       return lp.powerW > 0 ? `Charging at ${p.text} ${p.unit}. ${request} requested.` : 'The charger reports charging. Waiting for a power reading.'
     }
     case 'accepted': return `Charger reports a ${limit} limit. Waiting for the car to start drawing…${reason}`
     case 'not_drawing': return `Charger offers ${limit} but the car is not drawing.${reason || ' Check the car’s charge limit or schedule.'}`
-    case 'stalled': return `The charger has not acted on ${request}.${reason || ' Check the charger and the car’s charge limit or schedule.'}`
+    case 'stalled': return isPaused(lp) ? 'The charger has not stopped after your pause request. Check the charger’s app.' : `The charger has not acted on ${request}.${reason || ' Check the charger and the car’s charge limit or schedule.'}`
     case 'limited':
       if (m.limit_reason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
       if (m.limit_reason === 'fuse_cooldown') return 'Paused: main-fuse protection. Charging resumes on its own.'
@@ -295,7 +316,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
 }
 
 export function evPlanSentence(lp: Loadpoint, now = Date.now()): string | null {
-  if (!lp.pluggedIn || lp.manualActive || (lp.charger && lp.charger.available !== true)) return null
+  if (!lp.pluggedIn || lp.manualActive || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
   if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'
   if (lp.planStartMs && lp.planEndMs && lp.planEndMs > now) {
     const clock = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -349,15 +370,20 @@ export const SOC_DEFAULT_PCT = 50
  * heard of reads as the estimate, which is what the box falls back to.
  */
 export function socSourceSentence(lp: Loadpoint): string {
+  const retention = lp.socRetention === 'session'
+    ? ' FTW keeps this level for the same charging session, including after a box restart.'
+    : lp.socRetention === 'error'
+      ? ' This level could not be saved for a box restart. Enter it again before relying on the plan after restarting.'
+      : ' This level must be entered again after a box restart.'
   switch (lp.socSource) {
     case 'assumed':
-      return `Battery level needs confirmation. The plan currently assumes ${lp.socPct ?? SOC_DEFAULT_PCT} %. Drag to match the car. This level must be entered again after a box restart.`
+      return `Battery level needs confirmation. The plan currently assumes ${lp.socPct ?? SOC_DEFAULT_PCT} %. Drag to match the car.` + retention
     case 'vehicle':
-      return 'Live from the car. Drag only to correct drift.'
+      return 'Reported by the car. Drag only to correct drift.'
     case 'completed':
-      return 'The car stopped asking for current, so the box assumes the target was reached. Drag to correct.'
+      return 'The car stopped asking for charge. Its actual battery level is not confirmed. Drag to match the car.'
     default:
-      return 'Estimated from energy delivered. Drag to the real value and the plan follows.'
+      return 'Estimated from energy delivered. Drag to the real value and the plan follows.' + retention
   }
 }
 

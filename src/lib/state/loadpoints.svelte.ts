@@ -88,6 +88,7 @@ export type Control = 'hold' | 'boost' | 'soc' | 'surplus'
 export type Outcome =
   | 'hold'
   | 'release'
+  | 'pause'
   | 'boost'
   | 'unboost'
   | 'soc'
@@ -113,6 +114,9 @@ export class LoadpointsStore {
 
   /** Whether the box has ever answered. Absence of an answer is not an empty bay. */
   loaded = $state(false)
+
+  /** Age of the charger read, independent of the house power stream. */
+  readAt = $state<number | null>(null)
 
   /** A sentence, never a code. Null when there is nothing to say. */
   error = $state<string | null>(null)
@@ -175,6 +179,10 @@ export class LoadpointsStore {
       'hold',
       commandHelp
     )
+  }
+
+  async pauseCharging(lp: Loadpoint): Promise<void> {
+    await this.#send(OP_LOADPOINT_HOLD, { id: lp.id, power_w: 0, hold_s: 0 }, 'hold', 'pause', commandHelp)
   }
 
   /** Release the hold. The plan takes back over. */
@@ -309,6 +317,7 @@ export class LoadpointsStore {
 
       this.points = (wire.loadpoints ?? []).map(toLoadpoint)
       this.loaded = true
+      this.readAt = Date.now()
       this.error = null
     } catch (err) {
       if (token !== this.#token) return

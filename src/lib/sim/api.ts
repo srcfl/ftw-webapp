@@ -126,6 +126,7 @@ const ROUTES: Record<string, RouteFacts> = {
   // stays actuation, because target also carries one-shot fields that move
   // energy now.
   'GET /api/loadpoints': { tier: 'read' },
+  'POST /api/loadpoints/{id}/vehicle': { tier: 'configure' },
   'PUT /api/loadpoints/{id}/schedule': { tier: 'configure' },
   'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure' },
   'GET /api/mpc/plan': { tier: 'read' },
@@ -305,6 +306,7 @@ function json(status: number, value: unknown): ApiAnswer {
 export class SimApi {
   #opts: SimApiOptions
   #devices: SimDevice[]
+  #vehicleCapacityWh = 60000
   #pairing: { code: string; role: Role; expiresAtMs: number } | null = null
   /**
    * The charger's standing instruction, mutable the way the box's is.
@@ -504,6 +506,16 @@ export class SimApi {
     if (route === 'GET /api/savings/daily') return this.#savingsDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()
     if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
+    if (route === 'POST /api/loadpoints/{id}/vehicle') {
+      if (matched.params['id'] !== 'carport') return json(404, { error: 'Unknown charger' })
+      let body: { capacity_wh?: unknown }
+      try { body = JSON.parse(new TextDecoder().decode(req.body ?? new Uint8Array())) }
+      catch { return json(400, { error: 'Enter a valid battery size' }) }
+      const capacity = body.capacity_wh
+      if (typeof capacity !== 'number' || !Number.isFinite(capacity) || capacity < 1000 || capacity > 300000) return json(400, { error: 'Enter a battery size from 1 to 300 kWh' })
+      this.#vehicleCapacityWh = capacity
+      return json(200, { ok: true, vehicle_capacity_wh: capacity, capacity_source: 'configured' })
+    }
     if (route === 'PUT /api/loadpoints/{id}/schedule') {
       return this.#putSchedule(matched.params['id'] ?? '', req.body)
     }
@@ -688,6 +700,8 @@ export class SimApi {
         {
           id: 'carport',
           driver_name: 'easee',
+          vehicle_capacity_wh: this.#vehicleCapacityWh,
+          capacity_source: 'configured',
           plugged_in: pluggedIn,
           // The box's zero values for an empty bay; it omits an empty source.
           current_soc: pluggedIn ? door.soc : 0,
@@ -701,9 +715,9 @@ export class SimApi {
           phases: 3,
           voltage_v: 230,
           manual_active: door.holdW !== null,
-          // `manual_charge_w` is omitempty on the box: absent for a 0 W
-          // pause hold, present with the setpoint for any other.
-          ...(door.holdW ? { manual_charge_w: door.holdW } : {}),
+          // Zero is a pause; the manual status still names it if a box omits zero watts.
+          ...(door.holdW !== null ? { manual_charge_w: door.holdW } : {}),
+          ...(door.holdW === 0 ? { manual: { active: true, state: 'paused', requested_a: 0 } } : {}),
           // The box's BatteryBoostStatus, in its three states.
           battery_boost: door.boost
             ? {

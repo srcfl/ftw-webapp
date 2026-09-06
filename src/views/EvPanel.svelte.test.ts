@@ -662,7 +662,7 @@ describe('the charger behind its bubble', () => {
     await vi.advanceTimersByTimeAsync(50)
 
     // The box page's own defaults: a 30 % reserve for an hour.
-    const reserve = document.querySelector<HTMLInputElement>('input[type="number"]')!
+    const reserve = document.querySelector<HTMLInputElement>('[aria-label="House battery reserve"]')!
     expect(reserve.value).toBe('30')
     expect(button('1 h')!.getAttribute('aria-pressed')).toBe('true')
     button('2 h')!.click()
@@ -703,6 +703,90 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Available after returning to the plan')
   })
 
+  it('pauses without removing the goal and resumes only when asked', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command')
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, { id: 'carport', power_w: 0, hold_s: 0 })
+    expect(document.body.textContent).toContain('Paused by you')
+    expect(document.body.textContent).toContain('Ready by')
+    expect(slider()).toBeNull()
+    expect(button('Resume plan')).toBeDefined()
+    expect(button('Charge now')).toBeDefined()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(document.body.textContent).toContain('Paused by you')
+    button('Resume plan')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenLastCalledWith(OP_LOADPOINT_HOLD, { id: 'carport', clear: true })
+    expect(document.body.textContent).not.toContain('Paused by you')
+  })
+
+  it('Charge now from a pause uses the normal charger limit, not a clamped zero', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command')
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenLastCalledWith(OP_LOADPOINT_HOLD, { id: 'carport', power_w: 11000, hold_s: 0, phase_mode: '3p' })
+    expect(document.body.textContent).toContain('Charge now is active')
+    expect(document.body.textContent).not.toContain('Paused by you')
+  })
+
+  it('saves battery size on field release, reads it back, and keeps it after reopening', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box, site } = await openedFor()
+    const requests = vi.spyOn(box.api, 'serve')
+    const capacity = document.querySelector<HTMLInputElement>('[aria-label="Usable battery size, kWh"]')!
+    capacity.value = '77.4'
+    capacity.dispatchEvent(new Event('input', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(requests.mock.calls.some(c => c[0].path.endsWith('/vehicle'))).toBe(false)
+    capacity.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    const writes = requests.mock.calls.filter(c => c[0].path.endsWith('/vehicle') && c[0].stepUp)
+    expect(writes).toHaveLength(1)
+    expect(JSON.parse(new TextDecoder().decode(writes[0]![0].body!))).toEqual({ capacity_wh: 77400 })
+    expect(document.body.textContent).toContain('Car battery · 77.4 kWh')
+    expect(document.body.textContent).toContain('Battery size saved')
+    document.body.replaceChildren()
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.body.textContent).toContain('Car battery · 77.4 kWh')
+  })
+
+  it('shows an invalid battery size without sending it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const asked = vi.spyOn(site, 'api')
+    const capacity = document.querySelector<HTMLInputElement>('[aria-label="Usable battery size, kWh"]')!
+    capacity.value = ''
+    capacity.dispatchEvent(new Event('input', { bubbles: true }))
+    capacity.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(document.body.textContent).toContain('Enter the usable battery size')
+    expect(asked.mock.calls.some(c => c[0].method === 'POST')).toBe(false)
+  })
+
+  it('ages charger status while its read hangs on a live house connection', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(req => req.path === '/api/loadpoints' ? new Promise(() => {}) : api(req))
+    await vi.advanceTimersByTimeAsync(17_000)
+    expect(site.session.phase).toBe('streaming')
+    expect(document.body.textContent).toContain('The last reading is out of date')
+    expect(document.querySelector('.status')?.textContent).not.toContain('Charging at')
+  })
+
   it('never draws the slider or the boost for a viewer', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
@@ -713,6 +797,10 @@ describe('the charger behind its bubble', () => {
     expect(button('Stop boost')).toBeUndefined()
     expect(socSlider()).toBeNull()
     expect(pvOnly()).toBeNull()
+    expect(document.body.textContent).toContain('Battery now')
+    expect(document.body.textContent).toContain('42 %')
+    expect(document.querySelector('[aria-label="Usable battery size, kWh"]')).toBeNull()
+    expect(button('Pause charging')).toBeUndefined()
   })
 
   it("prefills the car's level from the box and says where it came from", async () => {

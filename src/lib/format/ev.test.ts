@@ -142,8 +142,8 @@ describe("the car's level, in words", () => {
 
   it("says where the level came from, in the box page's words", () => {
     const from = (soc_source: string) => socSourceSentence(toLoadpoint({ ...WIRE, soc_source }))
-    expect(from('vehicle')).toBe('Live from the car. Drag only to correct drift.')
-    expect(from('completed')).toMatch(/assumes the target was reached/)
+    expect(from('vehicle')).toBe('Reported by the car. Drag only to correct drift.')
+    expect(from('completed')).toMatch(/actual battery level is not confirmed/)
     expect(from('assumed')).toMatch(/Battery level needs confirmation.*entered again after a box restart/);
     expect(from('inferred')).toMatch(/^Estimated from energy delivered/)
     // A source this app has not heard of reads as the estimate, which is
@@ -299,5 +299,20 @@ describe('current core fields and charger feedback', () => {
       expect(evStatusSentence(lp)).toMatch(/out of date/)
       expect(evStatusSentence(lp)).not.toMatch(/Charging at/)
     }
+  })
+})
+
+
+describe('a retained level and a car that declines charge', () => {
+  it('does not call a declined charge full or a reached target', () => {
+    const lp = toLoadpoint({ id: 'car', plugged_in: true, charging_declined: true, current_soc: 0.37 })
+    expect(evStatusSentence(lp)).toContain('does not confirm the battery is full')
+    expect(lp.socPct).toBe(37)
+  })
+  it('uses the reported retention, including a failed disk save', () => {
+    const lp = toLoadpoint({ plugged_in: true, current_soc: 0.12, soc_source: 'inferred', soc_retention: 'session' })
+    expect(socSourceSentence(lp)).toContain('same charging session')
+    expect(socSourceSentence({ ...lp, socRetention: 'error' })).toContain('could not be saved')
+    expect(socSourceSentence({ ...lp, socRetention: 'unavailable' })).toContain('entered again after a box restart')
   })
 })

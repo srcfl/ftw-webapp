@@ -16,6 +16,7 @@
   import { callBox, BoxApiError } from '$lib/state/box-api'
   import {
     evStatusSentence,
+    isPaused,
     evPlanSentence,
     evScheduleSentence,
     evSessionSentence,
@@ -61,10 +62,12 @@
     document.addEventListener('visibilitychange', changed)
     return () => document.removeEventListener('visibilitychange', changed)
   })
+  let now = $state(Date.now())
   let pollEpoch = $state(Math.floor(Date.now() / 5_000))
   $effect(() => {
     const t = setInterval(() => {
-      pollEpoch = Math.floor(Date.now() / 5_000)
+      now = Date.now()
+      pollEpoch = Math.floor(now / 5_000)
     }, 1_000)
     return () => clearInterval(t)
   })
@@ -101,7 +104,7 @@
   }
 
   const sending = $derived(store.command.kind === 'sending')
-  const stale = $derived(!!store.error || site.session.phase !== 'streaming')
+  const stale = $derived(!!store.error || site.session.phase !== 'streaming' || (store.readAt !== null && now - store.readAt >= 15_000))
 
   /**
    * One sentence per thing the box did, under the control that asked. The
@@ -112,14 +115,16 @@
       case 'hold':
         return stale ? 'Waiting for current charger status.' : lp.manual ? evStatusSentence(lp) : 'FTW received your charge request. Waiting for charger status.'
       case 'release':
-        return 'Manual charge ended. The plan decides when to charge.'
+        return 'The plan decides when to charge.'
+      case 'pause':
+        return evStatusSentence(lp)
       case 'boost':
         return 'Battery boost selected. The power readings show what the house battery supplies.'
       case 'unboost':
         return 'Boost stopped — the plan decides again.'
       case 'soc':
-        return `Charge level saved: ${lp.socPct ?? socFor(lp)} %.` +
-          (!lp.schedule && !lp.manualActive && !lp.surplusOnly ? ' Set a ready time, or choose Charge now.' : ' Reading the updated plan…')
+        return (lp.socRetention === 'error' ? `Charge level updated: ${lp.socPct ?? socFor(lp)} %. It could not be saved for a box restart.` : `Charge level saved: ${lp.socPct ?? socFor(lp)} %.`) +
+          (!lp.schedule && !lp.manualActive && !lp.surplusOnly ? ' Set a ready time, or choose Charge now.' : store.planMissing ? ' Charging times are not available yet.' : '')
       case 'surplus_on':
         return 'Solar rule saved. The plan uses spare solar only.'
       case 'surplus_off':
@@ -148,7 +153,7 @@
   }
 
   function heldAmps(lp: Loadpoint): number | null {
-    return lp.manualActive && lp.manualChargeW !== null ? wattsToAmps(lp, lp.manualChargeW) : null
+    return lp.manualActive && !isPaused(lp) && lp.manualChargeW !== null ? wattsToAmps(lp, lp.manualChargeW) : null
   }
 
   function ampsFor(lp: Loadpoint): number {
@@ -194,6 +199,36 @@
     surplusDraft[lp.id] = on
     await store.setSurplusOnly(lp, on)
     delete surplusDraft[lp.id]
+  }
+
+  let capacityDraft = $state<Record<string, string>>({})
+  let capacityNote = $state<Record<string, string>>({})
+  let capacityBusy = $state<Record<string, boolean>>({})
+  let capacityFailed = $state<Record<string, boolean>>({})
+
+  async function setCapacity(lp: Loadpoint): Promise<void> {
+    if (capacityBusy[lp.id]) return
+    const value = Number(capacityDraft[lp.id])
+    if (!Number.isFinite(value) || value < 1 || value > 300) {
+      capacityNote[lp.id] = 'Enter the usable battery size from 1 to 300 kWh.'
+      capacityFailed[lp.id] = true
+      return
+    }
+    let accepted = false
+    capacityBusy[lp.id] = true
+    capacityFailed[lp.id] = false
+    capacityNote[lp.id] = 'Sending battery size…'
+    try {
+      await callBox(site, { method: 'POST', path: `/api/loadpoints/${encodeURIComponent(lp.id)}/vehicle`, body: { capacity_wh: Math.round(value * 1000) } })
+      accepted = true
+      capacityNote[lp.id] = 'Battery size saved. Reading charging status…'
+      await store.load(true)
+      capacityNote[lp.id] = 'Battery size saved. The plan uses this size for its estimates.'
+      delete capacityDraft[lp.id]
+    } catch (err) {
+      capacityFailed[lp.id] = !accepted
+      capacityNote[lp.id] = accepted ? 'Battery size saved. Current charging status is unavailable.' : err instanceof BoxApiError ? err.help : 'Battery size is not confirmed. Check the current value before trying again.'
+    } finally { capacityBusy[lp.id] = false }
   }
 
   /** The boost under edit: a reserve and a bound, sent as one lease. */
@@ -342,7 +377,7 @@
 <!-- The fate of the last command, under the control that sent it. One
      command is in flight at a time, so the outcome belongs to exactly one. -->
 {#snippet outcome(of: Control, lp: Loadpoint)}
-  {#if store.commandLpId === lp.id && store.command.kind === 'applied' && store.command.of === of}
+  {#if store.commandLpId === lp.id && store.command.kind === 'applied' && store.command.of === of && (of !== 'hold' || store.command.did === 'release')}
     <p class="hint" role="status">{did(store.command.did, lp)}</p>
   {:else if store.commandLpId === lp.id && store.command.kind === 'unconfirmed' && store.command.of === of}
     <p class="hint" role="status">FTW received the request. Its result is not confirmed yet.</p>
@@ -400,9 +435,7 @@
              Hidden from viewers as presentation — the box's refusal is the
              actual gate. Absent when the bay is empty, because "charge now"
              with no cable is a promise nobody can keep. -->
-        {#if site.canConfigure && lp.pluggedIn}
-          {@const range = chargeCurrent(lp)}
-          {@const chosen = ampsFor(lp)}
+        {#if lp.pluggedIn}
           {@const level = socFor(lp)}
           <!-- The car's level, above the charging controls as on the box's
                own page: the estimate the plan runs from, and a slider to
@@ -414,6 +447,7 @@
               <span class="label">Battery now</span>
               <span class="readout">{lp.socSource === 'assumed' && socDraft[lp.id] === undefined ? 'Not confirmed' : `${level} %`}</span>
             </div>
+            {#if site.canConfigure}
             <input
               class="slider"
               type="range"
@@ -426,20 +460,45 @@
               oninput={(e) => editSoc(lp, Number(e.currentTarget.value))}
               onchange={(e) => void setSoc(lp, Number(e.currentTarget.value))}
             />
+            {/if}
             {#if store.commandLpId === lp.id && store.command.kind === 'sending' && store.command.of === 'soc'}
               <p class="hint">Sending charge level: {level} %…</p>
             {:else if store.commandLpId === lp.id && store.command.kind !== 'idle' && store.command.of === 'soc'}
               {@render outcome('soc', lp)}
             {:else}
-              <p class="hint">{socSourceSentence(lp)}</p>
+              <p class="hint">{site.canConfigure ? socSourceSentence(lp) : lp.socSource === 'assumed' ? 'Battery level needs confirmation by someone who can control this charger.' : lp.socSource === 'vehicle' ? 'Reported by the car.' : 'Estimated from energy delivered.'}</p>
             {/if}
           </div>
+
+        {/if}
+
+        {#if site.canConfigure && lp.pluggedIn}
+          {@const range = chargeCurrent(lp)}
+          {@const chosen = ampsFor(lp)}
+          {#if lp.vehicleCapacityWh != null}
+            <details class="extras">
+              <summary>Car battery · {lp.vehicleCapacityWh / 1000} kWh</summary>
+              <p class="hint">{lp.capacitySource === 'default' ? 'FTW is using a default size. Check it against your car.' : 'Used for estimates. Check this size if you use another car.'}</p>
+              <label class="row capacity">
+                <span>Usable battery size (kWh)</span>
+                <input type="number" min="1" max="300" step="0.1" inputmode="decimal"
+                  aria-label="Usable battery size, kWh"
+                  value={capacityDraft[lp.id] ?? String(lp.vehicleCapacityWh / 1000)}
+                  disabled={capacityBusy[lp.id]}
+                  oninput={(e) => { capacityDraft[lp.id] = e.currentTarget.value }}
+                  onchange={() => void setCapacity(lp)} />
+              </label>
+              <p class="hint">Applies when you leave the field. Find the usable size in your car’s specifications.</p>
+              {#if capacityNote[lp.id]}<p class="hint" role={capacityFailed[lp.id] ? 'alert' : 'status'}>{capacityNote[lp.id]}</p>{/if}
+              {#if capacityFailed[lp.id]}<button class="quiet" disabled={capacityBusy[lp.id]} onclick={() => void setCapacity(lp)}>Try battery size again</button>{/if}
+            </details>
+          {/if}
 
           <!-- The slider is the box's own page's: whole amps between the
                charger's floor and ceiling, sent as watts for a hold that
                runs until the car is full, Stop, or an unplug. -->
           <div class="control">
-            {#if lp.manualActive}
+            {#if lp.manualActive && !isPaused(lp)}
             <div class="row">
               <span class="label">Charge now is active</span>
               <span class="readout">{currentReadout(lp, chosen)}</span>
@@ -460,9 +519,10 @@
             <div class="actions">
               {#if lp.manualActive}
                 <button class="quiet" disabled={sending} onclick={() => void store.stopCharging(lp)}>
-                  Return to plan
+                  {isPaused(lp) ? 'Resume plan' : 'Return to plan'}
                 </button>
-              {:else}
+              {/if}
+              {#if !lp.manualActive || isPaused(lp)}
                 <button
                   class="primary"
                   disabled={sending}
@@ -471,9 +531,14 @@
                   {store.command.kind === 'sending' && store.commandLpId === lp.id && store.command.of === 'hold' ? 'Sending charge request…' : 'Charge now'}
                 </button>
               {/if}
+              {#if !isPaused(lp)}
+                <button class="quiet" disabled={sending} onclick={() => void store.pauseCharging(lp)}>Pause charging</button>
+              {/if}
             </div>
             <p class="hint">
-              {#if lp.manualActive}
+              {#if isPaused(lp)}
+                The goal and solar rule wait until you resume the plan. Charge now starts immediately.
+              {:else if lp.manualActive}
                 Changes apply when you release the slider. Return to plan restores your schedule and solar settings.
               {:else}
                 Starts at up to {currentReadout(lp, chosen)}. Ignores the goal and solar rule until you return to the plan or unplug.
@@ -487,7 +552,7 @@
         <section class="goal" aria-label="Your goal">
           <h3>Your goal</h3>
           {#if lp.manualActive}
-            <p class="hint">Charge now overrides this goal. Edits apply when you return to the plan.</p>
+            <p class="hint">{isPaused(lp) ? 'Resume the plan to use this goal. Edits apply then.' : 'Charge now overrides this goal. Edits apply when you return to the plan.'}</p>
           {/if}
         {#if draft?.lpId === lp.id}
           <!-- Released controls write in order; the draft stays during rereads. -->
@@ -602,7 +667,7 @@
             <span>Only spare solar</span>
           </label>
           <p class="hint">{lp.manualActive
-            ? 'Charge now overrides this rule. It resumes when you return to the plan.'
+            ? isPaused(lp) ? 'This rule resumes with the plan.' : 'Charge now overrides this rule. It resumes when you return to the plan.'
             : (surplusDraft[lp.id] ?? lp.surplusOnly)
               ? 'No grid or home battery. Your target may not be reached in time.'
               : 'The plan may use grid power to reach your target.'}</p>
@@ -890,6 +955,9 @@
     font-size: 14px;
     padding: var(--space-1) var(--space-2);
   }
+
+  .capacity { margin-top: var(--space-2); flex-wrap: wrap; }
+  .capacity input { width: 8ch; border: 1px solid var(--line); border-radius: var(--radius-xs); padding: var(--space-1); color: var(--fg); background: var(--surface-sunken); }
 
   .editor input[type='number'] {
     /* Three digits plus the browser's own spinner, or "84" clips to "8". */
