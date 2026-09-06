@@ -15,6 +15,7 @@
   import { askWhenLive } from '$lib/state/ask.svelte'
   import { callBox, BoxApiError } from '$lib/state/box-api'
   import { refreshCharging } from '$lib/state/charging-watch'
+  import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import {
     evStatusSentence,
     MANUAL_SAVE_ERROR_TEXT,
@@ -76,7 +77,7 @@
 
   askWhenLive(
     untrack(() => site),
-    () => visible ? `loadpoints ${pollEpoch}` : null,
+    () => visible && site.session.caps.has(CAP_API_PASSTHROUGH) ? `loadpoints ${pollEpoch}` : null,
     () => store.load()
   )
 
@@ -411,12 +412,18 @@
     <button class="close" onclick={onclose} aria-label="Close">Close</button>
   </header>
 
+  {#if site.session.phase === 'streaming' && !site.session.caps.has(CAP_API_PASSTHROUGH)}
+    <p class="note" role="status">Charging controls are not available from this box yet. Open the box’s own page to manage charging.</p>
+  {:else}
+  {#if site.session.phase !== 'streaming'}
+    <p class="note" role="status">Connecting to your box. Charging status will appear here when it answers.</p>
+  {/if}
   {#if store.error}
     <p class="note">{store.error}</p>
   {/if}
 
   {#if !store.loaded && !store.error}
-    <p class="note">Reading your box…</p>
+    {#if site.session.phase === 'streaming'}<p class="note">Reading your box…</p>{/if}
   {:else}
     {#if store.loaded && !store.error && store.points.length === 0}
       <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
@@ -807,6 +814,7 @@
         <p class="note">This charger is no longer listed. Close this view and choose a charger on the home screen.</p>
       {/if}
     {/each}
+  {/if}
   {/if}
 </div>
 </div>

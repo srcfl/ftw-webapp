@@ -13,6 +13,7 @@ import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import { ApiError } from '$lib/protocol/session'
+import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
 import {
   ROLE_VIEWER,
   OP_LOADPOINT_HOLD,
@@ -92,6 +93,47 @@ describe('the charger behind its bubble', () => {
     // The battery opens its live line, not the charger's controls.
     const sheet = document.querySelector('[role="dialog"]')
     expect(sheet?.getAttribute('aria-label')).not.toBe('EV charger')
+  })
+
+  it('preserves a car-bubble tap before capabilities return and fills the same sheet when connected', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    const connected = site.session
+    site.session = { ...connected, phase: 'idle', caps: new Set() }
+    const api = vi.spyOn(site, 'api')
+    render(Now, { props: { site } })
+    await vi.advanceTimersByTimeAsync(50)
+    document.querySelector('ftw-energy-flow')!.dispatchEvent(
+      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
+    )
+    await vi.advanceTimersByTimeAsync(50)
+    const sheet = document.querySelector('[role="dialog"]')!
+    expect(sheet.textContent).toContain('Connecting to your box.')
+    expect(api.mock.calls.filter(([req]) => req.path === '/api/loadpoints')).toHaveLength(0)
+    site.session = connected
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.querySelector('[role="dialog"]')).toBe(sheet)
+    expect(sheet.textContent).toMatch(/Charging at 7\.\d kW/)
+    expect(sheet.textContent).not.toContain('Connecting to your box.')
+  })
+
+  it('explains a known box without charging API support instead of ignoring the tap', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const connected = (await streaming()).session
+    const site = new SiteStore('older-box')
+    site.session = { ...connected, caps: new Set([...connected.caps].filter(cap => cap !== CAP_API_PASSTHROUGH)) }
+    const api = vi.spyOn(site, 'api')
+    render(Now, { props: { site } })
+    await vi.advanceTimersByTimeAsync(50)
+    document.querySelector('ftw-energy-flow')!.dispatchEvent(
+      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
+    )
+    await vi.advanceTimersByTimeAsync(50)
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Charging controls are not available from this box yet.')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Open the box’s own page')
+    expect(api.mock.calls.filter(([req]) => req.path === '/api/loadpoints')).toHaveLength(0)
   })
 
   it('recovers from a busy first read after opening the car bubble without claiming setup is missing', async () => {

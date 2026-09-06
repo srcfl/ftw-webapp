@@ -14,7 +14,6 @@
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
   import { explain } from '$lib/format/explanation'
-  import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
   import type { Component } from 'svelte'
@@ -155,7 +154,7 @@
     return () => { window.removeEventListener('hashchange', read); navigator.serviceWorker?.removeEventListener('message', message) }
   })
   $effect(() => {
-    if (active && requestedCharger && site.session.caps.has(CAP_API_PASSTHROUGH)) {
+    if (active && requestedCharger) {
       selectedCharger = requestedCharger
       evOpen = true
       requestedCharger = null
@@ -193,17 +192,16 @@
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
 
-  // The hero says which bubble was tapped. The charger opens its own panel of
-  // controls — but only when the box's API is actually reachable, or the
-  // panel would be a door painted on a wall. Every other bubble opens its
-  // live line, which needs nothing but the stream already on screen.
+  // Preserve a charger tap while the saved home reconnects. The panel shows
+  // connection progress, then checks the capabilities the box reports.
   $effect(() => {
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
       const role = (e as CustomEvent<{ role?: string }>).detail?.role
       if (role === 'ev') {
-        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) { selectedCharger = null; evOpen = true }
+        selectedCharger = null
+        evOpen = true
       } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
         liveRole = role as LiveRole
       }
