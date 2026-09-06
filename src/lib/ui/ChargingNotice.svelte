@@ -5,7 +5,10 @@
   import type { SiteStore } from '$lib/state/site.svelte'
   let { site }: { site: SiteStore } = $props()
   let snapshot = $state<ChargingSnapshot>({ points: [], fresh: false })
-  $effect(() => watchCharging(untrack(() => site), next => { snapshot = next }))
+  $effect(() => {
+    const currentSite = site
+    return untrack(() => watchCharging(currentSite, next => { snapshot = next }))
+  })
   const fresh = $derived(snapshot.fresh && site.session.phase === 'streaming')
 </script>
 

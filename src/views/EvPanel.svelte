@@ -110,7 +110,7 @@
   function did(o: Outcome, lp: Loadpoint): string {
     switch (o) {
       case 'hold':
-        return 'FTW received your charge request. Waiting for charger status.'
+        return stale ? 'Waiting for current charger status.' : lp.manual ? evStatusSentence(lp) : 'FTW received your charge request. Waiting for charger status.'
       case 'release':
         return 'Manual charge ended. The plan decides when to charge.'
       case 'boost':
@@ -412,7 +412,7 @@
           <div class="control">
             <div class="row">
               <span class="label">Battery now</span>
-              <span class="readout">{level} %</span>
+              <span class="readout">{lp.socSource === 'assumed' && socDraft[lp.id] === undefined ? 'Not confirmed' : `${level} %`}</span>
             </div>
             <input
               class="slider"

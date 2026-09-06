@@ -349,6 +349,8 @@ export const SOC_DEFAULT_PCT = 50
  */
 export function socSourceSentence(lp: Loadpoint): string {
   switch (lp.socSource) {
+    case 'assumed':
+      return `Battery level needs confirmation. The plan currently assumes ${lp.socPct ?? SOC_DEFAULT_PCT} %. Drag to match the car. This level must be entered again after a box restart.`
     case 'vehicle':
       return 'Live from the car. Drag only to correct drift.'
     case 'completed':

@@ -144,6 +144,7 @@ describe("the car's level, in words", () => {
     const from = (soc_source: string) => socSourceSentence(toLoadpoint({ ...WIRE, soc_source }))
     expect(from('vehicle')).toBe('Live from the car. Drag only to correct drift.')
     expect(from('completed')).toMatch(/assumes the target was reached/)
+    expect(from('assumed')).toMatch(/Battery level needs confirmation.*entered again after a box restart/);
     expect(from('inferred')).toMatch(/^Estimated from energy delivered/)
     // A source this app has not heard of reads as the estimate, which is
     // the box's own fallback.
