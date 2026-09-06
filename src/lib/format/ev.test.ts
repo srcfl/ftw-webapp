@@ -316,3 +316,10 @@ describe('a retained level and a car that declines charge', () => {
     expect(socSourceSentence({ ...lp, socRetention: 'unavailable' })).toContain('entered again after a box restart')
   })
 })
+
+
+it('a charger limit is not described as a main-fuse limit', () => {
+  const lp = toLoadpoint({ plugged_in: true, manual_active: true, manual: { state: 'limited', requested_a: 16, commanded_a: 10, limit_reason: 'charger_limit' } })
+  expect(evStatusSentence(lp)).toContain('The charger limits this request to 10 A (16 A requested)')
+  expect(evStatusSentence(lp)).not.toContain('Main fuse')
+})

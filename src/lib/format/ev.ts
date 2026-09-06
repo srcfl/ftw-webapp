@@ -303,6 +303,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
     case 'not_drawing': return `Charger offers ${limit} but the car is not drawing.${reason || ' Check the car’s charge limit or schedule.'}`
     case 'stalled': return isPaused(lp) ? 'The charger has not stopped after your pause request. Check the charger’s app.' : `The charger has not acted on ${request}.${reason || ' Check the charger and the car’s charge limit or schedule.'}`
     case 'limited':
+      if (m.limit_reason === 'charger_limit') return `The charger limits this request to ${limit} (${request} requested).`
       if (m.limit_reason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
       if (m.limit_reason === 'fuse_cooldown') return 'Paused: main-fuse protection. Charging resumes on its own.'
       return `Main fuse limits this charge to ${limit} right now (${request} requested).`
@@ -315,7 +316,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
   }
 }
 
-export function evPlanSentence(lp: Loadpoint, now = Date.now()): string | null {
+export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = true): string | null {
   if (!lp.pluggedIn || lp.manualActive || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
   if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'
   if (lp.planStartMs && lp.planEndMs && lp.planEndMs > now) {
@@ -323,8 +324,8 @@ export function evPlanSentence(lp: Loadpoint, now = Date.now()): string | null {
     return `Charging planned ${clock(lp.planStartMs)}–${clock(lp.planEndMs)}.`
   }
   if (lp.surplusOnly) return 'Solar only: charging waits for spare solar power.'
-  if (!lp.schedule && lp.powerW < 100) return 'No charging plan yet. Set a ready time, or choose Charge now.'
-  if (lp.schedule && lp.powerW < 100) return 'No charge window yet for this goal. Choose Charge now if you need to charge immediately.'
+  if (!lp.schedule && lp.powerW < 100) return canControl ? 'No charging plan yet. Set a ready time, or choose Charge now.' : 'No charging plan yet. Ask an owner to set a ready time or start charging.'
+  if (lp.schedule && lp.powerW < 100) return canControl ? 'No charge window yet for this goal. Choose Charge now if you need to charge immediately.' : 'No charge window yet for this goal. An owner can start charging now.'
   return null
 }
 

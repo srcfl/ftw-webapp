@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { watchCharging, type ChargingSnapshot } from './charging-watch'
+import { watchCharging, refreshCharging, type ChargingSnapshot } from './charging-watch'
 import { callBox } from './box-api'
 import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
 import type { SiteStore } from './site.svelte'
@@ -29,6 +29,30 @@ describe('shared charging status', () => {
     stopB()
     await vi.advanceTimersByTimeAsync(30000)
     expect(read).toHaveBeenCalledTimes(2)
+  })
+  it('refreshes both views after an action without waiting for the poll', async () => {
+    read.mockResolvedValueOnce({ loadpoints: [plugged] })
+      .mockResolvedValue({ loadpoints: [{ ...plugged, current_power_w: 0, manual_active: true, manual: { state: 'paused' } }] })
+    const home = site(), listener = vi.fn()
+    stops.push(watchCharging(home, listener))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(listener.mock.lastCall?.[0].points[0].powerW).toBe(4300)
+    refreshCharging(home)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(listener.mock.lastCall?.[0].points[0].manual?.state).toBe('paused')
+  })
+  it('re-asks after an older in-flight read when an action requests a refresh', async () => {
+    let finish!: (value: unknown) => void
+    read.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+      .mockResolvedValue({ loadpoints: [{ ...plugged, current_power_w: 0 }] })
+    const home = site(), listener = vi.fn()
+    stops.push(watchCharging(home, listener))
+    refreshCharging(home)
+    finish({ loadpoints: [plugged] })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(listener.mock.lastCall?.[0].points[0].powerW).toBe(0)
   })
   it('expires the last reading while the next request is still waiting', async () => {
     read.mockResolvedValueOnce({ loadpoints: [plugged] }).mockReturnValue(new Promise(() => {}))

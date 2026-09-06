@@ -801,6 +801,7 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('42 %')
     expect(document.querySelector('[aria-label="Usable battery size, kWh"]')).toBeNull()
     expect(button('Pause charging')).toBeUndefined()
+    expect(document.body.textContent).not.toContain('Choose Charge now')
   })
 
   it("prefills the car's level from the box and says where it came from", async () => {

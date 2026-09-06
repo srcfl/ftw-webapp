@@ -14,6 +14,7 @@
   import { LoadpointsStore, type Control, type Outcome } from '$lib/state/loadpoints.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
   import { callBox, BoxApiError } from '$lib/state/box-api'
+  import { refreshCharging } from '$lib/state/charging-watch'
   import {
     evStatusSentence,
     isPaused,
@@ -223,6 +224,7 @@
       accepted = true
       capacityNote[lp.id] = 'Battery size saved. Reading charging status…'
       await store.load(true)
+      refreshCharging(site)
       capacityNote[lp.id] = 'Battery size saved. The plan uses this size for its estimates.'
       delete capacityDraft[lp.id]
     } catch (err) {
@@ -339,6 +341,7 @@
       })
       if (revision === scheduleRevision) scheduleNote = 'Schedule saved. Reading the plan…'
       await store.load()
+      refreshCharging(site)
       if (revision === scheduleRevision) scheduleNote = store.error ? 'Schedule saved. Current charging status is unavailable.' : 'Schedule saved.'
     } catch (err) {
       if (revision === scheduleRevision) {
@@ -363,6 +366,7 @@
       })
       draft = null
       await store.load()
+      refreshCharging(site)
     } catch (err) {
       saveError =
         err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Reading its current settings…"
@@ -409,7 +413,7 @@
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp)}</p>
-        {#if !stale && evPlanSentence(lp)}<p class="hint">{evPlanSentence(lp)}</p>{/if}
+        {#if !stale && evPlanSentence(lp, now, site.canConfigure)}<p class="hint">{evPlanSentence(lp, now, site.canConfigure)}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
           <p class="hint">Charger last seen: {clock(Number(lp.charger?.updated_at_ms ?? lp.manual?.charger_updated_at_ms))}</p>
         {/if}

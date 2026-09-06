@@ -12,6 +12,7 @@
  */
 
 import { callBox, BoxApiError } from './box-api'
+import { refreshCharging } from './charging-watch'
 import { commandHelp, boostHelp, socHelp } from '$lib/format/command'
 import {
   toLoadpoint,
@@ -282,6 +283,7 @@ export class LoadpointsStore {
     // so a caller holding a draft against the box's value knows when the
     // box's own value is the one on screen and can let go of the draft.
     await this.load(true).catch(() => {})
+    refreshCharging(this.#site)
   }
 
   /**
