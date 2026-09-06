@@ -933,7 +933,7 @@ describe('the charger behind its bubble', () => {
     expect(button('Charge now')).toBeUndefined()
   })
 
-  it('offers three explicit choices when an earlier charge cannot be matched after restart', async () => {
+  it('offers three explicit choices when the charger or connection is unconfirmed', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
     const { box, site } = await openedFor()
@@ -949,7 +949,7 @@ describe('the charger behind its bubble', () => {
       return answer
     })
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(document.body.textContent).toContain('Confirm how to continue after restart')
+    expect(document.body.textContent).toContain('Confirm how to continue charging')
     expect(document.body.textContent).not.toContain('Paused by you')
     for (const choice of ['Charge now', 'Resume plan', 'Pause charging']) expect(button(choice)).toBeDefined()
     expect(slider()).toBeNull()
@@ -959,7 +959,7 @@ describe('the charger behind its bubble', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, { id: 'carport', power_w: 0, hold_s: 0 })
     expect(document.body.textContent).toContain('Paused by you')
-    expect(document.body.textContent).not.toContain('Confirm how to continue after restart')
+    expect(document.body.textContent).not.toContain('Confirm how to continue charging')
   })
 
   it('reports unsaved charging intent until a later poll confirms recovery', async () => {

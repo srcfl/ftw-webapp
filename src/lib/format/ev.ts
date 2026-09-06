@@ -278,7 +278,7 @@ export const MANUAL_SAVE_ERROR_TEXT = 'This choice is active now, but could not 
  * the bay, never what might happen later — the schedule line owns later.
  */
 export function evStatusSentence(lp: Loadpoint, canControl = true): string {
-  if (lp.manualRestoreUnconfirmed) return (canControl ? 'Confirm how to continue after restart.' : 'An owner needs to confirm charging after restart.') + ' FTW could not match the earlier charge request to this connection.'
+  if (lp.manualRestoreUnconfirmed) return (canControl ? 'Confirm how to continue charging.' : 'An owner needs to confirm how charging should continue.') + ' FTW could not confirm the charger or connection.'
 
   if (lp.charger && lp.charger.available !== true) return lp.charger.known ? 'Charger status is out of date. FTW cannot confirm whether the car is charging.' : 'Waiting for the charger’s first status report.'
   if (!lp.pluggedIn) return 'Not plugged in'

@@ -592,7 +592,7 @@
             </div>
             <p class="hint">
               {#if lp.manualRestoreUnconfirmed}
-                Choose Charge now to start immediately, Resume plan to use your goal, or Pause charging to keep charging off.
+                Choose Charge now to request charging, Resume plan to use your goal, or Pause charging to request a stop.
               {:else if isPaused(lp)}
                 The goal and solar rule wait until you resume the plan. Charge now starts immediately.
               {:else if lp.manualActive}

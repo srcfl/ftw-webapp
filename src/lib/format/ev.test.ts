@@ -338,11 +338,14 @@ it('a charger limit is not described as a main-fuse limit', () => {
 })
 
 
-it('asks for a new choice after an unmatched restart instead of claiming a user pause', () => {
+it('asks for a new choice when the charger or connection is unconfirmed', () => {
   const lp = toLoadpoint({ plugged_in: true, manual_active: false, manual_restore_unconfirmed: true })
-  expect(evStatusSentence(lp)).toContain('Confirm how to continue after restart')
+  expect(evStatusSentence(lp)).toContain('Confirm how to continue charging')
+  expect(evStatusSentence(lp)).toContain('could not confirm the charger or connection')
+  expect(evStatusSentence(lp)).not.toMatch(/after restart|[Pp]aused|stopped/)
   expect(evStatusSentence(lp)).not.toContain('Paused by you')
-  expect(evStatusSentence(lp, false)).toContain('An owner needs to confirm')
+  expect(evStatusSentence(lp, false)).toContain('An owner needs to confirm how charging should continue')
+  expect(evStatusSentence(lp, false)).not.toContain('after restart')
 })
 it('keeps the old power visible until a lower current request is confirmed', () => {
   const lp = toLoadpoint({ plugged_in: true, current_power_w: 11000, manual_active: true, manual: { state: 'sent', requested_a: 6 } })
