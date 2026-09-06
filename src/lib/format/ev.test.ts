@@ -77,6 +77,7 @@ describe('a charger described in words', () => {
     expect(evPlanSentence(lp)).toBe('Goal saved. Updating the plan…')
     expect(evStatusSentence(lp)).toBe('Charging at 8.6 kW')
     expect(evPlanSentence({ ...lp, manualActive: true })).toBe('Goal saved. Updating the plan…')
+    expect(evPlanSentence({ ...lp, planPending: false, planOutdated: true })).toBe('Charging times are unavailable. Your settings are saved.')
   })
 
   it('shows the percent when the charge is really known', () => {

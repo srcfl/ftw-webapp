@@ -111,6 +111,7 @@ export class LoadpointsStore {
   planMissing = $state(false)
   /** The box is calculating a new plan; previous windows cannot confirm it. */
   planPending = $state(false)
+  planOutdated = $state(false)
 
   /** True only while waiting on the box. Whatever is drawn stays drawn. */
   loading = $state(false)
@@ -320,7 +321,10 @@ export class LoadpointsStore {
       if (token !== this.#token) return
 
       this.points = (wire.loadpoints ?? []).map(toLoadpoint)
-      this.windows = Object.fromEntries(Object.entries(this.windows).filter(([id]) => !this.points.find(lp => lp.id === id)?.planPending))
+      this.windows = Object.fromEntries(Object.entries(this.windows).filter(([id]) => {
+        const lp = this.points.find(point => point.id === id)
+        return !lp?.planPending && !lp?.planOutdated
+      }))
       this.loaded = true
       this.readAt = Date.now()
       this.error = null
@@ -356,14 +360,15 @@ export class LoadpointsStore {
     try {
       const wire = await callBox<{
         plan?: { actions?: WireAction[] }
-        meta?: { replanning?: boolean }
+        meta?: { replanning?: boolean; outdated?: boolean }
       }>(this.#site, { method: 'GET', path: '/api/mpc/plan' })
       if (token !== this.#token) return
 
       const actions = wire.plan?.actions ?? []
       this.planPending = wire.meta?.replanning === true
+      this.planOutdated = wire.meta?.outdated === true
       const windows: Record<string, ChargeWindow[]> = {}
-      for (const lp of this.points) windows[lp.id] = this.planPending || lp.planPending ? [] : chargeWindows(actions, lp.id)
+      for (const lp of this.points) windows[lp.id] = this.planPending || this.planOutdated || lp.planPending || lp.planOutdated ? [] : chargeWindows(actions, lp.id)
       this.windows = windows
       this.planMissing = false
     } catch {

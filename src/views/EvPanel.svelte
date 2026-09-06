@@ -422,10 +422,11 @@
       <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
     {/if}
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
+      {@const planStatus = evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
         {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
-        {#if !stale && evPlanSentence(lp, now, site.canConfigure)}<p class="hint">{evPlanSentence(lp, now, site.canConfigure)}</p>{/if}
+        {#if !stale && planStatus}<p class="hint">{planStatus}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
           <p class="hint">Charger last seen: {clock(Number(lp.charger?.updated_at_ms ?? lp.manual?.charger_updated_at_ms))}</p>
         {/if}
@@ -781,7 +782,7 @@
           <p class="hint">{boostStoppedSentence(lp)}</p>
         {/if}
 
-        {#if !lp.manualActive && !stale && !lp.planPending && !store.planPending && (store.windows[lp.id] ?? []).length > 0}
+        {#if !lp.manualActive && !stale && !lp.planPending && !store.planPending && !lp.planOutdated && !store.planOutdated && (store.windows[lp.id] ?? []).length > 0}
           <div class="windows">
             <span class="label">Charging ahead</span>
             <ul>
@@ -795,7 +796,7 @@
               {/each}
             </ul>
           </div>
-        {:else if !lp.manualActive && !lp.planPending && !store.planPending && store.planMissing}
+        {:else if !lp.manualActive && !lp.planPending && !store.planPending && !lp.planOutdated && !store.planOutdated && store.planMissing}
           <!-- The plan read failed while the charger read did not. An empty
                list here would claim an idle week the app has not read. -->
           <p class="hint">Charging times aren't readable right now.</p>

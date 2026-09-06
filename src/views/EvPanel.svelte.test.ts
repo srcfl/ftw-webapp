@@ -241,6 +241,7 @@ describe('the charger behind its bubble', () => {
     site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
     for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) await vi.advanceTimersByTimeAsync(10)
     let pending = false
+    let outdated = false
     let writes = 0
     const serve = box.api.serve.bind(box.api)
     vi.spyOn(box.api, 'serve').mockImplementation(req => {
@@ -251,8 +252,8 @@ describe('the charger behind its bubble', () => {
       }
       if ('body' in answer && (req.path === '/api/loadpoints' || req.path === '/api/mpc/plan')) {
         const payload = JSON.parse(new TextDecoder().decode(answer.body))
-        if (req.path === '/api/loadpoints') for (const lp of payload.loadpoints) lp.plan_pending = pending
-        else payload.meta = { ...payload.meta, replanning: pending }
+        if (req.path === '/api/loadpoints') for (const lp of payload.loadpoints) { lp.plan_pending = pending; lp.plan_outdated = outdated }
+        else payload.meta = { ...payload.meta, replanning: pending, outdated }
         answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
       }
       return answer
@@ -276,8 +277,17 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).not.toContain('Try again')
     expect(writes).toBe(1)
     pending = false
+    outdated = true
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).toContain('Charging times are unavailable. Your settings are saved.')
+    expect(document.body.textContent).not.toContain('Updating the plan')
+    expect(document.body.textContent).not.toContain('Charging ahead')
+    expect(document.body.textContent).toMatch(/Charging at 7\.\d kW/)
+    expect(writes).toBe(1)
+    outdated = false
     await vi.advanceTimersByTimeAsync(6_000)
     expect(document.body.textContent).not.toContain('Updating the plan')
+    expect(document.body.textContent).not.toContain('Charging times are unavailable.')
     expect(document.body.textContent).toContain('Charging ahead')
     expect(writes).toBe(1)
   })
