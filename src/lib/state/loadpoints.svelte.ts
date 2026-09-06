@@ -12,7 +12,7 @@
  */
 
 import { callBox, BoxApiError } from './box-api'
-import { commandHelp, boostHelp } from '$lib/format/command'
+import { commandHelp, boostHelp, socHelp } from '$lib/format/command'
 import {
   toLoadpoint,
   chargeCurrent,
@@ -20,7 +20,13 @@ import {
   type Loadpoint,
   type WireLoadpoint,
 } from '$lib/format/ev'
-import { OP_LOADPOINT_HOLD, OP_LOADPOINT_BOOST, type CmdResult } from '$lib/protocol/messages'
+import {
+  OP_LOADPOINT_HOLD,
+  OP_LOADPOINT_BOOST,
+  OP_LOADPOINT_SOC_SET,
+  OP_LOADPOINT_SURPLUS_ONLY_SET,
+  type CmdResult,
+} from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
 import type { SiteStore } from './site.svelte'
 
@@ -76,10 +82,17 @@ export function chargeWindows(actions: WireAction[], loadpointId: string): Charg
 }
 
 /** Which control on the panel a command belongs to, so its outcome lands under it. */
-export type Control = 'hold' | 'boost'
+export type Control = 'hold' | 'boost' | 'soc' | 'surplus'
 
 /** What an applied command did, for the one sentence that says so. */
-export type Outcome = 'hold' | 'release' | 'boost' | 'unboost'
+export type Outcome =
+  | 'hold'
+  | 'release'
+  | 'boost'
+  | 'unboost'
+  | 'soc'
+  | 'surplus_on'
+  | 'surplus_off'
 
 export class LoadpointsStore {
   /** Every charger the box reported. Empty until an answer lands. */
@@ -188,6 +201,29 @@ export class LoadpointsStore {
     await this.#send(OP_LOADPOINT_BOOST, { id: lp.id, cancel: true }, 'boost', 'unboost', boostHelp)
   }
 
+  /**
+   * Correct the car's charge level.
+   *
+   * Whole percent from the slider, the wire's 0–1 fraction to the box — the
+   * same re-anchor its own page posts to `soc`. The box replans before it
+   * answers and reads the level back. A car that is not on the cable is
+   * refused by name, and `socHelp` says so.
+   */
+  async setSoc(lp: Loadpoint, pct: number): Promise<void> {
+    await this.#send(OP_LOADPOINT_SOC_SET, { id: lp.id, soc: pct / 100 }, 'soc', 'soc', socHelp)
+  }
+
+  /** Charge from spare solar only, or let the grid and the house battery back in. */
+  async setSurplusOnly(lp: Loadpoint, on: boolean): Promise<void> {
+    await this.#send(
+      OP_LOADPOINT_SURPLUS_ONLY_SET,
+      { id: lp.id, surplus_only: on },
+      'surplus',
+      on ? 'surplus_on' : 'surplus_off',
+      commandHelp
+    )
+  }
+
   async #send(
     op: string,
     args: Record<string, unknown>,
@@ -219,15 +255,17 @@ export class LoadpointsStore {
       }
     }
 
-    // Whatever the outcome, the box's account of the charger is the truth
-    // to repaint from — even a refusal can follow a change someone else
-    // made. A failed reread keeps the sentence already on screen.
-    void this.load().catch(() => {})
-
     this.#settle = setTimeout(() => {
       this.command = { kind: 'idle' }
       this.#settle = null
     }, 6_000)
+
+    // Whatever the outcome, the box's account of the charger is the truth
+    // to repaint from — even a refusal can follow a change someone else
+    // made. A failed reread keeps the sentence already on screen. Awaited,
+    // so a caller holding a draft against the box's value knows when the
+    // box's own value is the one on screen and can let go of the draft.
+    await this.load().catch(() => {})
   }
 
   /**

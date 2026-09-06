@@ -6,8 +6,8 @@
   fact the box served — what flows now, what this session has delivered,
   what the schedule says, and when the optimiser intends to charge next.
   The controls express intent — a hold at a chosen current, a bounded boost
-  from the house battery — and the box decides; the panel repaints from
-  what the box then reports.
+  from the house battery, a corrected charge level, solar surplus only — and
+  the box decides; the panel repaints from what the box then reports.
 -->
 <script lang="ts">
   import { untrack, onDestroy } from 'svelte'
@@ -25,6 +25,8 @@
     currentReadout,
     boostActiveSentence,
     boostStoppedSentence,
+    socSourceSentence,
+    SOC_DEFAULT_PCT,
     BOOST_DURATIONS,
     BOOST_DURATION_DEFAULT_S,
     BOOST_RESERVE_DEFAULT_PCT,
@@ -75,12 +77,27 @@
 
   const sending = $derived(store.command.kind === 'sending')
 
-  /** One sentence per thing the box did, under the control that asked. */
-  const DID: Record<Outcome, string> = {
-    hold: 'Done — your box holds that current now.',
-    release: 'Stopped — the plan decides again.',
-    boost: 'Boost on — the house battery is helping the car.',
-    unboost: 'Boost stopped — the plan decides again.',
+  /**
+   * One sentence per thing the box did, under the control that asked. The
+   * level names the figure the box read back, in the box page's own words.
+   */
+  function did(o: Outcome, lp: Loadpoint): string {
+    switch (o) {
+      case 'hold':
+        return 'Done — your box holds that current now.'
+      case 'release':
+        return 'Stopped — the plan decides again.'
+      case 'boost':
+        return 'Boost on — the house battery is helping the car.'
+      case 'unboost':
+        return 'Boost stopped — the plan decides again.'
+      case 'soc':
+        return `Plan updated from ${socFor(lp)} %.`
+      case 'surplus_on':
+        return 'Done — the car charges from spare solar only now.'
+      case 'surplus_off':
+        return 'Done — the grid and the house battery may charge the car again.'
+    }
   }
 
   /**
@@ -100,6 +117,39 @@
     const range = chargeCurrent(lp)
     const chosen = amps[lp.id] ?? heldAmps(lp) ?? range.maxA
     return Math.min(range.maxA, Math.max(range.minA, chosen))
+  }
+
+  /**
+   * The car's level per charger while a thumb has the slider: from the
+   * first move until the box has answered the release and the panel has
+   * reread it. Outside that window the slider follows the box, because the
+   * estimate climbs as the car charges; inside it, the minute's reread must
+   * not snap the thumb from under a finger.
+   */
+  let socDraft = $state<Record<string, number>>({})
+
+  function socFor(lp: Loadpoint): number {
+    return socDraft[lp.id] ?? lp.socPct ?? SOC_DEFAULT_PCT
+  }
+
+  /** Written on release, as the box's page does. There is no button. */
+  async function setSoc(lp: Loadpoint, pct: number): Promise<void> {
+    socDraft[lp.id] = pct
+    await store.setSoc(lp, pct)
+    delete socDraft[lp.id]
+  }
+
+  /**
+   * The switch's position while its command is out. Without it a refused
+   * toggle would leave the switch on beside a box that says off: the reread
+   * brings the same value back, and an unchanged value repaints nothing.
+   */
+  let surplusDraft = $state<Record<string, boolean>>({})
+
+  async function setSurplusOnly(lp: Loadpoint, on: boolean): Promise<void> {
+    surplusDraft[lp.id] = on
+    await store.setSurplusOnly(lp, on)
+    delete surplusDraft[lp.id]
   }
 
   /** The boost under edit: a reserve and a bound, sent as one lease. */
@@ -217,9 +267,9 @@
 
 <!-- The fate of the last command, under the control that sent it. One
      command is in flight at a time, so the outcome belongs to exactly one. -->
-{#snippet outcome(of: Control)}
+{#snippet outcome(of: Control, lp: Loadpoint)}
   {#if store.command.kind === 'applied' && store.command.of === of}
-    <p class="hint">{DID[store.command.did]}</p>
+    <p class="hint">{did(store.command.did, lp)}</p>
   {:else if store.command.kind === 'unconfirmed' && store.command.of === of}
     <p class="hint">Your box took it. The charger hasn't confirmed yet.</p>
   {:else if store.command.kind === 'failed' && store.command.of === of}
@@ -263,7 +313,7 @@
                 Stop boost
               </button>
             </div>
-            {@render outcome('boost')}
+            {@render outcome('boost', lp)}
           {/if}
         {/if}
 
@@ -276,6 +326,38 @@
           {@const range = chargeCurrent(lp)}
           {@const chosen = ampsFor(lp)}
           {@const held = heldAmps(lp)}
+          {@const level = socFor(lp)}
+          <!-- The car's level, above the charging controls as on the box's
+               own page: the estimate the plan runs from, and a slider to
+               correct it. Written on release, no button; the box replans
+               before it answers. Absent when the bay is empty, because
+               there is no car to hold a level. -->
+          <div class="control">
+            <div class="row">
+              <span class="label">Car is at</span>
+              <span class="readout">{level} %</span>
+            </div>
+            <input
+              class="slider"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={level}
+              aria-label="Car's current charge, percent"
+              disabled={sending}
+              oninput={(e) => (socDraft[lp.id] = Number(e.currentTarget.value))}
+              onchange={(e) => void setSoc(lp, Number(e.currentTarget.value))}
+            />
+            {#if store.command.kind === 'sending' && store.command.of === 'soc'}
+              <p class="hint">Replanning from {level} %…</p>
+            {:else if store.command.kind !== 'idle' && store.command.of === 'soc'}
+              {@render outcome('soc', lp)}
+            {:else}
+              <p class="hint">{socSourceSentence(lp)}</p>
+            {/if}
+          </div>
+
           <!-- The slider is the box's own page's: whole amps between the
                charger's floor and ceiling, sent as watts for a hold that
                runs until the car is full, Stop, or an unplug. -->
@@ -325,7 +407,7 @@
                 Runs at this current until the car is full, you stop it, or you unplug.
               {/if}
             </p>
-            {@render outcome('hold')}
+            {@render outcome('hold', lp)}
           </div>
 
           <!-- The boost: a bounded lease the box caps at four hours. The
@@ -381,7 +463,7 @@
                 <p class="hint">
                   Ends when the time is up, the house battery reaches the reserve, or you stop it.
                 </p>
-                {@render outcome('boost')}
+                {@render outcome('boost', lp)}
               </div>
             {:else}
               <div class="row">
@@ -396,7 +478,7 @@
                   </button>
                 {/if}
               </div>
-              {@render outcome('boost')}
+              {@render outcome('boost', lp)}
             {/if}
           {/if}
         {/if}
@@ -485,7 +567,27 @@
             <p class="hint">{saveError}</p>
           {/if}
         {/if}
-        {#if lp.surplusOnly}
+        {#if site.canConfigure}
+          <!-- A standing setting rather than a hold: it outlives an unplug,
+               so it is offered whether or not a car is on the cable. The
+               box refuses a boost while it is on, and the boost row above
+               reads the same flag. -->
+          <label class="switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={surplusDraft[lp.id] ?? lp.surplusOnly}
+              disabled={sending}
+              onchange={(e) => void setSurplusOnly(lp, e.currentTarget.checked)}
+            />
+            <span>Charge from solar surplus only (no grid, no home battery)</span>
+          </label>
+          {#if store.command.kind === 'sending' && store.command.of === 'surplus'}
+            <p class="hint">Asking your box…</p>
+          {:else}
+            {@render outcome('surplus', lp)}
+          {/if}
+        {:else if lp.surplusOnly}
           <p class="hint">Charges from spare solar only.</p>
         {/if}
 
@@ -734,6 +836,19 @@
   /* The app's one slider. The browser draws it; only the accent is ours. */
   .slider {
     width: 100%;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
+  /* Its one switch, likewise. */
+  .switch {
+    display: flex;
+    gap: var(--space-2);
+    align-items: baseline;
+    font-size: 14px;
+  }
+
+  .switch input {
     margin: 0;
     accent-color: var(--accent);
   }

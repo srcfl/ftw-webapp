@@ -17,6 +17,7 @@ import {
   currentReadout,
   boostActiveSentence,
   boostStoppedSentence,
+  socSourceSentence,
   type WireLoadpoint,
 } from './ev'
 
@@ -67,8 +68,10 @@ describe('a charger described in words', () => {
   })
 
   it('shows the percent when the charge is really known', () => {
-    const s = evScheduleSentence(toLoadpoint({ ...WIRE, current_soc_pct: 25.0057 }))
-    expect(s).toContain('84 %')
+    // The box serves a fraction; an older one served a percent. Either is a
+    // level the box knows, and the sentence says so for both.
+    expect(evScheduleSentence(toLoadpoint({ ...WIRE, current_soc: 0.250057 }))).toContain('84 %')
+    expect(evScheduleSentence(toLoadpoint({ ...WIRE, current_soc_pct: 25.0057 }))).toContain('84 %')
   })
 
   it('says nothing at all about a schedule it has not read', () => {
@@ -116,6 +119,35 @@ describe('a charger described in words', () => {
     // convention must not reach the panel.
     const lp = toLoadpoint({ ...WIRE, current_power_w: -12 })
     expect(evStatusSentence(lp)).not.toContain('-')
+  })
+})
+
+describe("the car's level, in words", () => {
+  it('reads the fraction off the wire in whole percent, and where it came from', () => {
+    const lp = toLoadpoint({ ...WIRE, current_soc: 0.6049, soc_source: 'inferred' })
+    expect(lp.socPct).toBe(60)
+    expect(lp.socSource).toBe('inferred')
+  })
+
+  it('reads a level an older box wrote as a percent', () => {
+    expect(toLoadpoint({ ...WIRE, current_soc_pct: 60 }).socPct).toBe(60)
+  })
+
+  it('knows no level for an empty bay', () => {
+    // The box's zero values: a zero fraction and no source at all.
+    const lp = toLoadpoint({ ...WIRE, plugged_in: false, current_soc: 0, soc_source: undefined })
+    expect(lp.socPct).toBeNull()
+    expect(lp.socSource).toBe('')
+  })
+
+  it("says where the level came from, in the box page's words", () => {
+    const from = (soc_source: string) => socSourceSentence(toLoadpoint({ ...WIRE, soc_source }))
+    expect(from('vehicle')).toBe('Live from the car. Drag only to correct drift.')
+    expect(from('completed')).toMatch(/assumes the target was reached/)
+    expect(from('inferred')).toMatch(/^Estimated from energy delivered/)
+    // A source this app has not heard of reads as the estimate, which is
+    // the box's own fallback.
+    expect(from('something_new')).toMatch(/^Estimated from energy delivered/)
   })
 })
 
