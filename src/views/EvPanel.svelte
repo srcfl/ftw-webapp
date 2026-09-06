@@ -414,6 +414,9 @@
   {#if !store.loaded && !store.error}
     <p class="note">Reading your box…</p>
   {:else}
+    {#if store.loaded && store.points.length === 0}
+      <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
+    {/if}
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>

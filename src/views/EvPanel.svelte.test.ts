@@ -704,6 +704,22 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Available after returning to the plan')
   })
 
+  it('explains where to connect a first charger instead of showing an empty panel', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box } = await openedFor()
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      const answer = serve(req)
+      if (req.path === '/api/loadpoints' && 'body' in answer) answer.body = wireBytes(new TextEncoder().encode(JSON.stringify({ loadpoints: [] })))
+      return answer
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(document.body.textContent).toContain('Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.')
+    expect(document.body.textContent).toContain('Once connected and added there, it appears here too.')
+    expect(button('Charge now')).toBeUndefined()
+  })
+
   it('offers three explicit choices when an earlier charge cannot be matched after restart', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
