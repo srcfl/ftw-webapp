@@ -22,13 +22,22 @@ export interface WireLoadpoint {
   current_soc_pct?: unknown
   current_power_w?: unknown
   delivered_wh_session?: unknown
+  target_soc?: unknown
   target_soc_pct?: unknown
+  manual?: WireManualStatus
+  charger?: { known?: unknown; available?: unknown; updated_at_ms?: unknown; reason?: unknown; limit_a?: unknown }
+  grid_deferred?: unknown
+  plan_next_start_ms?: unknown
+  plan_next_end_ms?: unknown
   updated_at_ms?: unknown
   soc_source?: unknown
   min_charge_w?: unknown
   max_charge_w?: unknown
   phases?: unknown
   voltage_v?: unknown
+  commanded_w?: unknown
+  commanded_reason?: unknown
+  commanded_known?: unknown
   manual_active?: unknown
   manual_charge_w?: unknown
   surplus_only?: unknown
@@ -41,11 +50,23 @@ export interface WireLoadpoint {
     stopped_at_ms?: unknown
   }
   schedule?: {
+    soc?: unknown
     soc_pct?: unknown
     time_of_day_min_utc?: unknown
     recurring?: unknown
     days?: unknown
   } | null
+}
+
+export interface WireManualStatus {
+  active?: unknown
+  state?: unknown
+  requested_a?: unknown
+  commanded_a?: unknown
+  charger_reason?: unknown
+  limit_reason?: unknown
+  since_ms?: unknown
+  charger_updated_at_ms?: unknown
 }
 
 export interface Loadpoint {
@@ -72,6 +93,15 @@ export interface Loadpoint {
   phases: number | null
   voltageV: number | null
   manualActive: boolean
+  manual?: WireManualStatus
+  charger?: WireLoadpoint['charger']
+  commandedW?: number | null
+  commandedReason?: string
+  commandedKnown?: boolean
+  updatedAtMs?: number | null
+  gridDeferred?: boolean
+  planStartMs?: number | null
+  planEndMs?: number | null
   /** What the running hold asks for, in watts. Null when there is none, or the box did not say. */
   manualChargeW: number | null
   surplusOnly: boolean
@@ -110,20 +140,32 @@ const pct = (v: unknown): number | null => {
 export function toLoadpoint(w: WireLoadpoint): Loadpoint {
   const sched = w.schedule
   const schedMin = sched ? num(sched.time_of_day_min_utc) : null
+  const schedPct = pct(sched?.soc) ?? num(sched?.soc_pct)
+  const socFraction = num(w.current_soc)
   const boost = w.battery_boost
   return {
     id: typeof w.id === 'string' ? w.id : '',
     pluggedIn: w.plugged_in === true,
     powerW: num(w.current_power_w) ?? 0,
-    socPct: pct(w.current_soc) ?? num(w.current_soc_pct),
+    socPct: w.plugged_in === false ? null : socFraction !== null && socFraction >= 0 && socFraction <= 1
+      ? Math.round(socFraction * 100) : num(w.current_soc_pct),
     socSource: typeof w.soc_source === 'string' ? w.soc_source : '',
-    targetSocPct: num(w.target_soc_pct),
+    targetSocPct: pct(w.target_soc) ?? num(w.target_soc_pct),
     sessionWh: Math.max(0, Math.round(num(w.delivered_wh_session) ?? 0)),
     minChargeW: num(w.min_charge_w),
     maxChargeW: num(w.max_charge_w),
     phases: num(w.phases),
     voltageV: num(w.voltage_v),
     manualActive: w.manual_active === true,
+    ...(w.manual ? { manual: w.manual } : {}),
+    ...(w.charger ? { charger: w.charger } : {}),
+    commandedW: num(w.commanded_w),
+    commandedReason: typeof w.commanded_reason === 'string' ? w.commanded_reason : '',
+    commandedKnown: w.commanded_known === true,
+    updatedAtMs: num(w.updated_at_ms),
+    gridDeferred: w.grid_deferred === true,
+    planStartMs: num(w.plan_next_start_ms),
+    planEndMs: num(w.plan_next_end_ms),
     manualChargeW: w.manual_active === true ? num(w.manual_charge_w) : null,
     surplusOnly: w.surplus_only === true,
     boostActive: boost?.active === true,
@@ -134,10 +176,10 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
         ? boost.stop_reason
         : null,
     schedule:
-      schedMin === null
+      schedMin === null || schedPct === null || schedPct <= 0
         ? null
         : {
-            socPct: num(sched!.soc_pct),
+            socPct: schedPct,
             timeOfDayMinUtc: schedMin,
             recurring: sched!.recurring === true,
             days: (num(sched!.days) ?? 0) & 0x7f,
@@ -205,12 +247,60 @@ export function daysWord(mask: number): string {
  * the bay, never what might happen later — the schedule line owns later.
  */
 export function evStatusSentence(lp: Loadpoint): string {
+  if (lp.charger && lp.charger.available !== true) return lp.charger.known ? 'Charger status is out of date. FTW cannot confirm whether the car is charging.' : 'Waiting for the charger’s first status report.'
   if (!lp.pluggedIn) return 'Not plugged in'
+  if (lp.manualActive) return manualStatusSentence(lp)
   if (lp.powerW > 0) {
     const p = formatPower(lp.powerW)
     return `Charging at ${p.text} ${p.unit}`
   }
+  if (lp.commandedKnown && lp.commandedReason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
+  if (lp.commandedKnown && lp.commandedW === 0 && ['fuse_cooldown', 'fuse_limit'].includes(lp.commandedReason ?? '')) return 'Paused: main-fuse protection. Charging resumes on its own.'
+  if (lp.commandedKnown && (lp.commandedW ?? 0) > 0) return `FTW requests ${formatPower(lp.commandedW!).text} ${formatPower(lp.commandedW!).unit}. Waiting for the car to draw power.` + (lp.charger?.reason ? ` Charger reports: ${String(lp.charger.reason)}.` : '')
   return 'Plugged in — not charging right now'
+}
+
+/** The hold is intent; only a fresh charger reading proves charging. */
+export function manualStatusSentence(lp: Loadpoint): string {
+  const m = lp.manual
+  const reqA = num(m?.requested_a)
+  const cmdA = num(m?.commanded_a)
+  const request = reqA !== null ? `${Math.round(reqA)} A` : 'your charge request'
+  const limit = cmdA !== null ? `${Math.round(cmdA)} A` : 'the requested current'
+  const reason = typeof m?.charger_reason === 'string' && m.charger_reason
+    ? ` Charger reports: ${m.charger_reason}.` : ''
+  if (m?.state === 'unavailable') return 'Charger status is out of date. FTW cannot confirm whether the car is charging.'
+  switch (m?.state) {
+    case 'charging': {
+      const p = formatPower(lp.powerW)
+      return lp.powerW > 0 ? `Charging at ${p.text} ${p.unit}. ${request} requested.` : 'The charger reports charging. Waiting for a power reading.'
+    }
+    case 'accepted': return `Charger reports a ${limit} limit. Waiting for the car to start drawing…${reason}`
+    case 'not_drawing': return `Charger offers ${limit} but the car is not drawing.${reason || ' Check the car’s charge limit or schedule.'}`
+    case 'stalled': return `The charger has not acted on ${request}.${reason || ' Check the charger and the car’s charge limit or schedule.'}`
+    case 'limited':
+      if (m.limit_reason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
+      if (m.limit_reason === 'fuse_cooldown') return 'Paused: main-fuse protection. Charging resumes on its own.'
+      return `Main fuse limits this charge to ${limit} right now (${request} requested).`
+    default:
+      if (lp.powerW > 0) {
+        const p = formatPower(lp.powerW)
+        return `Charging at ${p.text} ${p.unit}`
+      }
+      return 'Manual charge requested. Waiting for charger status.'
+  }
+}
+
+export function evPlanSentence(lp: Loadpoint, now = Date.now()): string | null {
+  if (!lp.pluggedIn || lp.manualActive || (lp.charger && lp.charger.available !== true)) return null
+  if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'
+  if (lp.planStartMs && lp.planEndMs && lp.planEndMs > now) {
+    const clock = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    return `Charging planned ${clock(lp.planStartMs)}–${clock(lp.planEndMs)}.`
+  }
+  if (lp.surplusOnly) return 'Solar only: charging waits for spare solar power.'
+  if (!lp.schedule && lp.powerW <= 0) return 'No charging plan yet. Set a ready time, or choose Charge now.'
+  return null
 }
 
 /**

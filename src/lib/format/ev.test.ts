@@ -278,3 +278,25 @@ describe('the boost, in words', () => {
     expect(boostStoppedSentence(toLoadpoint(WIRE))).toBeNull()
   })
 })
+
+describe('current core fields and charger feedback', () => {
+  it('reads the fraction schema, including a plugged car at zero percent', () => {
+    const lp = toLoadpoint({ ...WIRE, current_soc: 0, target_soc: 0.8, target_soc_pct: undefined, schedule: { soc: 0.8, time_of_day_min_utc: 360 } })
+    expect(lp.socPct).toBe(0)
+    expect(lp.targetSocPct).toBe(80)
+    expect(lp.schedule?.socPct).toBe(80)
+    expect(toLoadpoint({ ...WIRE, schedule: { soc: 0, time_of_day_min_utc: 0 } }).schedule).toBeNull()
+  })
+  it('does not call a core acknowledgement charging at zero power', () => {
+    const lp = toLoadpoint({ ...WIRE, current_power_w: 0, manual_active: true, manual: { active: true, state: 'accepted', requested_a: 16, commanded_a: 16 } })
+    expect(evStatusSentence(lp)).toMatch(/Charger reports a 16 A limit/)
+    expect(evStatusSentence(lp)).not.toMatch(/Charging at/)
+  })
+  it('marks old positive power as unknown in both manual and planned charging', () => {
+    for (const manual_active of [true, false]) {
+      const lp = toLoadpoint({ ...WIRE, manual_active, charger: { known: true, available: false } })
+      expect(evStatusSentence(lp)).toMatch(/out of date/)
+      expect(evStatusSentence(lp)).not.toMatch(/Charging at/)
+    }
+  })
+})

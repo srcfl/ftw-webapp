@@ -183,9 +183,7 @@ describe('the charger behind its bubble', () => {
     }
 
     const put = vi.spyOn(box.api, 'serve')
-    ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Save schedule')!
-      .click()
+    document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(1_000)
 
     // One ceremony for the whole draft, not one per field.
@@ -201,8 +199,65 @@ describe('the charger behind its bubble', () => {
     expect(bodyOnWire.recurring).toBe(true)
 
     // The panel reread the box rather than trusting its own draft.
-    expect(document.body.textContent).toContain(`Ready by ${localClock(bodyOnWire.time_of_day_min_utc)}`)
-    expect(document.body.textContent).toContain('weekdays')
+    expect((document.querySelector('input[type="time"]') as HTMLInputElement).value).toBe('08:00')
+    expect(document.body.textContent).toContain('Schedule saved')
+  })
+
+  it('serializes schedule edits while an earlier save is slow', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change')!.click()
+    await vi.advanceTimersByTimeAsync(20)
+    const original = site.api.bind(site)
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    let active = 0, peak = 0
+    const sent: number[] = []
+    vi.spyOn(site, 'api').mockImplementation(async request => {
+      if (request.method !== 'PUT') return original(request)
+      const body = JSON.parse(new TextDecoder().decode(request.body ?? undefined))
+      if (!request.stepUp) {
+        active++; peak = Math.max(peak, active); sent.push(body.soc)
+        if (sent.length === 1) await gate
+      }
+      try { return await original(request) } finally { if (!request.stepUp) active-- }
+    })
+    const target = document.querySelector<HTMLInputElement>('[aria-label="Target charge, percent"]')!
+    target.value = '70'; target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(500)
+    target.value = '90'; target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(sent).toEqual([0.7])
+    expect(document.body.textContent).toContain('Applying schedule')
+    release(); await vi.advanceTimersByTimeAsync(2000)
+    expect(sent).toEqual([0.7, 0.9])
+    expect(peak).toBe(1)
+    expect(target.value).toBe('90')
+    expect(document.body.textContent).toContain('Schedule saved')
+  })
+
+  it('does not erase a new SOC drag when an earlier readback arrives', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    const original = site.api.bind(site)
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    vi.spyOn(site, 'api').mockImplementation(async request => {
+      if (request.method === 'GET' && request.path === '/api/loadpoints') await gate
+      return original(request)
+    })
+    const soc = document.querySelector<HTMLInputElement>('[aria-label="Car\'s current charge, percent"]')!
+    soc.value = '30'; soc.dispatchEvent(new Event('input', { bubbles: true })); soc.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(100)
+    soc.value = '40'; soc.dispatchEvent(new Event('input', { bubbles: true }))
+    release(); await vi.advanceTimersByTimeAsync(1000)
+    expect(soc.value).toBe('40')
   })
 
   it('shows a viewer the schedule but never the pen', async () => {
@@ -247,15 +302,13 @@ describe('the charger behind its bubble', () => {
       .find((b) => b.textContent?.trim() === 'Change')!
       .click()
     await vi.advanceTimersByTimeAsync(50)
-    ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Save schedule')!
-      .click()
+    document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(1_000)
 
     expect(document.body.textContent).toContain('Nothing was changed')
     // Cancel out and the schedule reads exactly as before the attempt.
     ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Cancel')!
+      .find((b) => b.textContent?.trim() === 'Done')!
       .click()
     await vi.advanceTimersByTimeAsync(200)
     expect(document.body.textContent).toContain(
@@ -317,9 +370,9 @@ describe('the charger behind its bubble', () => {
     // what happens now.
     expect(document.body.textContent).toMatch(/Charging at 11 kW/)
     expect(
-      [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Stop charging')
+      [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Return to plan')
     ).toBe(true)
-    expect(document.body.textContent).toContain('the plan takes back over')
+    expect(document.body.textContent).toContain('Return to plan restores')
 
     // And the 1 Hz stream tells the same story — one household, whichever
     // surface asks.
@@ -346,11 +399,11 @@ describe('the charger behind its bubble', () => {
       .click()
     await vi.advanceTimersByTimeAsync(1_000)
     ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Stop charging')!
+      .find((b) => b.textContent?.trim() === 'Return to plan')!
       .click()
     await vi.advanceTimersByTimeAsync(1_000)
 
-    expect(document.body.textContent).toContain('the plan decides again')
+    expect(document.body.textContent).toContain('The plan decides when to charge')
     expect(
       [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Charge now')
     ).toBe(true)
@@ -424,9 +477,8 @@ describe('the charger behind its bubble', () => {
 
     carrier.drop('wire died')
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(document.body.textContent, 'the charger vanished instead of aging').toMatch(
-      /Charging at/
-    )
+    expect(document.body.textContent).toContain('The last reading is out of date')
+    expect(document.querySelector('[aria-label="Charging current"]')).not.toBeNull()
     const whileDown = asked.mock.calls.length
 
     carrier.restore()
@@ -482,7 +534,7 @@ describe('the charger behind its bubble', () => {
     expect(s!.max).toBe('16')
     expect(s!.value).toBe('16')
     expect(document.body.textContent).toContain('16 A · 11.0 kW')
-    expect(document.body.textContent).toContain('until the car is full')
+    expect(document.body.textContent).toContain('Requests this current now')
   })
 
   it('charges now at the current the thumb chose, and the whole household says so', async () => {
@@ -507,12 +559,12 @@ describe('the charger behind its bubble', () => {
       phase_mode: '3p',
     })
     expect(document.body.textContent).toMatch(/Charging at 6\.9 kW/)
-    expect(document.body.textContent).toContain('at 10 A until the car is full')
-    expect(button('Update')).toBeDefined()
-    expect(button('Stop charging')).toBeDefined()
+    expect(document.body.textContent).toContain('Changes apply when you release the slider')
+    expect(button('Update')).toBeUndefined()
+    expect(button('Return to plan')).toBeDefined()
     // The thumb stays put, and Update has nothing new to send yet.
     expect(slider()!.value).toBe('10')
-    expect(button('Update')!.disabled).toBe(true)
+    expect(button('Update')).toBeUndefined()
 
     box.tick()
     await vi.advanceTimersByTimeAsync(100)
@@ -526,20 +578,18 @@ describe('the charger behind its bubble', () => {
 
     button('Charge now')!.click()
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(document.body.textContent).toContain('at 16 A until the car is full')
-
-    slide(8)
-    await vi.advanceTimersByTimeAsync(50)
-    expect(button('Update')!.disabled).toBe(false)
+    expect(document.body.textContent).toContain('Changes apply when you release the slider')
 
     const sent = vi.spyOn(site, 'command')
-    button('Update')!.click()
+    slide(8)
+    expect(sent).not.toHaveBeenCalled()
+    slider()!.dispatchEvent(new Event('change', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(1_000)
     expect(sent).toHaveBeenCalledWith(
       OP_LOADPOINT_HOLD,
       expect.objectContaining({ power_w: 5520, hold_s: 0 })
     )
-    expect(document.body.textContent).toContain('at 8 A until the car is full')
+    expect(document.body.textContent).toContain('Changes apply when you release the slider')
     expect(document.body.textContent).toMatch(/Charging at 5\.5 kW/)
   })
 
@@ -590,7 +640,7 @@ describe('the charger behind its bubble', () => {
     await vi.advanceTimersByTimeAsync(1_000)
 
     expect(button('Boost from the house battery')).toBeUndefined()
-    expect(document.body.textContent).toContain('stop that first')
+    expect(document.body.textContent).toContain('Available after returning to the plan')
   })
 
   it('never draws the slider or the boost for a viewer', async () => {
@@ -636,10 +686,10 @@ describe('the charger behind its bubble', () => {
     // before the first timer, and what is under test is the moment before.
     await vi.advanceTimersByTimeAsync(0)
     expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SOC_SET, { id: 'carport', soc: 0.6 })
-    expect(document.body.textContent).toContain('Replanning from 60 %…')
+    expect(document.body.textContent).toContain('Sending charge level: 60 %…')
 
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(document.body.textContent).toContain('Plan updated from 60 %.')
+    expect(document.body.textContent).toContain('Charge level saved: 60 %.')
     expect(socSlider()!.value).toBe('60')
 
     // The sentence gives way to the source again; the slider stays on the

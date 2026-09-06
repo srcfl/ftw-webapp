@@ -16,6 +16,7 @@
   import { callBox, BoxApiError } from '$lib/state/box-api'
   import {
     evStatusSentence,
+    evPlanSentence,
     evScheduleSentence,
     evSessionSentence,
     utcMinutesToLocalInput,
@@ -49,21 +50,27 @@
   const store = new LoadpointsStore(untrack(() => site))
   onDestroy(() => store.destroy())
 
-  // Fresh while open: the ask name carries a minute epoch, so askWhenLive
+  // Fresh while open: the ask name changes every five seconds, so askWhenLive
   // re-asks as the window ages — the same rule History and Energy follow.
   // The panel mounts when it opens and unmounts when it closes, so the
   // ticker lives exactly as long as someone is looking.
-  let epochMin = $state(Math.floor(Date.now() / 60_000))
+  let visible = $state(!document.hidden)
+  $effect(() => {
+    const changed = () => { visible = !document.hidden }
+    document.addEventListener('visibilitychange', changed)
+    return () => document.removeEventListener('visibilitychange', changed)
+  })
+  let pollEpoch = $state(Math.floor(Date.now() / 5_000))
   $effect(() => {
     const t = setInterval(() => {
-      epochMin = Math.floor(Date.now() / 60_000)
-    }, 15_000)
+      pollEpoch = Math.floor(Date.now() / 5_000)
+    }, 1_000)
     return () => clearInterval(t)
   })
 
   askWhenLive(
     untrack(() => site),
-    () => `loadpoints ${epochMin}`,
+    () => visible ? `loadpoints ${pollEpoch}` : null,
     () => store.load()
   )
 
@@ -71,11 +78,29 @@
     return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   }
 
+  let sheet: HTMLDivElement | undefined
+  $effect(() => {
+    if (!sheet) return
+    const previous = document.activeElement
+    sheet.focus()
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus() }
+  })
+
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onclose()
+    if (e.key === 'Escape') { e.preventDefault(); onclose(); return }
+    if (e.key !== 'Tab' || !sheet) return
+    const items = [...sheet.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]')].filter(el => !el.hidden)
+    const first = items[0], last = items.at(-1)
+    if (!first || !last) { e.preventDefault(); return }
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === sheet)) {
+      e.preventDefault(); last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus()
+    }
   }
 
   const sending = $derived(store.command.kind === 'sending')
+  const stale = $derived(!!store.error || site.session.phase !== 'streaming')
 
   /**
    * One sentence per thing the box did, under the control that asked. The
@@ -84,15 +109,16 @@
   function did(o: Outcome, lp: Loadpoint): string {
     switch (o) {
       case 'hold':
-        return 'Done — your box holds that current now.'
+        return 'FTW received your charge request. Waiting for charger status.'
       case 'release':
-        return 'Stopped — the plan decides again.'
+        return 'Manual charge ended. The plan decides when to charge.'
       case 'boost':
-        return 'Boost on — the house battery is helping the car.'
+        return 'Battery boost selected. The power readings show what the house battery supplies.'
       case 'unboost':
         return 'Boost stopped — the plan decides again.'
       case 'soc':
-        return `Plan updated from ${socFor(lp)} %.`
+        return `Charge level saved: ${lp.socPct ?? socFor(lp)} %.` +
+          (!lp.schedule && !lp.manualActive && !lp.surplusOnly ? ' Set a ready time, or choose Charge now.' : ' Reading the updated plan…')
       case 'surplus_on':
         return 'Done — the car charges from spare solar only now.'
       case 'surplus_off':
@@ -127,6 +153,11 @@
    * not snap the thumb from under a finger.
    */
   let socDraft = $state<Record<string, number>>({})
+  const socVersion: Record<string, number> = {}
+  function editSoc(lp: Loadpoint, value: number): void {
+    socDraft[lp.id] = value
+    socVersion[lp.id] = (socVersion[lp.id] ?? 0) + 1
+  }
 
   function socFor(lp: Loadpoint): number {
     return socDraft[lp.id] ?? lp.socPct ?? SOC_DEFAULT_PCT
@@ -134,9 +165,10 @@
 
   /** Written on release, as the box's page does. There is no button. */
   async function setSoc(lp: Loadpoint, pct: number): Promise<void> {
-    socDraft[lp.id] = pct
+    editSoc(lp, pct)
+    const version = socVersion[lp.id]
     await store.setSoc(lp, pct)
-    delete socDraft[lp.id]
+    if (socVersion[lp.id] === version) delete socDraft[lp.id]
   }
 
   /**
@@ -194,6 +226,7 @@
 
   function beginEdit(lp: Loadpoint): void {
     saveError = null
+    scheduleNote = 'Changes apply as you make them.'
     // The wire's zero means every day; the draft holds all seven bits
     // instead, so tapping Saturday off an every-day schedule means "not
     // Saturday" — with a raw zero it would have meant "only Saturday",
@@ -209,13 +242,35 @@
 
   function toggleDay(bit: number): void {
     if (draft) draft.days ^= 1 << bit
+    scheduleSave()
+  }
+
+  let scheduleNote = $state('Changes apply as you make them.')
+  let saveTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingSchedule = $state(false)
+  let scheduleRevision = 0
+  onDestroy(() => {
+    // A released control is an instruction, including when the sheet closes.
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = undefined; void saveDraft() }
+  })
+
+  function scheduleSave(): void {
+    scheduleRevision++
+    saveError = null
+    scheduleNote = 'Applying schedule…'
+    pendingSchedule = true
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => { saveTimer = undefined; void saveDraft() }, 400)
   }
 
   async function saveDraft(): Promise<void> {
-    if (!draft) return
-    const minUtc = localInputToUtcMinutes(draft.time)
-    if (minUtc === null) {
-      saveError = 'That is not a time this app understands.'
+    if (!draft || saving) return
+    const next = { ...draft }
+    const revision = scheduleRevision
+    const minUtc = localInputToUtcMinutes(next.time)
+    pendingSchedule = false
+    if (minUtc === null || next.days === 0 || !Number.isFinite(next.socPct) || next.socPct < 10 || next.socPct > 100) {
+      saveError = minUtc === null ? 'Choose a valid ready time.' : next.days === 0 ? 'Choose at least one day.' : 'Choose a charge target from 10 to 100 %.'
       return
     }
     saving = true
@@ -223,28 +278,31 @@
     try {
       await callBox(untrack(() => site), {
         method: 'PUT',
-        path: `/api/loadpoints/${draft.lpId}/schedule`,
+        path: `/api/loadpoints/${encodeURIComponent(next.lpId)}/schedule`,
         body: {
-          soc_pct: draft.socPct,
+          soc: next.socPct / 100,
           time_of_day_min_utc: minUtc,
           recurring: true,
-          // All seven days is the wire's zero — the canonical spelling of
-          // "every day", and what every schedule saved before masks
-          // existed already carries.
-          days: draft.days === 0x7f ? 0 : draft.days & 0x7f,
+          days: next.days === 0x7f ? 0 : next.days & 0x7f,
         },
       })
-      draft = null
+      if (revision === scheduleRevision) scheduleNote = 'Schedule saved. Reading the plan…'
       await store.load()
+      if (revision === scheduleRevision) scheduleNote = store.planMissing ? 'Schedule saved. Waiting for the plan.' : 'Schedule saved. The charging times below show the current plan.'
     } catch (err) {
-      saveError =
-        err instanceof BoxApiError ? err.help : "Your box didn't answer. Nothing was changed."
+      if (revision === scheduleRevision) {
+        saveError = err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Check the current settings before trying again."
+      }
     } finally {
       saving = false
+      if (pendingSchedule) void saveDraft()
     }
   }
 
   async function removeSchedule(lpId: string): Promise<void> {
+    clearTimeout(saveTimer)
+    saveTimer = undefined
+    pendingSchedule = false
     saving = true
     saveError = null
     try {
@@ -256,7 +314,7 @@
       await store.load()
     } catch (err) {
       saveError =
-        err instanceof BoxApiError ? err.help : "Your box didn't answer. Nothing was changed."
+        err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Reading its current settings…"
     } finally {
       saving = false
     }
@@ -268,12 +326,12 @@
 <!-- The fate of the last command, under the control that sent it. One
      command is in flight at a time, so the outcome belongs to exactly one. -->
 {#snippet outcome(of: Control, lp: Loadpoint)}
-  {#if store.command.kind === 'applied' && store.command.of === of}
-    <p class="hint">{did(store.command.did, lp)}</p>
-  {:else if store.command.kind === 'unconfirmed' && store.command.of === of}
-    <p class="hint">Your box took it. The charger hasn't confirmed yet.</p>
-  {:else if store.command.kind === 'failed' && store.command.of === of}
-    <p class="hint">{store.command.help}</p>
+  {#if store.commandLpId === lp.id && store.command.kind === 'applied' && store.command.of === of}
+    <p class="hint" role="status">{did(store.command.did, lp)}</p>
+  {:else if store.commandLpId === lp.id && store.command.kind === 'unconfirmed' && store.command.of === of}
+    <p class="hint" role="status">FTW received the request. Its result is not confirmed yet.</p>
+  {:else if store.commandLpId === lp.id && store.command.kind === 'failed' && store.command.of === of}
+    <p class="hint" role="alert">{store.command.help}</p>
   {/if}
 {/snippet}
 
@@ -284,7 +342,7 @@
      is a dialog, so what is behind it is inert to a screen reader. -->
 <div class="backdrop" onclick={onclose} aria-hidden="true"></div>
 
-<div class="sheet" role="dialog" aria-modal="true" aria-label="EV charger" tabindex="-1">
+<div class="sheet" bind:this={sheet} role="dialog" aria-modal="true" aria-label="EV charger" tabindex="-1">
   <header>
     <h2>EV charger</h2>
     <button class="close" onclick={onclose} aria-label="Close">Close</button>
@@ -299,7 +357,11 @@
   {:else}
     {#each store.points as lp (lp.id)}
       <div class="charger">
-        <p class="status">{evStatusSentence(lp)}</p>
+        <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp)}</p>
+        {#if !stale && evPlanSentence(lp)}<p class="hint">{evPlanSentence(lp)}</p>{/if}
+        {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
+          <p class="hint">Charger last seen: {clock(Number(lp.charger?.updated_at_ms ?? lp.manual?.charger_updated_at_ms))}</p>
+        {/if}
 
         {#if evSessionSentence(lp)}
           <p class="session">{evSessionSentence(lp)}</p>
@@ -325,7 +387,6 @@
         {#if site.canConfigure && lp.pluggedIn}
           {@const range = chargeCurrent(lp)}
           {@const chosen = ampsFor(lp)}
-          {@const held = heldAmps(lp)}
           {@const level = socFor(lp)}
           <!-- The car's level, above the charging controls as on the box's
                own page: the estimate the plan runs from, and a slider to
@@ -346,12 +407,12 @@
               value={level}
               aria-label="Car's current charge, percent"
               disabled={sending}
-              oninput={(e) => (socDraft[lp.id] = Number(e.currentTarget.value))}
+              oninput={(e) => editSoc(lp, Number(e.currentTarget.value))}
               onchange={(e) => void setSoc(lp, Number(e.currentTarget.value))}
             />
-            {#if store.command.kind === 'sending' && store.command.of === 'soc'}
-              <p class="hint">Replanning from {level} %…</p>
-            {:else if store.command.kind !== 'idle' && store.command.of === 'soc'}
+            {#if store.commandLpId === lp.id && store.command.kind === 'sending' && store.command.of === 'soc'}
+              <p class="hint">Sending charge level: {level} %…</p>
+            {:else if store.commandLpId === lp.id && store.command.kind !== 'idle' && store.command.of === 'soc'}
               {@render outcome('soc', lp)}
             {:else}
               <p class="hint">{socSourceSentence(lp)}</p>
@@ -376,18 +437,12 @@
               aria-label="Charging current"
               disabled={sending}
               oninput={(e) => (amps[lp.id] = Number(e.currentTarget.value))}
+              onchange={(e) => { if (lp.manualActive) void store.chargeNow(lp, Number(e.currentTarget.value)) }}
             />
             <div class="actions">
               {#if lp.manualActive}
-                <button
-                  class="primary"
-                  disabled={sending || chosen === held}
-                  onclick={() => void store.chargeNow(lp, chosen)}
-                >
-                  {sending ? 'Asking your box…' : 'Update'}
-                </button>
                 <button class="quiet" disabled={sending} onclick={() => void store.stopCharging(lp)}>
-                  Stop charging
+                  Return to plan
                 </button>
               {:else}
                 <button
@@ -395,16 +450,15 @@
                   disabled={sending}
                   onclick={() => void store.chargeNow(lp, chosen)}
                 >
-                  {sending ? 'Asking your box…' : 'Charge now'}
+                  {store.command.kind === 'sending' && store.commandLpId === lp.id && store.command.of === 'hold' ? 'Sending charge request…' : 'Charge now'}
                 </button>
               {/if}
             </div>
             <p class="hint">
               {#if lp.manualActive}
-                Charging now{held !== null ? ` at ${held} A` : ''} until the car is full. Stop it,
-                or unplug, and the plan takes back over.
+                Changes apply when you release the slider. Return to plan restores your schedule and solar settings.
               {:else}
-                Runs at this current until the car is full, you stop it, or you unplug.
+                Requests this current now. The charger status above shows when power starts flowing.
               {/if}
             </p>
             {@render outcome('hold', lp)}
@@ -469,7 +523,7 @@
               <div class="row">
                 <span class="label">Battery boost</span>
                 {#if lp.manualActive}
-                  <span class="hint">Not while charging now — stop that first.</span>
+                  <span class="hint">Available after returning to the plan.</span>
                 {:else if lp.surplusOnly}
                   <span class="hint">Not while the charger uses spare solar only.</span>
                 {:else}
@@ -488,19 +542,17 @@
         {/if}
 
         {#if draft?.lpId === lp.id}
-          <!-- One draft, one save, one ceremony. The box revalidates and
-               answers; what it stores is what the panel then rereads. -->
+          <!-- Released controls write in order; the draft stays during rereads. -->
           <div class="editor">
             <div class="row">
               <span class="label">Ready by</span>
-              <input type="time" bind:value={draft.time} disabled={saving} />
+              <input type="time" aria-label="Ready by" bind:value={draft.time} onchange={scheduleSave} />
             </div>
             <div class="chips" role="group" aria-label="Days">
               {#each DAY_LABELS as day, bit (day)}
                 <button
                   class="chip"
                   aria-pressed={(draft.days & (1 << bit)) !== 0}
-                  disabled={saving}
                   onclick={() => toggleDay(bit)}
                 >
                   {day}
@@ -510,27 +562,20 @@
             <div class="row">
               <span class="label">Charge to</span>
               <input
-                type="number"
+                type="range"
+                class="slider"
+                aria-label="Target charge, percent"
                 min="10"
                 max="100"
                 step="5"
                 bind:value={draft.socPct}
-                disabled={saving}
+                onchange={scheduleSave}
               />
-              <span>%</span>
+              <span>{draft.socPct} %</span>
             </div>
             <div class="actions">
-              <!-- Every day off is not a schedule — the wire has no way to
-                   say it, and zero would silently mean the opposite. -->
-              <button
-                class="primary"
-                disabled={saving || draft.days === 0}
-                onclick={() => void saveDraft()}
-              >
-                {saving ? 'Saving…' : 'Save schedule'}
-              </button>
-              <button class="quiet" disabled={saving} onclick={() => (draft = null)}>
-                Cancel
+              <button class="quiet" disabled={saving || pendingSchedule} onclick={() => (draft = null)}>
+                Done
               </button>
               {#if lp.schedule}
                 <button
@@ -542,8 +587,9 @@
                 </button>
               {/if}
             </div>
+            <p class="hint" role="status">{saveError ?? scheduleNote}</p>
             {#if saveError}
-              <p class="hint">{saveError}</p>
+              <button class="quiet" disabled={saving} onclick={scheduleSave}>Try again</button>
             {/if}
           </div>
         {:else}
@@ -591,7 +637,7 @@
           <p class="hint">Charges from spare solar only.</p>
         {/if}
 
-        {#if (store.windows[lp.id] ?? []).length > 0}
+        {#if !stale && (store.windows[lp.id] ?? []).length > 0}
           <div class="windows">
             <span class="label">Charging ahead</span>
             <ul>
@@ -615,7 +661,7 @@
       <!-- The box answered, and the answer is: no charger. The bubble that
            opened this panel draws from a live field, so meeting this means
            the charger left between two reads — say so plainly. -->
-      <p class="note">Your box no longer reports a charger.</p>
+      <p class="note">Charging control is not set up. Open Settings → Chargers on your box’s page to add the charger.</p>
     {/each}
   {/if}
 </div>
@@ -634,6 +680,8 @@
   }
 
   .sheet {
+    max-width: 34rem;
+    margin-inline: auto;
     position: fixed;
     left: 0;
     right: 0;

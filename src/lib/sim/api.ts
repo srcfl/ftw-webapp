@@ -311,7 +311,7 @@ export class SimApi {
    * app must meet that as an absence rather than an empty object.
    */
   #schedule: Record<string, unknown> | null = {
-    soc_pct: 84,
+    soc: 0.84,
     time_of_day_min_utc: 360,
     recurring: true,
   }
@@ -693,7 +693,7 @@ export class SimApi {
           ...(pluggedIn ? { soc_source: 'inferred' } : {}),
           current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
-          target_soc_pct: 84,
+          target_soc: 0.84,
           updated_at_ms: now,
           min_charge_w: 4140,
           max_charge_w: 11000,
@@ -720,7 +720,7 @@ export class SimApi {
                 }
               : { state: 'inactive', active: false },
           surplus_only: door.surplusOnly,
-          ...(this.#schedule ? { schedule: this.#schedule } : {}),
+          schedule: this.#schedule ?? { soc: 0, time_of_day_min_utc: 0, recurring: false },
         },
       ],
     })
@@ -756,7 +756,10 @@ export class SimApi {
     if (days !== undefined && (typeof days !== 'number' || days < 0 || days > 127)) {
       return json(400, { error: 'days must be a 7-bit weekday mask (0..127, bit 0 = Monday)' })
     }
-    this.#schedule = s
+    const soc = typeof s['soc'] === 'number' ? s['soc'] : typeof s['soc_pct'] === 'number' ? s['soc_pct'] / 100 : 0
+    if (soc < 0 || soc > 1) return json(400, { error: 'soc must be between 0 and 1' })
+    const { soc_pct: _legacy, ...fields } = s
+    this.#schedule = { ...fields, soc }
     return json(200, { ok: true })
   }
 

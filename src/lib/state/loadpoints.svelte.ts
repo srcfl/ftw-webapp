@@ -134,9 +134,13 @@ export class LoadpointsStore {
     | { kind: 'failed'; of: Control; help: string }
   >({ kind: 'idle' })
 
+  commandLpId = $state<string | null>(null)
+
   #site: SiteStore
   /** Guards a slow answer against a panel that already asked again. */
   #token = 0
+  #chargerRead: Promise<void> | null = null
+  #fullRead: Promise<void> | null = null
   #settle: ReturnType<typeof setTimeout> | null = null
 
   constructor(site: SiteStore) {
@@ -233,6 +237,7 @@ export class LoadpointsStore {
   ): Promise<void> {
     if (this.command.kind === 'sending') return
     if (this.#settle) clearTimeout(this.#settle)
+    this.commandLpId = typeof args.id === 'string' ? args.id : null
     this.command = { kind: 'sending', of }
 
     try {
@@ -251,21 +256,24 @@ export class LoadpointsStore {
       this.command = {
         kind: 'failed',
         of,
-        help: err instanceof CommandError ? err.help : "That didn't go through. Try again.",
+        help: err instanceof CommandError ? err.help : "FTW did not confirm the request. Reading its current state…",
       }
     }
 
-    this.#settle = setTimeout(() => {
-      this.command = { kind: 'idle' }
-      this.#settle = null
-    }, 6_000)
+    // Keep a refusal or an uncertain result visible until the next action.
+    if (this.command.kind === 'applied') {
+      this.#settle = setTimeout(() => {
+        this.command = { kind: 'idle' }
+        this.#settle = null
+      }, 6_000)
+    }
 
     // Whatever the outcome, the box's account of the charger is the truth
     // to repaint from — even a refusal can follow a change someone else
     // made. A failed reread keeps the sentence already on screen. Awaited,
     // so a caller holding a draft against the box's value knows when the
     // box's own value is the one on screen and can let go of the draft.
-    await this.load().catch(() => {})
+    await this.load(true).catch(() => {})
   }
 
   /**
@@ -283,9 +291,14 @@ export class LoadpointsStore {
    * the plan too; that is decoration, and a live overlay must not wait on it.
    */
   async loadChargers(): Promise<void> {
+    if (this.#chargerRead) return this.#chargerRead
+    this.#chargerRead = this.#readChargers()
+    try { await this.#chargerRead } finally { this.#chargerRead = null }
+  }
+
+  async #readChargers(): Promise<void> {
     const token = ++this.#token
     this.loading = true
-    this.error = null
 
     try {
       const wire = await callBox<{ enabled?: boolean; loadpoints?: WireLoadpoint[] }>(this.#site, {
@@ -311,7 +324,17 @@ export class LoadpointsStore {
     }
   }
 
-  async load(): Promise<void> {
+  async load(force = false): Promise<void> {
+    if (this.#fullRead) {
+      await this.#fullRead.catch(() => {})
+      if (!force) return
+    }
+    if (force && this.#chargerRead) await this.#chargerRead.catch(() => {})
+    this.#fullRead = this.#readAll()
+    try { await this.#fullRead } finally { this.#fullRead = null }
+  }
+
+  async #readAll(): Promise<void> {
     await this.loadChargers()
 
     // The decoration, after the panel is safe. Its failure is a note.
