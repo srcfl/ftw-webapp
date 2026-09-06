@@ -9,7 +9,7 @@
 <script lang="ts">
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
@@ -137,7 +137,36 @@
   /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
    *  so callBox and the loadpoint store stay out of the first frame. */
   let evOpen = $state(false)
-  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void }> | null>(null)
+  let selectedCharger = $state<string | null>(null)
+  let requestedCharger = $state<string | null>(null)
+  onMount(() => {
+    const read = () => {
+      const hash = location.hash
+      requestedCharger = hash.startsWith('#/now?') ? new URLSearchParams(hash.split('?')[1]).get('charger') : null
+    }
+    const message = (e: MessageEvent) => {
+      if (e.data?.type === 'ftw-open-charger' && typeof e.data.loadpointId === 'string') {
+        location.hash = '#/now?charger=' + encodeURIComponent(e.data.loadpointId)
+        requestedCharger = e.data.loadpointId
+      }
+    }
+    read(); window.addEventListener('hashchange', read)
+    navigator.serviceWorker?.addEventListener('message', message)
+    return () => { window.removeEventListener('hashchange', read); navigator.serviceWorker?.removeEventListener('message', message) }
+  })
+  $effect(() => {
+    if (active && requestedCharger && site.session.caps.has(CAP_API_PASSTHROUGH)) {
+      selectedCharger = requestedCharger
+      evOpen = true
+      requestedCharger = null
+    }
+  })
+  function closeEv() {
+    evOpen = false
+    selectedCharger = null
+    if (location.hash.startsWith('#/now?charger=')) history.replaceState(null, '', location.pathname + location.search + '#/now')
+  }
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null }> | null>(null)
   $effect(() => {
     if (!evOpen || EvPanel) return
     void import('./EvPanel.svelte').then((m) => {
@@ -174,7 +203,7 @@
     const onPlanet = (e: Event) => {
       const role = (e as CustomEvent<{ role?: string }>).detail?.role
       if (role === 'ev') {
-        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) evOpen = true
+        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) { selectedCharger = null; evOpen = true }
       } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
         liveRole = role as LiveRole
       }
@@ -315,7 +344,7 @@
   {/if}
 
   {#if evOpen && EvPanel}
-    <EvPanel {site} onclose={() => (evOpen = false)} />
+    <EvPanel {site} loadpointId={selectedCharger} onclose={closeEv} />
   {/if}
 
   {#if liveRole}

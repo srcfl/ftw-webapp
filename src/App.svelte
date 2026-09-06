@@ -35,6 +35,14 @@
   // the browser tab's localStorage, and to any install whose localStorage was
   // evicted while the sites survived.
   let siteId = $state<string | null>(readSiteHint())
+  let ChargingNotice = $state<import('svelte').Component<{ site: SiteStore }> | null>(null)
+  $effect(() => {
+    if (!site.heardFromBox || ChargingNotice) return
+    let cancelled = false
+    void import('$lib/ui/ChargingNotice.svelte').then(m => { if (!cancelled) ChargingNotice = m.default })
+    return () => { cancelled = true }
+  })
+
   /** A public simulator session. It has no site id and writes no home to disk. */
   let demoActive = $state(false)
 
@@ -665,6 +673,8 @@
       noCarrier={connectHelp !== null}
     />
   {/if}
+
+  {#if hasHome && !recovering && ChargingNotice}<ChargingNotice {site} />{/if}
 
   <main bind:this={scrollPane}>
     <div class="pull-refresh" data-state="idle" aria-hidden="true" bind:this={pullIndicator}>

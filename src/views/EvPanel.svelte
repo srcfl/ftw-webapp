@@ -43,9 +43,10 @@
     site: SiteStore
     /** Close the sheet. The panel never decides that itself. */
     onclose: () => void
+    loadpointId?: string | null
   }
 
-  let { site, onclose }: Props = $props()
+  let { site, onclose, loadpointId = null }: Props = $props()
 
   const store = new LoadpointsStore(untrack(() => site))
   onDestroy(() => store.destroy())
@@ -370,7 +371,7 @@
   {#if !store.loaded && !store.error}
     <p class="note">Reading your box…</p>
   {:else}
-    {#each store.points as lp (lp.id)}
+    {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp)}</p>
         {#if !stale && evPlanSentence(lp)}<p class="hint">{evPlanSentence(lp)}</p>{/if}

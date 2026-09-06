@@ -21,7 +21,7 @@ export function routeIndex(route: Route): number {
 }
 
 function fromHash(hash: string): Route {
-  const name = hash.replace(/^#\/?/, '')
+  const name = hash.replace(/^#\/?/, '').split('?')[0]
   return ROUTES.find((r) => r === name) ?? 'now'
 }
 

@@ -9,6 +9,7 @@
  */
 
 export const KINDS = [
+  'charging.connected',
   'charging.session_complete',
   'charging.interrupted',
   'update.installed',
@@ -32,6 +33,7 @@ export const RULE_KINDS = KINDS.filter((k) => k !== 'box.unreachable')
  * writes the notification itself, this names the decision to receive it.
  */
 export const KIND_LABELS: Record<PushKind, string> = {
+  'charging.connected': 'When the car is plugged in',
   'charging.session_complete': 'When the car finishes charging',
   'charging.interrupted': 'If charging stops before it is done',
   'update.installed': 'When your box updates itself',

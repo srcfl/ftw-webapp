@@ -258,3 +258,29 @@ describe('tapping a notification', () => {
     expect(worker.opened).toEqual(['/'])
   })
 })
+
+
+describe('charging notifications open the right charger', () => {
+  it('carries the charger id through push and a cold launch', async () => {
+    const worker = await activate('charging')
+    await worker.push(JSON.stringify({ title: 'Car plugged in', body: 'Check charging.', kind: 'charging.connected', loadpoint_id: 'garage & drive' }))
+    expect(worker.shown).toEqual([{ title: 'Car plugged in', body: 'Check charging.' }])
+    expect(await worker.clickNotification(worker.notificationData[0])).toBe(true)
+    expect(worker.opened).toEqual(['/#/now?charger=garage%20%26%20drive'])
+  })
+  it('opens the charger in an existing app without reloading it', async () => {
+    const worker = await activate('charging')
+    const postMessage = vi.fn(), focus = vi.fn(async () => {})
+    worker.windows.push({ focused: false, postMessage, focus })
+    await worker.clickNotification({ loadpointId: 'garage' })
+    expect(postMessage).toHaveBeenCalledWith({ type: 'ftw-open-charger', loadpointId: 'garage' })
+    expect(focus).toHaveBeenCalledOnce()
+    expect(worker.opened).toEqual([])
+  })
+  it('never follows a URL supplied by a push', async () => {
+    const worker = await activate('charging')
+    await worker.push(JSON.stringify({ title: 'Update', kind: 'update.installed', loadpoint_id: 'garage', url: 'https://untrusted.invalid/' }))
+    await worker.clickNotification(worker.notificationData[0])
+    expect(worker.opened).toEqual(['/'])
+  })
+})
