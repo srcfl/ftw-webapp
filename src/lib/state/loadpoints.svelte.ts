@@ -1,14 +1,8 @@
 /* The charger, as the panel sees it.
  *
- * Two reads over the passthrough: `/api/loadpoints` for what the charger is
- * and does, `/api/mpc/plan` for when the optimiser intends to run it. The
- * first is the panel; the second is decoration on it. They fail separately
- * on purpose — a box old enough to lack the plan route still has a charger
- * worth showing, and a panel that went blank over missing decoration would
- * be the tail wagging the dog.
- *
- * Nothing here commands anything. Round two brings the schedule editor and
- * round three the buttons; until then every field is a fact the box served.
+ * Current boxes report status and charge windows together on `/api/loadpoints`.
+ * Older boxes need a separate plan read. The current path avoids that extra
+ * request so a slow full plan cannot hold up the five-second charger poll.
  */
 
 import { callBox, BoxApiError } from './box-api'
@@ -36,7 +30,9 @@ export interface ChargeWindow {
   fromMs: number
   toMs: number
   /** The plan's peak for the window, in watts. */
-  peakW: number
+  peakW: number | null
+  /** Current boxes report window energy, not peak power. Never infer a peak. */
+  energyWh?: number
   /** The box's own reason token for the window's first slot. */
   reason: string
 }
@@ -69,7 +65,7 @@ export function chargeWindows(actions: WireAction[], loadpointId: string): Charg
     const last = out[out.length - 1]
     if (last && start <= last.toMs) {
       last.toMs = endMs
-      last.peakW = Math.max(last.peakW, w)
+      last.peakW = Math.max(last.peakW ?? 0, w)
     } else {
       out.push({
         fromMs: start,
@@ -80,6 +76,18 @@ export function chargeWindows(actions: WireAction[], loadpointId: string): Charg
     }
   }
   return out
+}
+
+/** Windows from the same snapshot as the charger's status. */
+function inlineWindows(lp: WireLoadpoint): ChargeWindow[] {
+  if (lp.plan_pending === true || lp.plan_outdated === true || !Array.isArray(lp.plan_windows)) return []
+  return lp.plan_windows.flatMap(w => {
+    if (!w || typeof w !== 'object' ||
+      typeof w.start_ms !== 'number' || !Number.isFinite(w.start_ms) ||
+      typeof w.end_ms !== 'number' || !Number.isFinite(w.end_ms) || w.end_ms <= w.start_ms ||
+      typeof w.wh !== 'number' || !Number.isFinite(w.wh) || w.wh < 0) return []
+    return [{ fromMs: w.start_ms, toMs: w.end_ms, peakW: null, energyWh: w.wh, reason: '' }]
+  })
 }
 
 /** Which control on the panel a command belongs to, so its outcome lands under it. */
@@ -143,12 +151,16 @@ export class LoadpointsStore {
   >({ kind: 'idle' })
 
   commandLpId = $state<string | null>(null)
+  /** Applied choices remain visible until a later charger read confirms state. */
+  acceptedSoc = $state.raw<Record<string, { value: number }>>({})
+  acceptedSurplus = $state.raw<Record<string, { value: boolean }>>({})
 
   #site: SiteStore
   /** Guards a slow answer against a panel that already asked again. */
   #token = 0
   #chargerRead: Promise<void> | null = null
   #fullRead: Promise<void> | null = null
+  #inlinePlan = false
   #settle: ReturnType<typeof setTimeout> | null = null
 
   constructor(site: SiteStore) {
@@ -221,8 +233,8 @@ export class LoadpointsStore {
    * Correct the car's charge level.
    *
    * Whole percent from the slider, the wire's 0–1 fraction to the box — the
-   * same re-anchor its own page posts to `soc`. The box replans before it
-   * answers and reads the level back. A car that is not on the cable is
+   * same re-anchor its own page posts to `soc`. The box applies the level,
+   * starts a replan and answers. A car that is not on the cable is
    * refused by name, and `socHelp` says so.
    */
   async setSoc(lp: Loadpoint, pct: number): Promise<void> {
@@ -257,6 +269,14 @@ export class LoadpointsStore {
       switch (result.state) {
         case 'applied':
           this.command = { kind: 'applied', of, did }
+          if (typeof args.id === 'string') {
+            if (of === 'soc' && typeof args.soc === 'number') {
+              this.acceptedSoc = { ...this.acceptedSoc, [args.id]: { value: Math.round(args.soc * 100) } }
+            }
+            if (of === 'surplus' && typeof args.surplus_only === 'boolean') {
+              this.acceptedSurplus = { ...this.acceptedSurplus, [args.id]: { value: args.surplus_only } }
+            }
+          }
           break
         case 'unconfirmed':
           this.command = { kind: 'unconfirmed', of }
@@ -285,7 +305,8 @@ export class LoadpointsStore {
     // made. A failed reread keeps the sentence already on screen. Awaited,
     // so a caller holding a draft against the box's value knows when the
     // box's own value is the one on screen and can let go of the draft.
-    await this.load(true).catch(() => {})
+    if (this.#chargerRead) await this.#chargerRead.catch(() => {})
+    await this.loadChargers().catch(() => {})
     refreshCharging(this.#site)
   }
 
@@ -311,6 +332,9 @@ export class LoadpointsStore {
 
   async #readChargers(): Promise<void> {
     const token = ++this.#token
+    // A read started before a command cannot confirm that command's choice.
+    const socChoices = this.acceptedSoc
+    const surplusChoices = this.acceptedSurplus
     this.loading = true
 
     try {
@@ -320,11 +344,23 @@ export class LoadpointsStore {
       })
       if (token !== this.#token) return
 
-      this.points = (wire.loadpoints ?? []).map(toLoadpoint)
-      this.windows = Object.fromEntries(Object.entries(this.windows).filter(([id]) => {
-        const lp = this.points.find(point => point.id === id)
-        return !lp?.planPending && !lp?.planOutdated
-      }))
+      const points = wire.loadpoints ?? []
+      this.points = points.map(toLoadpoint)
+      this.#inlinePlan = points.every(lp =>
+        (typeof lp.plan_pending === 'boolean' && typeof lp.plan_outdated === 'boolean') || Array.isArray(lp.plan_windows))
+      if (this.#inlinePlan) {
+        this.planPending = this.points.some(lp => lp.planPending)
+        this.planOutdated = this.points.some(lp => lp.planOutdated)
+        this.windows = Object.fromEntries(points.map(lp => [typeof lp.id === 'string' ? lp.id : '', inlineWindows(lp)]))
+        this.planMissing = false
+      } else {
+        this.windows = Object.fromEntries(Object.entries(this.windows).filter(([id]) => {
+          const lp = this.points.find(point => point.id === id)
+          return !lp?.planPending && !lp?.planOutdated
+        }))
+      }
+      this.acceptedSoc = Object.fromEntries(Object.entries(this.acceptedSoc).filter(([id, choice]) => choice !== socChoices[id]))
+      this.acceptedSurplus = Object.fromEntries(Object.entries(this.acceptedSurplus).filter(([id, choice]) => choice !== surplusChoices[id]))
       this.loaded = true
       this.readAt = Date.now()
       this.error = null
@@ -354,6 +390,7 @@ export class LoadpointsStore {
 
   async #readAll(): Promise<void> {
     await this.loadChargers()
+    if (this.#inlinePlan) return
 
     // The decoration, after the panel is safe. Its failure is a note.
     const token = this.#token

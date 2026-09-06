@@ -35,6 +35,7 @@ export interface WireLoadpoint {
   plan_next_end_ms?: unknown
   plan_pending?: unknown
   plan_outdated?: unknown
+  plan_windows?: unknown
   updated_at_ms?: unknown
   soc_source?: unknown
   min_charge_w?: unknown
@@ -334,7 +335,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
 }
 
 export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = true): string | null {
-  if (lp.planPending) return lp.schedule ? 'Goal saved. Updating the plan…' : 'Updating the charging plan…'
+  if (lp.planPending) return 'Updating the charging plan…'
   if (lp.planOutdated) return 'Charging times are unavailable. Your settings are saved.'
   if (!lp.pluggedIn || lp.manualActive || lp.manualRestoreUnconfirmed || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
   if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'

@@ -294,7 +294,10 @@ describe('the charger behind its bubble', () => {
       }
       if ('body' in answer && (req.path === '/api/loadpoints' || req.path === '/api/mpc/plan')) {
         const payload = JSON.parse(new TextDecoder().decode(answer.body))
-        if (req.path === '/api/loadpoints') for (const lp of payload.loadpoints) { lp.plan_pending = pending; lp.plan_outdated = outdated }
+        if (req.path === '/api/loadpoints') for (const lp of payload.loadpoints) {
+          lp.plan_pending = pending; lp.plan_outdated = outdated
+          lp.plan_windows = [{ start_ms: CHARGING_EVENING, end_ms: CHARGING_EVENING + 3_600_000, wh: 4600 }]
+        }
         else payload.meta = { ...payload.meta, replanning: pending, outdated }
         answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
       }
@@ -331,6 +334,11 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).not.toContain('Updating the plan')
     expect(document.body.textContent).not.toContain('Charging times are unavailable.')
     expect(document.body.textContent).toContain('Charging ahead')
+    expect(writes).toBe(1)
+    pending = true // A later routine replan is not another save by this owner.
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).toContain('Updating the charging plan…')
+    expect(document.body.textContent).not.toContain('Goal saved. Updating the plan…')
     expect(writes).toBe(1)
   })
 
@@ -1042,6 +1050,58 @@ describe('the charger behind its bubble', () => {
     expect(document.querySelector('.status')?.textContent).not.toContain('Charging at')
   })
 
+  it('polls current charging and its windows without requesting the full plan on current boxes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    const api = site.api.bind(site)
+    let reads = 0
+    const asked = vi.spyOn(site, 'api').mockImplementation(async req => {
+      // An optional route that never answers must not be needed by this sheet.
+      if (req.path === '/api/mpc/plan') return new Promise(() => {})
+      const answer = await api(req)
+      if (req.path === '/api/loadpoints') {
+        reads++
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        Object.assign(payload.loadpoints[0], {
+          current_power_w: 5000 + reads * 100,
+          plan_pending: false, plan_outdated: false,
+          plan_windows: [{ start_ms: CHARGING_EVENING, end_ms: CHARGING_EVENING + 3_600_000, wh: 4600 }],
+        })
+        return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+      }
+      return answer
+    })
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(21_000)
+    expect(reads).toBeGreaterThanOrEqual(5)
+    expect(asked.mock.calls.filter(([req]) => req.path === '/api/mpc/plan')).toHaveLength(0)
+    expect(document.body.textContent).not.toContain('The last reading is out of date')
+    expect(document.querySelector('.status')?.textContent).toContain('Charging at 5.5 kW')
+    expect(document.body.textContent).toContain('Charging ahead')
+    expect(document.body.textContent).toContain('4.6 kWh')
+    expect(document.querySelector('.windows')?.textContent).not.toContain('up to')
+  })
+
+  it('describes a routine global replan without claiming that this owner saved a goal', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    const api = site.api.bind(site)
+    const asked = vi.spyOn(site, 'api').mockImplementation(async req => {
+      const answer = await api(req)
+      const payload = JSON.parse(new TextDecoder().decode(answer.body))
+      if (req.path === '/api/loadpoints') payload.loadpoints[0].plan_pending = true
+      if (req.path === '/api/mpc/plan') payload.meta = { replanning: true }
+      return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+    })
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.body.textContent).toContain('Updating the charging plan…')
+    expect(document.body.textContent).not.toContain('Goal saved')
+    expect(asked.mock.calls.every(([req]) => req.method === 'GET')).toBe(true)
+  })
+
   it('never draws the slider or the boost for a viewer', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
@@ -1102,6 +1162,64 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).not.toContain('Plan updated')
     expect(document.body.textContent).toContain('Estimated from energy delivered')
     expect(socSlider()!.value).toBe('60')
+  })
+
+  it('keeps the accepted charge level through a failed reread, then follows fresh box state', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const api = site.api.bind(site)
+    let failRead = true
+    vi.spyOn(site, 'api').mockImplementation(async req => {
+      if (req.path === '/api/loadpoints' && failRead) throw new Error('read unavailable')
+      const answer = await api(req)
+      if (req.path === '/api/loadpoints') {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        payload.loadpoints[0].current_soc = 0.61 // Fresh state has moved on since the accepted choice.
+        return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+      }
+      return answer
+    })
+    const sent = vi.spyOn(site, 'command')
+    slideTo(socSlider()!, 60)
+    release(socSlider()!)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(socSlider()!.value).toBe('60')
+    expect(document.body.textContent).toContain('Charge level accepted: 60 %.')
+    expect(document.body.textContent).not.toContain('Charge level saved: 42')
+    expect(document.body.textContent).toContain('Waiting for updated charging status')
+    await vi.advanceTimersByTimeAsync(7_000)
+    expect(socSlider()!.value).toBe('60')
+    expect(document.body.textContent).toContain('Waiting for updated charging status')
+    failRead = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(socSlider()!.value).toBe('61')
+    expect(document.body.textContent).not.toContain('Waiting for updated charging status')
+    expect(document.body.textContent).not.toContain('The last reading is out of date')
+    expect(sent).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps an accepted solar switch through a failed reread without sending it again', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const api = site.api.bind(site)
+    let failRead = true
+    vi.spyOn(site, 'api').mockImplementation(req => req.path === '/api/loadpoints' && failRead
+      ? Promise.reject(new Error('read unavailable')) : api(req))
+    const sent = vi.spyOn(site, 'command')
+    pvOnly()!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(pvOnly()!.checked).toBe(true)
+    expect(document.body.textContent).toContain('Solar rule accepted. Waiting for updated charging status.')
+    await vi.advanceTimersByTimeAsync(7_000)
+    expect(pvOnly()!.checked).toBe(true)
+    expect(document.body.textContent).toContain('Waiting for updated charging status')
+    failRead = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(pvOnly()!.checked).toBe(true)
+    expect(document.body.textContent).not.toContain('Waiting for updated charging status')
+    expect(sent).toHaveBeenCalledTimes(1)
   })
 
   it('does not let a reread snap the slider from under a thumb', async () => {

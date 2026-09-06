@@ -72,11 +72,11 @@ describe('a charger described in words', () => {
     expect(s).toContain(`Ready by ${localClock(360)}`)
   })
 
-  it('reports a saved goal while replanning without changing the actual charge status', () => {
+  it('reports a replan without claiming a save or changing the actual charge status', () => {
     const lp = toLoadpoint({ ...WIRE, plan_pending: true, plan_next_start_ms: Date.now(), plan_next_end_ms: Date.now() + 60_000 })
-    expect(evPlanSentence(lp)).toBe('Goal saved. Updating the plan…')
+    expect(evPlanSentence(lp)).toBe('Updating the charging plan…')
     expect(evStatusSentence(lp)).toBe('Charging at 8.6 kW')
-    expect(evPlanSentence({ ...lp, manualActive: true })).toBe('Goal saved. Updating the plan…')
+    expect(evPlanSentence({ ...lp, manualActive: true })).toBe('Updating the charging plan…')
     expect(evPlanSentence({ ...lp, planPending: false, planOutdated: true })).toBe('Charging times are unavailable. Your settings are saved.')
   })
 

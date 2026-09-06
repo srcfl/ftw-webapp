@@ -126,11 +126,14 @@
       case 'unboost':
         return 'Boost stopped — the plan decides again.'
       case 'soc':
+        if (store.acceptedSoc[lp.id]) return `Charge level accepted: ${store.acceptedSoc[lp.id]!.value} %. Waiting for updated charging status.`
         return (lp.socRetention === 'error' ? `Charge level updated: ${lp.socPct ?? socFor(lp)} %. It could not be saved for a box restart.` : `Charge level saved: ${lp.socPct ?? socFor(lp)} %.`) +
           (!lp.schedule && !lp.manualActive && !lp.surplusOnly ? ' Set a ready time, or choose Charge now.' : store.planMissing ? ' Charging times are not available yet.' : '')
       case 'surplus_on':
+        if (store.acceptedSurplus[lp.id]) return 'Solar rule accepted. Waiting for updated charging status.'
         return 'Solar rule saved. The plan uses spare solar only.'
       case 'surplus_off':
+        if (store.acceptedSurplus[lp.id]) return 'Solar rule accepted. Waiting for updated charging status.'
         return 'Solar rule saved. The plan may use grid power again.'
     }
   }
@@ -180,7 +183,7 @@
   }
 
   function socFor(lp: Loadpoint): number {
-    return socDraft[lp.id] ?? lp.socPct ?? SOC_DEFAULT_PCT
+    return socDraft[lp.id] ?? store.acceptedSoc[lp.id]?.value ?? lp.socPct ?? SOC_DEFAULT_PCT
   }
 
   /** Written on release, as the box's page does. There is no button. */
@@ -197,6 +200,9 @@
    * brings the same value back, and an unchanged value repaints nothing.
    */
   let surplusDraft = $state<Record<string, boolean>>({})
+  function surplusFor(lp: Loadpoint): boolean {
+    return surplusDraft[lp.id] ?? store.acceptedSurplus[lp.id]?.value ?? lp.surplusOnly
+  }
 
   async function setSurplusOnly(lp: Loadpoint, on: boolean): Promise<void> {
     surplusDraft[lp.id] = on
@@ -302,6 +308,13 @@
   }
 
   let scheduleNote = $state('Changes apply as you make them.')
+  let justSavedGoal = $state<{ id: string; readAt: number | null } | null>(null)
+  $effect(() => {
+    const saved = justSavedGoal
+    if (!saved || store.error || store.readAt === saved.readAt) return
+    const lp = store.points.find(point => point.id === saved.id)
+    if (lp && !lp.planPending && !store.planPending) justSavedGoal = null
+  })
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let pendingSchedule = $state(false)
   let scheduleRevision = 0
@@ -344,6 +357,7 @@
           surplus_unlock_bat_soc: next.surplusUnlockPct / 100,
         },
       })
+      justSavedGoal = { id: next.lpId, readAt: store.readAt }
       if (revision === scheduleRevision) scheduleNote = 'Goal saved. Updating the plan…'
       // A confirmed write stays confirmed if the following read fails.
       // The plan can take longer than the charger read; polling follows it.
@@ -397,6 +411,13 @@
   {:else if store.commandLpId === lp.id && store.command.kind === 'failed' && store.command.of === of}
     <p class="hint" role="alert">{store.command.help}</p>
   {/if}
+  {#if !(store.commandLpId === lp.id && store.command.kind === 'applied' && store.command.of === of)}
+    {#if of === 'soc' && store.acceptedSoc[lp.id]}
+      <p class="hint" role="status">{did('soc', lp)}</p>
+    {:else if of === 'surplus' && store.acceptedSurplus[lp.id]}
+      <p class="hint" role="status">Solar rule accepted. Waiting for updated charging status.</p>
+    {/if}
+  {/if}
 {/snippet}
 
 <!-- Parked on the app shell, with the live-line sheet: inside the scrolling
@@ -429,7 +450,9 @@
       <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
     {/if}
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
-      {@const planStatus = evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
+      {@const planStatus = (lp.planPending || store.planPending) && justSavedGoal?.id === lp.id
+        ? 'Goal saved. Updating the plan…'
+        : evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
         {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
@@ -469,7 +492,7 @@
           <div class="control">
             <div class="row">
               <span class="label">Battery now</span>
-              <span class="readout">{lp.socSource === 'assumed' && socDraft[lp.id] === undefined ? 'Not confirmed' : `${level} %`}</span>
+              <span class="readout">{lp.socSource === 'assumed' && socDraft[lp.id] === undefined && !store.acceptedSoc[lp.id] ? 'Not confirmed' : `${level} %`}</span>
             </div>
             {#if site.canConfigure}
             <input
@@ -487,7 +510,7 @@
             {/if}
             {#if store.commandLpId === lp.id && store.command.kind === 'sending' && store.command.of === 'soc'}
               <p class="hint">Sending charge level: {level} %…</p>
-            {:else if store.commandLpId === lp.id && store.command.kind !== 'idle' && store.command.of === 'soc'}
+            {:else if store.acceptedSoc[lp.id] || (store.commandLpId === lp.id && store.command.kind !== 'idle' && store.command.of === 'soc')}
               {@render outcome('soc', lp)}
             {:else}
               <p class="hint">{site.canConfigure ? socSourceSentence(lp) : lp.socSource === 'assumed' ? 'Battery level needs confirmation by someone who can control this charger.' : lp.socSource === 'vehicle' ? 'Reported by the car.' : 'Estimated from energy delivered.'}</p>
@@ -686,7 +709,7 @@
             <input
               type="checkbox"
               role="switch"
-              checked={surplusDraft[lp.id] ?? lp.surplusOnly}
+              checked={surplusFor(lp)}
               disabled={sending || lp.manualActive || lp.manualRestoreUnconfirmed}
               onchange={(e) => void setSurplusOnly(lp, e.currentTarget.checked)}
             />
@@ -694,7 +717,7 @@
           </label>
           <p class="hint">{lp.manualActive || lp.manualRestoreUnconfirmed
             ? isPaused(lp) || lp.manualRestoreUnconfirmed ? 'This rule resumes with the plan.' : 'Charge now overrides this rule. It resumes when you return to the plan.'
-            : (surplusDraft[lp.id] ?? lp.surplusOnly)
+            : surplusFor(lp)
               ? 'No grid or home battery. Your target may not be reached in time.'
               : 'The plan may use grid power to reach your target.'}</p>
           {#if store.command.kind === 'sending' && store.command.of === 'surplus'}
@@ -771,7 +794,7 @@
                 <span class="label">Battery boost</span>
                 {#if lp.manualActive}
                   <span class="hint">Available after returning to the plan.</span>
-                {:else if lp.surplusOnly}
+                {:else if surplusFor(lp)}
                   <span class="hint">Not while the charger uses spare solar only.</span>
                 {:else}
                   <button class="quiet edit" onclick={() => beginBoost(lp)}>
@@ -797,7 +820,11 @@
                 <li>
                   <span class="when">{clock(w.fromMs)}–{clock(w.toMs)}</span>
                   <span class="power">
-                    up to {formatPower(w.peakW).text} {formatPower(w.peakW).unit}
+                    {#if w.energyWh !== undefined}
+                      {(w.energyWh / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} kWh
+                    {:else if w.peakW !== null}
+                      up to {formatPower(w.peakW).text} {formatPower(w.peakW).unit}
+                    {/if}
                   </span>
                 </li>
               {/each}
