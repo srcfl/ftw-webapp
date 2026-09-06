@@ -161,7 +161,7 @@ describe('the charger behind its bubble', () => {
     await vi.advanceTimersByTimeAsync(500)
 
     const change = [...document.querySelectorAll('button')].find(
-      (b) => b.textContent?.trim() === 'Change'
+      (b) => b.textContent?.trim() === 'Change goal'
     )!
     expect(change, 'no way in to the editor for an owner').toBeDefined()
     change.click()
@@ -209,7 +209,7 @@ describe('the charger behind its bubble', () => {
     const site = await streaming()
     render(EvPanel, { props: { site, onclose: () => {} } })
     await vi.advanceTimersByTimeAsync(500)
-    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change')!.click()
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change goal')!.click()
     await vi.advanceTimersByTimeAsync(20)
     const original = site.api.bind(site)
     let release!: () => void
@@ -276,7 +276,7 @@ describe('the charger behind its bubble', () => {
 
     expect(document.body.textContent).toContain('Ready by')
     expect([...document.querySelectorAll('button')].map((b) => b.textContent?.trim())).not.toContain(
-      'Change'
+      'Change goal'
     )
   })
 
@@ -299,7 +299,7 @@ describe('the charger behind its bubble', () => {
     const before = document.body.textContent
 
     ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Change')!
+      .find((b) => b.textContent?.trim() === 'Change goal')!
       .click()
     await vi.advanceTimersByTimeAsync(50)
     document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
@@ -308,7 +308,7 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Nothing was changed')
     // Cancel out and the schedule reads exactly as before the attempt.
     ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Done')!
+      .find((b) => b.textContent?.trim() === 'Close goal settings')!
       .click()
     await vi.advanceTimersByTimeAsync(200)
     expect(document.body.textContent).toContain(
@@ -331,7 +331,7 @@ describe('the charger behind its bubble', () => {
     await vi.advanceTimersByTimeAsync(500)
     expect(document.body.textContent).toContain('Ready by')
     ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Change')!
+      .find((b) => b.textContent?.trim() === 'Change goal')!
       .click()
     await vi.advanceTimersByTimeAsync(50)
     ;[...document.querySelectorAll('button')]
@@ -341,7 +341,7 @@ describe('the charger behind its bubble', () => {
 
     // No sentence claims a schedule; the offer to set one takes its place.
     expect(document.body.textContent).not.toContain('Ready by')
-    expect(document.body.textContent).toContain('Set a charging schedule')
+    expect(document.body.textContent).toContain('Set a ready time')
   })
 
   it('charges now through the door, and the whole household says so', async () => {
@@ -478,7 +478,7 @@ describe('the charger behind its bubble', () => {
     carrier.drop('wire died')
     await vi.advanceTimersByTimeAsync(5_000)
     expect(document.body.textContent).toContain('The last reading is out of date')
-    expect(document.querySelector('[aria-label="Charging current"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Car\'s current charge, percent"]')).not.toBeNull()
     const whileDown = asked.mock.calls.length
 
     carrier.restore()
@@ -528,13 +528,17 @@ describe('the charger behind its bubble', () => {
     vi.setSystemTime(CHARGING_EVENING)
     await openedFor()
 
+    expect(slider()).toBeNull()
+    expect(document.body.textContent).toContain('Starts at up to 16 A')
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
     const s = slider()
-    expect(s, 'no slider for an owner with a plugged car').not.toBeNull()
+    expect(s, 'manual current must be editable after Charge now').not.toBeNull()
     expect(s!.min).toBe('6')
     expect(s!.max).toBe('16')
     expect(s!.value).toBe('16')
     expect(document.body.textContent).toContain('16 A · 11.0 kW')
-    expect(document.body.textContent).toContain('Requests this current now')
+    expect(document.body.textContent).toContain('Charge now is active')
   })
 
   it('charges now at the current the thumb chose, and the whole household says so', async () => {
@@ -542,12 +546,14 @@ describe('the charger behind its bubble', () => {
     vi.setSystemTime(CHARGING_EVENING)
     const { box, site } = await openedFor()
 
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const sent = vi.spyOn(site, 'command')
     slide(10)
     await vi.advanceTimersByTimeAsync(50)
     expect(document.body.textContent).toContain('10 A · 6.9 kW')
-
-    const sent = vi.spyOn(site, 'command')
-    button('Charge now')!.click()
+    expect(sent).not.toHaveBeenCalled()
+    release(slider()!)
     await vi.advanceTimersByTimeAsync(1_000)
 
     // The box page's own body: the watts for 10 A, a persistent hold, three
@@ -591,6 +597,45 @@ describe('the charger behind its bubble', () => {
     )
     expect(document.body.textContent).toContain('Changes apply when you release the slider')
     expect(document.body.textContent).toMatch(/Charging at 5\.5 kW/)
+  })
+
+  it('opening goal settings does not change charging, and a one-off goal stays one-off', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const asked = vi.spyOn(site, 'api')
+    const sent = vi.spyOn(site, 'command')
+    button('Change goal')!.click()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(asked.mock.calls.filter(c => c[0].method !== 'GET')).toHaveLength(0)
+    expect(sent).not.toHaveBeenCalled()
+    const repeat = [...document.querySelectorAll('label')].find(l => l.textContent?.includes('Repeat on chosen days'))!.querySelector('input')!
+    expect(repeat.checked).toBe(true)
+    repeat.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const saved = asked.mock.calls.find(c => c[0].method === 'PUT')![0]
+    const body = JSON.parse(new TextDecoder().decode(saved.body!))
+    expect(body.recurring).toBe(false)
+    expect(body.days).toBe(0)
+    expect(body).toHaveProperty('surplus_unlock_bat_soc')
+  })
+
+  it('shows that Charge now overrides the goal and solar rule until Return to plan', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Charge now overrides this goal')
+    expect(document.body.textContent).not.toContain('Charging ahead')
+    expect(pvOnly()!.disabled).toBe(true)
+    const sent = vi.spyOn(site, 'command')
+    pvOnly()!.click()
+    expect(sent).not.toHaveBeenCalled()
+    button('Return to plan')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(pvOnly()!.disabled).toBe(false)
+    expect(slider()).toBeNull()
   })
 
   it('boosts from the house battery and stops it, saying why it ended', async () => {
@@ -746,7 +791,7 @@ describe('the charger behind its bubble', () => {
       surplus_only: true,
     })
     expect(pvOnly()!.checked).toBe(true)
-    expect(document.body.textContent).toContain('charges from spare solar only now')
+    expect(document.body.textContent).toContain('The plan uses spare solar only')
     // The box refuses a boost while PV only is on; the offer says so instead.
     expect(button('Boost from the house battery')).toBeUndefined()
     expect(document.body.textContent).toContain('Not while the charger uses spare solar only')
@@ -758,7 +803,7 @@ describe('the charger behind its bubble', () => {
       surplus_only: false,
     })
     expect(pvOnly()!.checked).toBe(false)
-    expect(document.body.textContent).toContain('may charge the car again')
+    expect(document.body.textContent).toContain('may use grid power again')
     expect(button('Boost from the house battery')).toBeDefined()
   })
 

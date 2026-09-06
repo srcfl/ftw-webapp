@@ -53,6 +53,7 @@ export interface WireLoadpoint {
     soc?: unknown
     soc_pct?: unknown
     time_of_day_min_utc?: unknown
+    surplus_unlock_bat_soc?: unknown
     recurring?: unknown
     days?: unknown
   } | null
@@ -115,6 +116,7 @@ export interface Loadpoint {
   schedule: {
     socPct: number | null
     timeOfDayMinUtc: number
+    surplusUnlockPct?: number
     recurring: boolean
     /** 7-bit weekday mask, bit 0 = Monday. Zero means every day. */
     days: number
@@ -182,6 +184,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
             socPct: schedPct,
             timeOfDayMinUtc: schedMin,
             recurring: sched!.recurring === true,
+            surplusUnlockPct: typeof sched!.surplus_unlock_bat_soc === 'number' ? sched!.surplus_unlock_bat_soc * 100 : 0,
             days: (num(sched!.days) ?? 0) & 0x7f,
           },
   }
