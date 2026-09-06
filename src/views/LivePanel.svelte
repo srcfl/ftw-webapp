@@ -169,6 +169,8 @@
   }
 
   .sheet {
+    max-width: 34rem;
+    margin-inline: auto;
     position: fixed;
     left: 0;
     right: 0;
