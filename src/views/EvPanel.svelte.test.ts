@@ -20,6 +20,7 @@ import {
   OP_LOADPOINT_SURPLUS_ONLY_SET,
 } from '$lib/protocol/messages'
 import { FID } from '$lib/format/explanation'
+import { wireBytes } from '$lib/protocol/frame'
 import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
 
 // The ceremony, played by a hand. The sim's configure tier refuses without
@@ -759,6 +760,29 @@ describe('the charger behind its bubble', () => {
     render(EvPanel, { props: { site, onclose: () => {} } })
     await vi.advanceTimersByTimeAsync(500)
     expect(document.body.textContent).toContain('Car battery · 77.4 kWh')
+  })
+
+  it('distinguishes a saved default from the size used by the current car', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box } = await openedFor()
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      const answer = serve(req)
+      if (req.method === 'GET' && req.path === '/api/loadpoints' && 'body' in answer) {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        payload.loadpoints[0].vehicle_capacity_wh = 40000
+        answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
+      }
+      return answer
+    })
+    const capacity = document.querySelector<HTMLInputElement>('[aria-label="Usable battery size, kWh"]')!
+    capacity.value = '77.4'
+    capacity.dispatchEvent(new Event('input', { bubbles: true }))
+    capacity.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Saved as the usual battery size. This session uses 40 kWh.')
+    expect(document.body.textContent).toContain('Car battery · 40 kWh')
   })
 
   it('shows an invalid battery size without sending it', async () => {

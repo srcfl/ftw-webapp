@@ -225,7 +225,10 @@
       capacityNote[lp.id] = 'Battery size saved. Reading charging status…'
       await store.load(true)
       refreshCharging(site)
-      capacityNote[lp.id] = 'Battery size saved. The plan uses this size for its estimates.'
+      const active = store.points.find(point => point.id === lp.id)?.vehicleCapacityWh
+      capacityNote[lp.id] = active != null && active !== Math.round(value * 1000)
+        ? `Saved as the usual battery size. This session uses ${active / 1000} kWh.`
+        : 'Battery size saved. The plan uses this size for its estimates.'
       delete capacityDraft[lp.id]
     } catch (err) {
       capacityFailed[lp.id] = !accepted
