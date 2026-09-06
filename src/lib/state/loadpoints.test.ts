@@ -94,6 +94,36 @@ describe('the charger over the wire', () => {
     expect(store.planMissing, 'a missing plan was passed off as an idle week').toBe(true)
   })
 
+  it('hides old windows when replanning begins between the charger and plan reads', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streamingSite(new SimBox({ now: () => Date.now() }))
+    let pending = true
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(async req => {
+      const answer = await api(req)
+      if (req.path === '/api/mpc/plan') {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        payload.meta = { ...payload.meta, replanning: pending }
+        return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+      }
+      return answer
+    })
+    const store = new LoadpointsStore(site)
+    const first = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await first
+    expect(store.points[0]!.powerW).toBeGreaterThan(7000)
+    expect(store.planPending).toBe(true)
+    expect(store.windows['carport']).toEqual([])
+    pending = false
+    const next = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await next
+    expect(store.planPending).toBe(false)
+    expect(store.windows['carport']!.length).toBeGreaterThan(0)
+  })
+
   it('rejects and says so when the box is out of reach, keeping what was drawn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)

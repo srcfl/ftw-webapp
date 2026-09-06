@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   toLoadpoint,
   evStatusSentence,
+  evPlanSentence,
   evScheduleSentence,
   evSessionSentence,
   localClock,
@@ -69,6 +70,13 @@ describe('a charger described in words', () => {
     const s = evScheduleSentence(toLoadpoint({ ...WIRE, plugged_in: false }))
     expect(s).toContain('84 %')
     expect(s).toContain(`Ready by ${localClock(360)}`)
+  })
+
+  it('reports a saved goal while replanning without changing the actual charge status', () => {
+    const lp = toLoadpoint({ ...WIRE, plan_pending: true, plan_next_start_ms: Date.now(), plan_next_end_ms: Date.now() + 60_000 })
+    expect(evPlanSentence(lp)).toBe('Goal saved. Updating the plan…')
+    expect(evStatusSentence(lp)).toBe('Charging at 8.6 kW')
+    expect(evPlanSentence({ ...lp, manualActive: true })).toBe('Goal saved. Updating the plan…')
   })
 
   it('shows the percent when the charge is really known', () => {

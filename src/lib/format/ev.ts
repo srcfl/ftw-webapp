@@ -33,6 +33,7 @@ export interface WireLoadpoint {
   grid_deferred?: unknown
   plan_next_start_ms?: unknown
   plan_next_end_ms?: unknown
+  plan_pending?: unknown
   updated_at_ms?: unknown
   soc_source?: unknown
   min_charge_w?: unknown
@@ -116,6 +117,7 @@ export interface Loadpoint {
   gridDeferred?: boolean
   planStartMs?: number | null
   planEndMs?: number | null
+  planPending?: boolean
   /** What the running hold asks for, in watts. Null when there is none, or the box did not say. */
   manualChargeW: number | null
   surplusOnly: boolean
@@ -187,6 +189,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     gridDeferred: w.grid_deferred === true,
     planStartMs: num(w.plan_next_start_ms),
     planEndMs: num(w.plan_next_end_ms),
+    planPending: w.plan_pending === true,
     manualChargeW: w.manual_active === true ? num(w.manual_charge_w) : null,
     surplusOnly: w.surplus_only === true,
     boostActive: boost?.active === true,
@@ -328,6 +331,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
 }
 
 export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = true): string | null {
+  if (lp.planPending) return lp.schedule ? 'Goal saved. Updating the plan…' : 'Updating the charging plan…'
   if (!lp.pluggedIn || lp.manualActive || lp.manualRestoreUnconfirmed || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
   if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'
   if (lp.planStartMs && lp.planEndMs && lp.planEndMs > now) {

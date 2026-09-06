@@ -343,10 +343,13 @@
           surplus_unlock_bat_soc: next.surplusUnlockPct / 100,
         },
       })
-      if (revision === scheduleRevision) scheduleNote = 'Schedule saved. Reading the plan…'
-      await store.load()
+      if (revision === scheduleRevision) scheduleNote = 'Goal saved. Updating the plan…'
+      // A confirmed write stays confirmed if the following read fails.
+      // The plan can take longer than the charger read; polling follows it.
+      await store.loadChargers().catch(() => {})
       refreshCharging(site)
-      if (revision === scheduleRevision) scheduleNote = store.error ? 'Schedule saved. Current charging status is unavailable.' : 'Schedule saved.'
+      if (revision === scheduleRevision) scheduleNote = 'Schedule saved.'
+      void store.load().catch(() => {})
     } catch (err) {
       if (revision === scheduleRevision) {
         saveError = err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Check the current settings before trying again."
@@ -369,8 +372,9 @@
         path: `/api/loadpoints/${lpId}/schedule`,
       })
       draft = null
-      await store.load()
+      await store.loadChargers().catch(() => {})
       refreshCharging(site)
+      void store.load().catch(() => {})
     } catch (err) {
       saveError =
         err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Reading its current settings…"
@@ -641,7 +645,7 @@
                 </button>
               {/if}
             </div>
-            <p class="hint" role="status">{saveError ?? scheduleNote}</p>
+            <p class="hint" role="status">{saveError ?? (scheduleNote === 'Schedule saved.' && store.error ? 'Schedule saved. Current charging status is unavailable.' : scheduleNote)}</p>
             {#if saveError}
               <button class="quiet" disabled={saving} onclick={scheduleSave}>Try again</button>
             {/if}
@@ -777,7 +781,7 @@
           <p class="hint">{boostStoppedSentence(lp)}</p>
         {/if}
 
-        {#if !lp.manualActive && !stale && (store.windows[lp.id] ?? []).length > 0}
+        {#if !lp.manualActive && !stale && !lp.planPending && !store.planPending && (store.windows[lp.id] ?? []).length > 0}
           <div class="windows">
             <span class="label">Charging ahead</span>
             <ul>
@@ -791,7 +795,7 @@
               {/each}
             </ul>
           </div>
-        {:else if !lp.manualActive && store.planMissing}
+        {:else if !lp.manualActive && !lp.planPending && !store.planPending && store.planMissing}
           <!-- The plan read failed while the charger read did not. An empty
                list here would claim an idle week the app has not read. -->
           <p class="hint">Charging times aren't readable right now.</p>

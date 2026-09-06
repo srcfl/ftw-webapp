@@ -233,6 +233,84 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Schedule saved')
   })
 
+  it('confirms a saved goal while a long replan hides old windows, then shows the new plan without another write', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) await vi.advanceTimersByTimeAsync(10)
+    let pending = false
+    let writes = 0
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      const answer = serve(req)
+      if (req.method === 'PUT' && req.path.endsWith('/schedule') && req.stepUp && 'status' in answer && answer.status === 200) {
+        pending = true
+        writes++
+      }
+      if ('body' in answer && (req.path === '/api/loadpoints' || req.path === '/api/mpc/plan')) {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        if (req.path === '/api/loadpoints') for (const lp of payload.loadpoints) lp.plan_pending = pending
+        else payload.meta = { ...payload.meta, replanning: pending }
+        answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
+      }
+      return answer
+    })
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.body.textContent).toContain('Charging ahead')
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change goal')!.click()
+    await vi.advanceTimersByTimeAsync(20)
+    const target = document.querySelector('[aria-label="Target charge, percent"]') as HTMLInputElement
+    target.value = '85'
+    target.dispatchEvent(new Event('input', { bubbles: true }))
+    target.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Schedule saved.')
+    expect(document.body.textContent).toContain('Goal saved. Updating the plan…')
+    expect(document.body.textContent).not.toContain('Charging ahead')
+    expect(document.body.textContent).toMatch(/Charging at 7\.\d kW/)
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(document.body.textContent).toContain('Goal saved. Updating the plan…')
+    expect(document.body.textContent).not.toContain('Try again')
+    expect(writes).toBe(1)
+    pending = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).not.toContain('Updating the plan')
+    expect(document.body.textContent).toContain('Charging ahead')
+    expect(writes).toBe(1)
+  })
+
+  it('keeps a successful save confirmed when its status read fails and recovers without rewriting', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    let failRead = false
+    let writes = 0
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(async req => {
+      if (failRead && req.path === '/api/loadpoints') throw new ApiError({ code: 'E_UNAVAILABLE', retryable: true, args: { reason: 'busy' } })
+      const answer = await api(req)
+      if (req.method === 'PUT' && answer.status === 200) { failRead = true; writes++ }
+      return answer
+    })
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change goal')!.click()
+    await vi.advanceTimersByTimeAsync(20)
+    document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Schedule saved. Current charging status is unavailable.')
+    expect(document.body.textContent).not.toContain('Try again')
+    expect(writes).toBe(1)
+    failRead = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).toContain('Schedule saved.')
+    expect(document.body.textContent).not.toContain('Current charging status is unavailable.')
+    expect(writes).toBe(1)
+  })
+
   it('serializes schedule edits while an earlier save is slow', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
