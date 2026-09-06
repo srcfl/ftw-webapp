@@ -158,7 +158,8 @@
     const wire = await callBox<{ days?: unknown[] }>(site, {
       method: 'GET',
       path: '/api/savings/daily',
-      query: { days: '31' },
+      // This card only shows today and the last seven days.
+      query: { days: '7' },
     })
     const days = (wire.days ?? [])
       .map((row) => (row && typeof row === 'object' ? toSavingsDay(row) : null))
