@@ -42,6 +42,7 @@ export interface WireLoadpoint {
   commanded_w?: unknown
   commanded_reason?: unknown
   commanded_known?: unknown
+  manual_restore_unconfirmed?: unknown
   manual_active?: unknown
   manual_charge_w?: unknown
   surplus_only?: unknown
@@ -102,6 +103,7 @@ export interface Loadpoint {
   /** Phase count and phase voltage, for the amp slider. Null when the box did not say. */
   phases: number | null
   voltageV: number | null
+  manualRestoreUnconfirmed?: boolean
   manualActive: boolean
   manual?: WireManualStatus
   charger?: WireLoadpoint['charger']
@@ -172,6 +174,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     phases: num(w.phases),
     voltageV: num(w.voltage_v),
     manualActive: w.manual_active === true,
+    manualRestoreUnconfirmed: w.manual_restore_unconfirmed === true,
     ...(w.manual ? { manual: w.manual } : {}),
     ...(w.charger ? { charger: w.charger } : {}),
     commandedW: num(w.commanded_w),
@@ -262,7 +265,9 @@ export function daysWord(mask: number): string {
  * fact someone opens this panel for. The idle cases say what is true about
  * the bay, never what might happen later — the schedule line owns later.
  */
-export function evStatusSentence(lp: Loadpoint): string {
+export function evStatusSentence(lp: Loadpoint, canControl = true): string {
+  if (lp.manualRestoreUnconfirmed) return (canControl ? 'Confirm how to continue after restart.' : 'An owner needs to confirm charging after restart.') + ' FTW could not match the earlier charge request to this connection.'
+
   if (lp.charger && lp.charger.available !== true) return lp.charger.known ? 'Charger status is out of date. FTW cannot confirm whether the car is charging.' : 'Waiting for the charger’s first status report.'
   if (!lp.pluggedIn) return 'Not plugged in'
   if (lp.manualActive) return manualStatusSentence(lp)
@@ -279,7 +284,7 @@ export function evStatusSentence(lp: Loadpoint): string {
 
 /** A zero hold is a pause; older boxes omit their zero setpoint. */
 export function isPaused(lp: Loadpoint): boolean {
-  return lp.manualActive && (lp.manualChargeW === 0 || lp.manual?.state === 'paused' || lp.manual?.state === 'pausing' || (lp.manualChargeW === null && (lp.manual?.requested_w === 0 || lp.manual?.requested_a === 0)))
+  return !lp.manualRestoreUnconfirmed && lp.manualActive && (lp.manualChargeW === 0 || lp.manual?.state === 'paused' || lp.manual?.state === 'pausing' || (lp.manualChargeW === null && (lp.manual?.requested_w === 0 || lp.manual?.requested_a === 0)))
 }
 
 /** The hold is intent; only a fresh charger reading proves charging. */
@@ -299,9 +304,10 @@ export function manualStatusSentence(lp: Loadpoint): string {
       const p = formatPower(lp.powerW)
       return lp.powerW > 0 ? `Charging at ${p.text} ${p.unit}. ${request} requested.` : 'The charger reports charging. Waiting for a power reading.'
     }
+    case 'sent': return `FTW received ${request}. Waiting for the charger to confirm the new limit.` + (lp.powerW >= 100 ? ` Still charging at ${formatPower(lp.powerW).text} ${formatPower(lp.powerW).unit}.` : '')
     case 'accepted': return `Charger reports a ${limit} limit. Waiting for the car to start drawing…${reason}`
     case 'not_drawing': return `Charger offers ${limit} but the car is not drawing.${reason || ' Check the car’s charge limit or schedule.'}`
-    case 'stalled': return isPaused(lp) ? 'The charger has not stopped after your pause request. Check the charger’s app.' : `The charger has not acted on ${request}.${reason || ' Check the charger and the car’s charge limit or schedule.'}`
+    case 'stalled': return isPaused(lp) ? 'The charger has not stopped after your pause request. Check the charger’s app.' : `The charger has not acted on ${request}.` + (lp.powerW >= 100 ? ` Still charging at ${formatPower(lp.powerW).text} ${formatPower(lp.powerW).unit}.` : '') + (reason || ' Check the charger and the car’s charge limit or schedule.')
     case 'limited':
       if (m.limit_reason === 'charger_limit') return `The charger limits this request to ${limit} (${request} requested).`
       if (m.limit_reason === 'site_meter_stale') return 'Paused for safety: house power readings are out of date. Charging resumes when readings return.'
@@ -317,7 +323,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
 }
 
 export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = true): string | null {
-  if (!lp.pluggedIn || lp.manualActive || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
+  if (!lp.pluggedIn || lp.manualActive || lp.manualRestoreUnconfirmed || lp.chargingDeclined || (lp.charger && lp.charger.available !== true)) return null
   if (lp.gridDeferred && lp.schedule) return 'Waiting for tomorrow’s electricity prices. Solar surplus can charge the car meanwhile.'
   if (lp.planStartMs && lp.planEndMs && lp.planEndMs > now) {
     const clock = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })

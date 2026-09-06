@@ -704,6 +704,35 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Available after returning to the plan')
   })
 
+  it('offers three explicit choices when an earlier charge cannot be matched after restart', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box, site } = await openedFor()
+    const serve = box.api.serve.bind(box.api)
+    let waiting = true
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      const answer = serve(req)
+      if (waiting && req.path === '/api/loadpoints' && 'body' in answer) {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        Object.assign(payload.loadpoints[0], { manual_restore_unconfirmed: true, manual_active: false })
+        answer.body = wireBytes(new TextEncoder().encode(JSON.stringify(payload)))
+      }
+      return answer
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(document.body.textContent).toContain('Confirm how to continue after restart')
+    expect(document.body.textContent).not.toContain('Paused by you')
+    for (const choice of ['Charge now', 'Resume plan', 'Pause charging']) expect(button(choice)).toBeDefined()
+    expect(slider()).toBeNull()
+    waiting = false
+    const sent = vi.spyOn(site, 'command')
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, { id: 'carport', power_w: 0, hold_s: 0 })
+    expect(document.body.textContent).toContain('Paused by you')
+    expect(document.body.textContent).not.toContain('Confirm how to continue after restart')
+  })
+
   it('pauses without removing the goal and resumes only when asked', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)

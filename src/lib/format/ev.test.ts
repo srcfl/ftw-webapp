@@ -323,3 +323,17 @@ it('a charger limit is not described as a main-fuse limit', () => {
   expect(evStatusSentence(lp)).toContain('The charger limits this request to 10 A (16 A requested)')
   expect(evStatusSentence(lp)).not.toContain('Main fuse')
 })
+
+
+it('asks for a new choice after an unmatched restart instead of claiming a user pause', () => {
+  const lp = toLoadpoint({ plugged_in: true, manual_active: false, manual_restore_unconfirmed: true })
+  expect(evStatusSentence(lp)).toContain('Confirm how to continue after restart')
+  expect(evStatusSentence(lp)).not.toContain('Paused by you')
+  expect(evStatusSentence(lp, false)).toContain('An owner needs to confirm')
+})
+it('keeps the old power visible until a lower current request is confirmed', () => {
+  const lp = toLoadpoint({ plugged_in: true, current_power_w: 11000, manual_active: true, manual: { state: 'sent', requested_a: 6 } })
+  expect(evStatusSentence(lp)).toContain('Waiting for the charger to confirm the new limit')
+  expect(evStatusSentence(lp)).toContain('Still charging at 11 kW')
+  expect(evStatusSentence({ ...lp, manual: { state: 'stalled', requested_a: 6 } })).toContain('Still charging at 11 kW')
+})

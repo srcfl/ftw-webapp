@@ -154,7 +154,7 @@
   }
 
   function heldAmps(lp: Loadpoint): number | null {
-    return lp.manualActive && !isPaused(lp) && lp.manualChargeW !== null ? wattsToAmps(lp, lp.manualChargeW) : null
+    return lp.manualActive && !lp.manualRestoreUnconfirmed && !isPaused(lp) && lp.manualChargeW !== null ? wattsToAmps(lp, lp.manualChargeW) : null
   }
 
   function ampsFor(lp: Loadpoint): number {
@@ -415,7 +415,7 @@
   {:else}
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
       <div class="charger">
-        <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp)}</p>
+        <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
         {#if !stale && evPlanSentence(lp, now, site.canConfigure)}<p class="hint">{evPlanSentence(lp, now, site.canConfigure)}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
           <p class="hint">Charger last seen: {clock(Number(lp.charger?.updated_at_ms ?? lp.manual?.charger_updated_at_ms))}</p>
@@ -505,7 +505,7 @@
                charger's floor and ceiling, sent as watts for a hold that
                runs until the car is full, Stop, or an unplug. -->
           <div class="control">
-            {#if lp.manualActive && !isPaused(lp)}
+            {#if lp.manualActive && !lp.manualRestoreUnconfirmed && !isPaused(lp)}
             <div class="row">
               <span class="label">Charge now is active</span>
               <span class="readout">{currentReadout(lp, chosen)}</span>
@@ -524,12 +524,12 @@
             />
             {/if}
             <div class="actions">
-              {#if lp.manualActive}
+              {#if lp.manualActive || lp.manualRestoreUnconfirmed}
                 <button class="quiet" disabled={sending} onclick={() => void store.stopCharging(lp)}>
-                  {isPaused(lp) ? 'Resume plan' : 'Return to plan'}
+                  {isPaused(lp) || lp.manualRestoreUnconfirmed ? 'Resume plan' : 'Return to plan'}
                 </button>
               {/if}
-              {#if !lp.manualActive || isPaused(lp)}
+              {#if !lp.manualActive || isPaused(lp) || lp.manualRestoreUnconfirmed}
                 <button
                   class="primary"
                   disabled={sending}
@@ -543,7 +543,9 @@
               {/if}
             </div>
             <p class="hint">
-              {#if isPaused(lp)}
+              {#if lp.manualRestoreUnconfirmed}
+                Choose Charge now to start immediately, Resume plan to use your goal, or Pause charging to keep charging off.
+              {:else if isPaused(lp)}
                 The goal and solar rule wait until you resume the plan. Charge now starts immediately.
               {:else if lp.manualActive}
                 Changes apply when you release the slider. Return to plan restores your schedule and solar settings.
@@ -558,8 +560,8 @@
 
         <section class="goal" aria-label="Your goal">
           <h3>Your goal</h3>
-          {#if lp.manualActive}
-            <p class="hint">{isPaused(lp) ? 'Resume the plan to use this goal. Edits apply then.' : 'Charge now overrides this goal. Edits apply when you return to the plan.'}</p>
+          {#if lp.manualActive || lp.manualRestoreUnconfirmed}
+            <p class="hint">{isPaused(lp) || lp.manualRestoreUnconfirmed ? 'Resume the plan to use this goal. Edits apply then.' : 'Charge now overrides this goal. Edits apply when you return to the plan.'}</p>
           {/if}
         {#if draft?.lpId === lp.id}
           <!-- Released controls write in order; the draft stays during rereads. -->
@@ -668,13 +670,13 @@
               type="checkbox"
               role="switch"
               checked={surplusDraft[lp.id] ?? lp.surplusOnly}
-              disabled={sending || lp.manualActive}
+              disabled={sending || lp.manualActive || lp.manualRestoreUnconfirmed}
               onchange={(e) => void setSurplusOnly(lp, e.currentTarget.checked)}
             />
             <span>Only spare solar</span>
           </label>
-          <p class="hint">{lp.manualActive
-            ? isPaused(lp) ? 'This rule resumes with the plan.' : 'Charge now overrides this rule. It resumes when you return to the plan.'
+          <p class="hint">{lp.manualActive || lp.manualRestoreUnconfirmed
+            ? isPaused(lp) || lp.manualRestoreUnconfirmed ? 'This rule resumes with the plan.' : 'Charge now overrides this rule. It resumes when you return to the plan.'
             : (surplusDraft[lp.id] ?? lp.surplusOnly)
               ? 'No grid or home battery. Your target may not be reached in time.'
               : 'The plan may use grid power to reach your target.'}</p>

@@ -15,7 +15,7 @@
 {#each snapshot.points.filter(lp => lp.pluggedIn) as lp (lp.id)}
   <section class="charging-notice" aria-label="Car connection">
     <div class="title" role="status">{fresh && lp.charger?.available !== false ? 'Car connected' : 'Car status is out of date'}</div>
-    <p>{fresh && lp.charger?.available !== false ? evStatusSentence(lp) : 'Waiting for current charger status. The last reading cannot confirm charging.'}</p>
+    <p>{fresh && lp.charger?.available !== false ? evStatusSentence(lp, site.canConfigure) : 'Waiting for current charger status. The last reading cannot confirm charging.'}</p>
     {#if fresh && lp.charger?.available !== false && evPlanSentence(lp, Date.now(), site.canConfigure)}<p class="detail">{evPlanSentence(lp, Date.now(), site.canConfigure)}</p>{/if}
     <a href={`#/now?charger=${encodeURIComponent(lp.id)}`}>Check charging{lp.socSource !== 'vehicle' ? ' and battery level' : ''}</a>
   </section>
