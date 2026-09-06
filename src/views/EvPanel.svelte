@@ -285,6 +285,7 @@
   let saveError = $state<string | null>(null)
 
   function beginEdit(lp: Loadpoint): void {
+    if (removedGoalId === lp.id) removedGoalId = null
     saveError = null
     scheduleNote = lp.schedule ? 'Changes apply as you make them.' : 'No goal set yet. Choose this goal, or change the level or time.'
     // The wire's zero means every day; the draft holds all seven bits
@@ -309,7 +310,9 @@
 
   let scheduleNote = $state('Changes apply as you make them.')
   let justSavedGoal = $state<{ id: string; readAt: number | null } | null>(null)
+  let removedGoalId = $state<string | null>(null)
   $effect(() => {
+    if (!store.error && store.points.some(lp => lp.id === removedGoalId && lp.schedule)) removedGoalId = null
     const saved = justSavedGoal
     if (!saved || store.error || store.readAt === saved.readAt) return
     const lp = store.points.find(point => point.id === saved.id)
@@ -381,11 +384,16 @@
     pendingSchedule = false
     saving = true
     saveError = null
+    scheduleNote = 'Removing goal…'
     try {
       await callBox(untrack(() => site), {
         method: 'DELETE',
-        path: `/api/loadpoints/${lpId}/schedule`,
+        path: `/api/loadpoints/${encodeURIComponent(lpId)}/schedule`,
       })
+      if (justSavedGoal?.id === lpId) justSavedGoal = null
+      removedGoalId = lpId
+      // The DELETE confirms these settings even if its status reread fails.
+      store.points = store.points.map(lp => lp.id === lpId ? { ...lp, schedule: null, targetSocPct: null } : lp)
       draft = null
       await store.loadChargers().catch(() => {})
       refreshCharging(site)
@@ -682,6 +690,9 @@
             {/if}
           </div>
         {:else}
+          {#if removedGoalId === lp.id}
+            <p class="hint" role="status">{store.error ? 'Goal removed. Current charging status is unavailable.' : 'Goal removed.'}</p>
+          {/if}
           {#if evScheduleSentence(lp)}
             <div class="row">
               <span>{evScheduleSentence(lp)}</span>

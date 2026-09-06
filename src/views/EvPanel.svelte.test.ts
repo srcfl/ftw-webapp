@@ -527,6 +527,52 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Schedule saved')
   })
 
+  it.each([false, true])('confirms Remove during a pending save replan even when its reread fails: %s', async failRead => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    const api = site.api.bind(site)
+    let deleted = false, pending = true
+    const asked = vi.spyOn(site, 'api').mockImplementation(async req => {
+      if (deleted && failRead && req.path === '/api/loadpoints') throw new Error('read unavailable')
+      const answer = await api(req)
+      if (req.method === 'DELETE' && answer.status === 200) deleted = true
+      if (req.path === '/api/loadpoints') {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        Object.assign(payload.loadpoints[0], { plan_pending: pending, plan_outdated: pending })
+        return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+      }
+      return answer
+    })
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Change goal')!.click()
+    await vi.advanceTimersByTimeAsync(20)
+    const target = document.querySelector<HTMLInputElement>('[aria-label="Target charge, percent"]')!
+    target.value = '85'; target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Goal saved. Updating the plan…')
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Remove')!.click()
+    await vi.advanceTimersByTimeAsync(0)
+    expect.soft(document.body.textContent).toContain('Removing goal…')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect.soft(document.body.textContent).toContain(failRead ? 'Goal removed. Current charging status is unavailable.' : 'Goal removed.')
+    expect(document.body.textContent).not.toContain('Goal saved')
+    expect(document.body.textContent).not.toContain('Ready by')
+    expect(document.body.textContent).toContain('Set a ready time')
+    expect(document.body.textContent).not.toContain('Try again')
+    failRead = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).toContain('Updating the charging plan…')
+    expect(document.body.textContent).not.toContain('Goal saved')
+    pending = false
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(document.body.textContent).toContain('Goal removed.')
+    expect(document.body.textContent).not.toContain('Current charging status is unavailable.')
+    expect(document.body.textContent).not.toContain('Goal saved')
+    expect(asked.mock.calls.filter(([req]) => req.method === 'DELETE' && req.stepUp)).toHaveLength(1)
+  })
+
   it('charges now through the door, and the whole household says so', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
