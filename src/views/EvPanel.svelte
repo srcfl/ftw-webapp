@@ -527,28 +527,28 @@
 
         {/if}
 
+        {#if site.canConfigure && lp.vehicleCapacityWh != null}
+          <details class="extras">
+            <summary>Car battery · {lp.vehicleCapacityWh / 1000} kWh</summary>
+            <p class="hint">{lp.capacitySource === 'default' ? 'FTW is using a default size. Check it against your car.' : 'Used for estimates. Check this size if you use another car.'}</p>
+            <label class="row capacity">
+              <span>Usable battery size (kWh)</span>
+              <input type="number" min="1" max="300" step="0.1" inputmode="decimal"
+                aria-label="Usable battery size, kWh"
+                value={capacityDraft[lp.id] ?? String(lp.vehicleCapacityWh / 1000)}
+                disabled={capacityBusy[lp.id]}
+                oninput={(e) => { capacityDraft[lp.id] = e.currentTarget.value }}
+                onchange={() => void setCapacity(lp)} />
+            </label>
+            <p class="hint">Applies when you leave the field. Find the usable size in your car’s specifications.</p>
+            {#if capacityNote[lp.id]}<p class="hint" role={capacityFailed[lp.id] ? 'alert' : 'status'}>{capacityNote[lp.id]}</p>{/if}
+            {#if capacityFailed[lp.id]}<button class="quiet" disabled={capacityBusy[lp.id]} onclick={() => void setCapacity(lp)}>Try battery size again</button>{/if}
+          </details>
+        {/if}
+
         {#if site.canConfigure && lp.pluggedIn}
           {@const range = chargeCurrent(lp)}
           {@const chosen = ampsFor(lp)}
-          {#if lp.vehicleCapacityWh != null}
-            <details class="extras">
-              <summary>Car battery · {lp.vehicleCapacityWh / 1000} kWh</summary>
-              <p class="hint">{lp.capacitySource === 'default' ? 'FTW is using a default size. Check it against your car.' : 'Used for estimates. Check this size if you use another car.'}</p>
-              <label class="row capacity">
-                <span>Usable battery size (kWh)</span>
-                <input type="number" min="1" max="300" step="0.1" inputmode="decimal"
-                  aria-label="Usable battery size, kWh"
-                  value={capacityDraft[lp.id] ?? String(lp.vehicleCapacityWh / 1000)}
-                  disabled={capacityBusy[lp.id]}
-                  oninput={(e) => { capacityDraft[lp.id] = e.currentTarget.value }}
-                  onchange={() => void setCapacity(lp)} />
-              </label>
-              <p class="hint">Applies when you leave the field. Find the usable size in your car’s specifications.</p>
-              {#if capacityNote[lp.id]}<p class="hint" role={capacityFailed[lp.id] ? 'alert' : 'status'}>{capacityNote[lp.id]}</p>{/if}
-              {#if capacityFailed[lp.id]}<button class="quiet" disabled={capacityBusy[lp.id]} onclick={() => void setCapacity(lp)}>Try battery size again</button>{/if}
-            </details>
-          {/if}
-
           <!-- The slider is the box's own page's: whole amps between the
                charger's floor and ceiling, sent as watts for a hold that
                runs until the car is full, Stop, or an unplug. -->
