@@ -5,11 +5,13 @@
   of the house, and the way in is the house diagram. Everything on it is a
   fact the box served — what flows now, what this session has delivered,
   what the schedule says, and when the optimiser intends to charge next.
-  Round two puts an editor under the schedule line; nothing here commands.
+  The controls express intent — a hold at a chosen current, a bounded boost
+  from the house battery — and the box decides; the panel repaints from
+  what the box then reports.
 -->
 <script lang="ts">
   import { untrack, onDestroy } from 'svelte'
-  import { LoadpointsStore } from '$lib/state/loadpoints.svelte'
+  import { LoadpointsStore, type Control, type Outcome } from '$lib/state/loadpoints.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
   import { callBox, BoxApiError } from '$lib/state/box-api'
   import {
@@ -18,6 +20,15 @@
     evSessionSentence,
     utcMinutesToLocalInput,
     localInputToUtcMinutes,
+    chargeCurrent,
+    wattsToAmps,
+    currentReadout,
+    boostActiveSentence,
+    boostStoppedSentence,
+    BOOST_DURATIONS,
+    BOOST_DURATION_DEFAULT_S,
+    BOOST_RESERVE_DEFAULT_PCT,
+    BOOST_RESERVE_MIN_PCT,
     DAY_LABELS,
     type Loadpoint,
   } from '$lib/format/ev'
@@ -60,6 +71,63 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
+  }
+
+  const sending = $derived(store.command.kind === 'sending')
+
+  /** One sentence per thing the box did, under the control that asked. */
+  const DID: Record<Outcome, string> = {
+    hold: 'Done — your box holds that current now.',
+    release: 'Stopped — the plan decides again.',
+    boost: 'Boost on — the house battery is helping the car.',
+    unboost: 'Boost stopped — the plan decides again.',
+  }
+
+  /**
+   * The slider's amps per charger — the panel's own until Charge now sends
+   * them. Seeded the first time a charger is drawn, at the running hold's
+   * current when there is one and the charger's ceiling otherwise, as the
+   * box's page seeds its own slider; then left alone through rereads, so a
+   * thumb mid-drag is not snapped back by the minute's ask.
+   */
+  let amps = $state<Record<string, number>>({})
+
+  function heldAmps(lp: Loadpoint): number | null {
+    return lp.manualActive && lp.manualChargeW !== null ? wattsToAmps(lp, lp.manualChargeW) : null
+  }
+
+  function ampsFor(lp: Loadpoint): number {
+    const range = chargeCurrent(lp)
+    const chosen = amps[lp.id] ?? heldAmps(lp) ?? range.maxA
+    return Math.min(range.maxA, Math.max(range.minA, chosen))
+  }
+
+  /** The boost under edit: a reserve and a bound, sent as one lease. */
+  let boostDraft = $state<{ lpId: string; reservePct: number; durationS: number } | null>(null)
+
+  // What the box's own validator accepts, so the button never offers a
+  // lease the box would turn down; the box still checks it.
+  const boostDraftValid = $derived(
+    boostDraft !== null &&
+      Number.isInteger(boostDraft.reservePct) &&
+      boostDraft.reservePct >= BOOST_RESERVE_MIN_PCT &&
+      boostDraft.reservePct <= 100
+  )
+
+  function beginBoost(lp: Loadpoint): void {
+    boostDraft = {
+      lpId: lp.id,
+      reservePct: BOOST_RESERVE_DEFAULT_PCT,
+      durationS: BOOST_DURATION_DEFAULT_S,
+    }
+  }
+
+  async function startBoost(lp: Loadpoint): Promise<void> {
+    if (!boostDraft || !boostDraftValid) return
+    await store.boost(lp, boostDraft.reservePct, boostDraft.durationS)
+    // The editor closes on the box's yes alone; a refusal stays on screen
+    // under the values that were refused.
+    if (store.command.kind === 'applied') boostDraft = null
   }
 
   /**
@@ -147,6 +215,18 @@
 
 <svelte:window {onkeydown} />
 
+<!-- The fate of the last command, under the control that sent it. One
+     command is in flight at a time, so the outcome belongs to exactly one. -->
+{#snippet outcome(of: Control)}
+  {#if store.command.kind === 'applied' && store.command.of === of}
+    <p class="hint">{DID[store.command.did]}</p>
+  {:else if store.command.kind === 'unconfirmed' && store.command.of === of}
+    <p class="hint">Your box took it. The charger hasn't confirmed yet.</p>
+  {:else if store.command.kind === 'failed' && store.command.of === of}
+    <p class="hint">{store.command.help}</p>
+  {/if}
+{/snippet}
+
 <!-- Parked on the app shell, with the live-line sheet: inside the scrolling
      view a "fixed" sheet is the bottom of the page. -->
 <div class="layer" use:portal>
@@ -176,45 +256,153 @@
         {/if}
 
         {#if lp.boostActive}
-          <p class="badge">Battery boost is on — the house battery is helping the car.</p>
+          <p class="badge">{boostActiveSentence(lp)}</p>
+          {#if site.canConfigure}
+            <div class="actions">
+              <button class="quiet edit" disabled={sending} onclick={() => void store.stopBoost(lp)}>
+                Stop boost
+              </button>
+            </div>
+            {@render outcome('boost')}
+          {/if}
         {/if}
 
-        <!-- The door, not the panel, decides: the button expresses intent
+        <!-- The door, not the panel, decides: the buttons express intent
              with an expiry, and the box revalidates before anything moves.
              Hidden from viewers as presentation — the box's refusal is the
              actual gate. Absent when the bay is empty, because "charge now"
              with no cable is a promise nobody can keep. -->
         {#if site.canConfigure && lp.pluggedIn}
-          <div class="actions">
-            {#if lp.manualActive}
-              <button
-                class="quiet outline"
-                disabled={store.command.kind === 'sending'}
-                onclick={() => void store.stopCharging(lp)}
-              >
-                Stop charging
-              </button>
-            {:else}
-              <button
-                class="primary"
-                disabled={store.command.kind === 'sending'}
-                onclick={() => void store.chargeNow(lp)}
-              >
-                {store.command.kind === 'sending' ? 'Asking your box…' : 'Charge now'}
-              </button>
-            {/if}
-          </div>
-          {#if store.command.kind === 'applied'}
+          {@const range = chargeCurrent(lp)}
+          {@const chosen = ampsFor(lp)}
+          {@const held = heldAmps(lp)}
+          <!-- The slider is the box's own page's: whole amps between the
+               charger's floor and ceiling, sent as watts for a hold that
+               runs until the car is full, Stop, or an unplug. -->
+          <div class="control">
+            <div class="row">
+              <span class="label">Charge now</span>
+              <span class="readout">{currentReadout(lp, chosen)}</span>
+            </div>
+            <input
+              class="slider"
+              type="range"
+              min={range.minA}
+              max={range.maxA}
+              step="1"
+              value={chosen}
+              aria-label="Charging current"
+              disabled={sending}
+              oninput={(e) => (amps[lp.id] = Number(e.currentTarget.value))}
+            />
+            <div class="actions">
+              {#if lp.manualActive}
+                <button
+                  class="primary"
+                  disabled={sending || chosen === held}
+                  onclick={() => void store.chargeNow(lp, chosen)}
+                >
+                  {sending ? 'Asking your box…' : 'Update'}
+                </button>
+                <button class="quiet" disabled={sending} onclick={() => void store.stopCharging(lp)}>
+                  Stop charging
+                </button>
+              {:else}
+                <button
+                  class="primary"
+                  disabled={sending}
+                  onclick={() => void store.chargeNow(lp, chosen)}
+                >
+                  {sending ? 'Asking your box…' : 'Charge now'}
+                </button>
+              {/if}
+            </div>
             <p class="hint">
-              {store.command.holding
-                ? 'Charging at full power. Stop it and the plan takes back over.'
-                : 'Stopped — the plan decides again.'}
+              {#if lp.manualActive}
+                Charging now{held !== null ? ` at ${held} A` : ''} until the car is full. Stop it,
+                or unplug, and the plan takes back over.
+              {:else}
+                Runs at this current until the car is full, you stop it, or you unplug.
+              {/if}
             </p>
-          {:else if store.command.kind === 'unconfirmed'}
-            <p class="hint">Your box took it. The charger hasn't confirmed yet.</p>
-          {:else if store.command.kind === 'failed'}
-            <p class="hint">{store.command.help}</p>
+            {@render outcome('hold')}
+          </div>
+
+          <!-- The boost: a bounded lease the box caps at four hours. The
+               box refuses one while a hold runs or the charger is on spare
+               solar only, so the offer says so up front from what the box
+               served, instead of drawing a button that leads to a refusal. -->
+          {#if !lp.boostActive}
+            {#if boostDraft?.lpId === lp.id}
+              <div class="editor">
+                <div class="row">
+                  <span class="label">Battery boost</span>
+                  <span>Let the house battery charge the car for a while.</span>
+                </div>
+                <div class="row">
+                  <span class="label">Keep</span>
+                  <input
+                    type="number"
+                    min={BOOST_RESERVE_MIN_PCT}
+                    max="100"
+                    step="5"
+                    bind:value={boostDraft.reservePct}
+                    disabled={sending}
+                    aria-label="House battery reserve"
+                  />
+                  <span>% in the house battery</span>
+                </div>
+                <div class="chips" role="group" aria-label="For how long">
+                  {#each BOOST_DURATIONS as d (d.s)}
+                    <button
+                      class="chip"
+                      aria-pressed={boostDraft.durationS === d.s}
+                      disabled={sending}
+                      onclick={() => {
+                        if (boostDraft) boostDraft.durationS = d.s
+                      }}
+                    >
+                      {d.label}
+                    </button>
+                  {/each}
+                </div>
+                <div class="actions">
+                  <button
+                    class="primary"
+                    disabled={sending || !boostDraftValid}
+                    onclick={() => void startBoost(lp)}
+                  >
+                    {sending ? 'Asking your box…' : 'Start boost'}
+                  </button>
+                  <button class="quiet" disabled={sending} onclick={() => (boostDraft = null)}>
+                    Cancel
+                  </button>
+                </div>
+                <p class="hint">
+                  Ends when the time is up, the house battery reaches the reserve, or you stop it.
+                </p>
+                {@render outcome('boost')}
+              </div>
+            {:else}
+              <div class="row">
+                <span class="label">Battery boost</span>
+                {#if lp.manualActive}
+                  <span class="hint">Not while charging now — stop that first.</span>
+                {:else if lp.surplusOnly}
+                  <span class="hint">Not while the charger uses spare solar only.</span>
+                {:else}
+                  <button class="quiet edit" onclick={() => beginBoost(lp)}>
+                    Boost from the house battery
+                  </button>
+                {/if}
+              </div>
+              {@render outcome('boost')}
+            {/if}
           {/if}
+        {/if}
+
+        {#if boostStoppedSentence(lp)}
+          <p class="hint">{boostStoppedSentence(lp)}</p>
         {/if}
 
         {#if draft?.lpId === lp.id}
@@ -419,6 +607,8 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--fg-muted);
+    /* The sentence beside it wraps; the label does not. */
+    flex-shrink: 0;
   }
 
   .hint {
@@ -528,5 +718,23 @@
   .edit {
     text-decoration: underline;
     text-underline-offset: 3px;
+  }
+
+  .control {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .readout {
+    margin-left: auto;
+    font-family: var(--num);
+  }
+
+  /* The app's one slider. The browser draws it; only the accent is ours. */
+  .slider {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--accent);
   }
 </style>

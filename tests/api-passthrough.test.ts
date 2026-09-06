@@ -386,6 +386,22 @@ describe('configuration', () => {
     expect((decode(res.body) as { role: string }).role).toBe(ROLE_VIEWER)
   })
 
+  it('restarts the box as configuration, once a ceremony has happened', async () => {
+    const box = new SimBox({ now: () => NOON, role: ROLE_OWNER })
+    const session = connect(box)
+    await settle()
+
+    await expect(session.api({ method: 'POST', path: '/api/restart' })).rejects.toMatchObject({
+      detail: { code: 'E_NEEDS_STEP_UP', args: { tier: 'configure' } },
+    })
+    expect(box.api.restarts, 'the refusal still bounced the process').toBe(0)
+
+    const res = await session.api({ method: 'POST', path: '/api/restart', stepUp: true })
+    expect(res.status).toBe(202)
+    expect((decode(res.body) as { status: string }).status).toBe('restarting')
+    expect(box.api.restarts).toBe(1)
+  })
+
   it('can skip the ceremony only when a simulator opts in for the public demo', async () => {
     const box = new SimBox({
       now: () => NOON,

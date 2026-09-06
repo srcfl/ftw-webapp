@@ -27,3 +27,24 @@ export function commandHelp(result: CmdResult): string {
       return "That didn't go through. Try again."
   }
 }
+
+/**
+ * The boost's own refusals, before the door's.
+ *
+ * The box answers a boost the live site cannot carry with E_UNAVAILABLE
+ * naming the op — the session's spelling of the HTTP 409 — and a lease
+ * outside its bounds with E_UNKNOWN_OP naming `lease`. Neither is the
+ * charger being out of reach, which is what the shared table says for
+ * E_UNAVAILABLE, so they get their own sentences and everything else falls
+ * through to it.
+ */
+export function boostHelp(result: CmdResult): string {
+  const e = result.error
+  if (e?.code === 'E_UNAVAILABLE' && typeof e.args?.['op'] === 'string') {
+    return "Your box won't boost right now — the house battery or the site isn't ready for it."
+  }
+  if (e?.code === 'E_UNKNOWN_OP' && e.args?.['arg'] === 'lease') {
+    return 'Your box refused that reserve and time. Try other values.'
+  }
+  return commandHelp(result)
+}

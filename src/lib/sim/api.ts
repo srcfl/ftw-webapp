@@ -48,6 +48,8 @@ const RULE_TYPES = [
   'charging.session_complete',
   'charging.interrupted',
   'update.installed',
+  'driver.offline',
+  'fuse.over_limit',
 ]
 
 /**
@@ -147,6 +149,9 @@ const ROUTES: Record<string, RouteFacts> = {
   'PUT /api/notifications/rules': { tier: 'configure' },
   'POST /api/notifications/test': { tier: 'configure' },
 
+  // Owner recovery: a late restart is the same instruction, only later.
+  'POST /api/restart': { tier: 'configure' },
+
   // At the box, in the house. A credential, a whole file, or a person needed
   // in the room.
   'GET /api/config': { tier: 'local' },
@@ -235,7 +240,12 @@ export interface SimApiOptions {
    * What the door has done to the charger, read live from the box. The
    * loadpoints answer must describe the same household the stream does.
    */
-  loadpointState?: () => { holdW: number | null; boostActive: boolean }
+  loadpointState?: () => {
+    holdW: number | null
+    boost: { expiresAtMs: number; minBatterySoc: number } | null
+    /** The last stop's reason, kept until the next boost, as the box keeps it. */
+    boostStop: { reason: string; atMs: number } | null
+  }
   /**
    * The live sample the 1 Hz stream is already sending. Status must describe
    * the same moment or the hero and the charger sheet disagree.
@@ -306,6 +316,8 @@ export class SimApi {
   #pushRules: { enabled: boolean; events: Record<string, unknown>[] } | null = null
   /** How many test pushes were asked for, for a test to look at. */
   #testPushes = 0
+  /** How many times this box was asked to restart, for a test to look at. */
+  #restarts = 0
 
   constructor(opts: SimApiOptions) {
     this.#opts = opts
@@ -372,6 +384,11 @@ export class SimApi {
 
   get testPushes(): number {
     return this.#testPushes
+  }
+
+  /** Restarts this box was asked for, for a test to look at. */
+  get restarts(): number {
+    return this.#restarts
   }
 
   /**
@@ -499,6 +516,10 @@ export class SimApi {
       return json(200, { status: 'sent', to: this.#pushSubscriptions.size })
     }
     if (route === 'GET /api/notifications/history') return this.#pushHistory()
+    if (route === 'POST /api/restart') {
+      this.#restarts += 1
+      return json(202, { status: 'restarting' })
+    }
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year
@@ -619,7 +640,7 @@ export class SimApi {
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
     // What the door has done overrides what the generator would do — the
     // stream applies the same override, so both surfaces tell one story.
-    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    const door = this.#opts.loadpointState?.() ?? { holdW: null, boost: null, boostStop: null }
     const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
@@ -655,9 +676,25 @@ export class SimApi {
           phases: 3,
           voltage_v: 230,
           manual_active: door.holdW !== null,
-          battery_boost: door.boostActive
-            ? { state: 'active', active: true }
-            : { state: 'inactive', active: false },
+          // `manual_charge_w` is omitempty on the box: absent for a 0 W
+          // pause hold, present with the setpoint for any other.
+          ...(door.holdW ? { manual_charge_w: door.holdW } : {}),
+          // The box's BatteryBoostStatus, in its three states.
+          battery_boost: door.boost
+            ? {
+                state: 'active',
+                active: true,
+                expires_at_ms: door.boost.expiresAtMs,
+                min_battery_soc: door.boost.minBatterySoc,
+              }
+            : door.boostStop
+              ? {
+                  state: 'stopped',
+                  active: false,
+                  stop_reason: door.boostStop.reason,
+                  stopped_at_ms: door.boostStop.atMs,
+                }
+              : { state: 'inactive', active: false },
           surplus_only: false,
           ...(this.#schedule ? { schedule: this.#schedule } : {}),
         },

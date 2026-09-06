@@ -12,9 +12,15 @@
  */
 
 import { callBox, BoxApiError } from './box-api'
-import { commandHelp } from '$lib/format/command'
-import { toLoadpoint, type Loadpoint, type WireLoadpoint } from '$lib/format/ev'
-import { OP_LOADPOINT_HOLD, type CmdResult } from '$lib/protocol/messages'
+import { commandHelp, boostHelp } from '$lib/format/command'
+import {
+  toLoadpoint,
+  chargeCurrent,
+  ampsToWatts,
+  type Loadpoint,
+  type WireLoadpoint,
+} from '$lib/format/ev'
+import { OP_LOADPOINT_HOLD, OP_LOADPOINT_BOOST, type CmdResult } from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
 import type { SiteStore } from './site.svelte'
 
@@ -69,6 +75,12 @@ export function chargeWindows(actions: WireAction[], loadpointId: string): Charg
   return out
 }
 
+/** Which control on the panel a command belongs to, so its outcome lands under it. */
+export type Control = 'hold' | 'boost'
+
+/** What an applied command did, for the one sentence that says so. */
+export type Outcome = 'hold' | 'release' | 'boost' | 'unboost'
+
 export class LoadpointsStore {
   /** Every charger the box reported. Empty until an answer lands. */
   points = $state.raw<Loadpoint[]>([])
@@ -103,10 +115,10 @@ export class LoadpointsStore {
    */
   command = $state<
     | { kind: 'idle' }
-    | { kind: 'sending' }
-    | { kind: 'applied'; holding: boolean }
-    | { kind: 'unconfirmed' }
-    | { kind: 'failed'; help: string }
+    | { kind: 'sending'; of: Control }
+    | { kind: 'applied'; of: Control; did: Outcome }
+    | { kind: 'unconfirmed'; of: Control }
+    | { kind: 'failed'; of: Control; help: string }
   >({ kind: 'idle' })
 
   #site: SiteStore
@@ -124,41 +136,85 @@ export class LoadpointsStore {
   }
 
   /**
-   * Charge now: a manual hold at the charger's own ceiling.
+   * Charge now: a persistent manual hold at a chosen current.
    *
-   * The box revalidates against fresh state and answers; nothing here
-   * pretends. On any settled outcome the charger is reread, because a hold
-   * changes what `/api/loadpoints` says and the panel must say the same.
+   * The same body the box's own page posts to `manual_hold`: the watts for
+   * the amps, `hold_s: 0` for a hold that only Stop or an unplug releases,
+   * and the phase mode the charger is wired for. The box revalidates against
+   * fresh state and answers; nothing here pretends. On any settled outcome
+   * the charger is reread, because a hold changes what `/api/loadpoints`
+   * says and the panel must say the same.
    */
-  async chargeNow(lp: Loadpoint): Promise<void> {
-    await this.#send(lp, { id: lp.id, power_w: lp.maxChargeW ?? 0 }, true)
+  async chargeNow(lp: Loadpoint, amps: number): Promise<void> {
+    await this.#send(
+      OP_LOADPOINT_HOLD,
+      {
+        id: lp.id,
+        power_w: ampsToWatts(lp, amps),
+        hold_s: 0,
+        phase_mode: chargeCurrent(lp).phases === 1 ? '1p' : '3p',
+      },
+      'hold',
+      'hold',
+      commandHelp
+    )
   }
 
   /** Release the hold. The plan takes back over. */
   async stopCharging(lp: Loadpoint): Promise<void> {
-    await this.#send(lp, { id: lp.id, clear: true }, false)
+    await this.#send(OP_LOADPOINT_HOLD, { id: lp.id, clear: true }, 'hold', 'release', commandHelp)
   }
 
-  async #send(lp: Loadpoint, args: Record<string, unknown>, holding: boolean): Promise<void> {
+  /**
+   * Boost: let the house battery push the car for a bounded while.
+   *
+   * The lease by the box's own names — a floor for the house battery in
+   * whole percent and a duration in seconds. The box caps a lease at four
+   * hours, and refuses one the live site cannot carry: a manual hold
+   * running, the charger on spare solar only, the battery out of reach.
+   */
+  async boost(lp: Loadpoint, reservePct: number, durationS: number): Promise<void> {
+    await this.#send(
+      OP_LOADPOINT_BOOST,
+      { id: lp.id, min_battery_soc_pct: reservePct, duration_s: durationS },
+      'boost',
+      'boost',
+      boostHelp
+    )
+  }
+
+  /** Withdraw the boost. The house battery is the plan's again. */
+  async stopBoost(lp: Loadpoint): Promise<void> {
+    await this.#send(OP_LOADPOINT_BOOST, { id: lp.id, cancel: true }, 'boost', 'unboost', boostHelp)
+  }
+
+  async #send(
+    op: string,
+    args: Record<string, unknown>,
+    of: Control,
+    did: Outcome,
+    help: (result: CmdResult) => string
+  ): Promise<void> {
     if (this.command.kind === 'sending') return
     if (this.#settle) clearTimeout(this.#settle)
-    this.command = { kind: 'sending' }
+    this.command = { kind: 'sending', of }
 
     try {
-      const result: CmdResult = await this.#site.command(OP_LOADPOINT_HOLD, args)
+      const result: CmdResult = await this.#site.command(op, args)
       switch (result.state) {
         case 'applied':
-          this.command = { kind: 'applied', holding }
+          this.command = { kind: 'applied', of, did }
           break
         case 'unconfirmed':
-          this.command = { kind: 'unconfirmed' }
+          this.command = { kind: 'unconfirmed', of }
           break
         default:
-          this.command = { kind: 'failed', help: commandHelp(result) }
+          this.command = { kind: 'failed', of, help: help(result) }
       }
     } catch (err) {
       this.command = {
         kind: 'failed',
+        of,
         help: err instanceof CommandError ? err.help : "That didn't go through. Try again.",
       }
     }

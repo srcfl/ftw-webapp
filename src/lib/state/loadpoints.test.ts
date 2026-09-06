@@ -10,6 +10,7 @@ import { LoadpointsStore, chargeWindows } from './loadpoints.svelte'
 import { SiteStore } from './site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { OP_LOADPOINT_HOLD, OP_LOADPOINT_BOOST } from '$lib/protocol/messages'
 
 /** Half past six in the evening UTC: the sim car is plugged in and drawing. */
 const CHARGING_EVENING = Date.UTC(2026, 6, 15, 18, 30, 0)
@@ -114,6 +115,116 @@ describe('the charger over the wire', () => {
     // The panel keeps the charger it drew, under a sentence about the wire.
     expect(store.points).toHaveLength(1)
     expect(store.error).toMatch(/out of reach/i)
+  })
+
+  /** A store that has read the charger once, with the clock in the evening. */
+  async function loadedStore(): Promise<{ site: SiteStore; store: LoadpointsStore }> {
+    const site = await streamingSite(new SimBox({ now: () => Date.now() }))
+    const store = new LoadpointsStore(site)
+    const first = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await first
+    return { site, store }
+  }
+
+  /** Run one command and let the reread it triggers land. */
+  async function settled(run: Promise<void>): Promise<void> {
+    await vi.advanceTimersByTimeAsync(500)
+    await run
+    await vi.advanceTimersByTimeAsync(500)
+  }
+
+  it('charges now at the chosen current, as the box page would send it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.chargeNow(store.points[0]!, 10))
+
+    // 10 A × 3 × 230 V, a hold only Stop or an unplug releases, on three
+    // phases: the body the box's own page posts to manual_hold.
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, {
+      id: 'carport',
+      power_w: 6900,
+      hold_s: 0,
+      phase_mode: '3p',
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'hold', did: 'hold' })
+
+    // The reread says the same: a hold at that setpoint, and the car drawing it.
+    const lp = store.points[0]!
+    expect(lp.manualActive).toBe(true)
+    expect(lp.manualChargeW).toBe(6900)
+    expect(lp.powerW).toBe(6900)
+  })
+
+  it('boosts from the house battery with a reserve and a bound, then stops it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.boost(store.points[0]!, 30, 3600))
+
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, {
+      id: 'carport',
+      min_battery_soc_pct: 30,
+      duration_s: 3600,
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'boost', did: 'boost' })
+
+    let lp = store.points[0]!
+    expect(lp.boostActive).toBe(true)
+    expect(lp.boostReservePct).toBe(30)
+    expect(lp.boostExpiresAtMs).toBeGreaterThan(Date.now())
+    expect(lp.boostExpiresAtMs).toBeLessThanOrEqual(Date.now() + 3600_000)
+    expect(lp.boostStopReason).toBeNull()
+
+    await settled(store.stopBoost(lp))
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, { id: 'carport', cancel: true })
+    expect(store.command).toEqual({ kind: 'applied', of: 'boost', did: 'unboost' })
+
+    lp = store.points[0]!
+    expect(lp.boostActive).toBe(false)
+    expect(lp.boostStopReason).toBe('cancelled')
+  })
+
+  it('reports a hold ending a boost, and the box refusing a boost under a hold', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    await settled(store.boost(store.points[0]!, 30, 3600))
+    expect(store.points[0]!.boostActive).toBe(true)
+
+    // A hold takes priority: the box withdraws the boost and keeps the why.
+    await settled(store.chargeNow(store.points[0]!, 16))
+    let lp = store.points[0]!
+    expect(lp.manualActive).toBe(true)
+    expect(lp.boostActive).toBe(false)
+    expect(lp.boostStopReason).toBe('operator_hold')
+
+    // And a boost asked for under that hold is refused, in a sentence about
+    // the boost rather than about the charger being out of reach.
+    await settled(store.boost(lp, 30, 3600))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/won't boost/)
+    lp = store.points[0]!
+    expect(lp.boostActive).toBe(false)
+    expect(lp.manualActive).toBe(true)
+  })
+
+  it('carries the sentence for a lease the box would not take', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    // Five hours: over the box's four-hour cap, so the lease is refused.
+    await settled(store.boost(store.points[0]!, 30, 5 * 3600))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/reserve and time/)
+    expect(store.points[0]!.boostActive).toBe(false)
   })
 })
 

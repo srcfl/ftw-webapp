@@ -12,7 +12,7 @@ import EvPanel from './EvPanel.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import { ROLE_VIEWER } from '$lib/protocol/messages'
+import { ROLE_VIEWER, OP_LOADPOINT_HOLD, OP_LOADPOINT_BOOST } from '$lib/protocol/messages'
 import { FID } from '$lib/format/explanation'
 import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
 
@@ -430,5 +430,164 @@ describe('the charger behind its bubble', () => {
       asked.mock.calls.length,
       'nothing asked again once the box was back'
     ).toBeGreaterThan(whileDown)
+  })
+
+  /** The panel open for an owner with the car on the cable. */
+  async function openedFor(role?: string): Promise<{ box: SimBox; site: SiteStore }> {
+    const box = new SimBox({ now: () => Date.now(), ...(role ? { role } : {}) })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 5 }))
+    for (let i = 0; i < 100 && site.session.phase !== 'streaming'; i++) {
+      await vi.advanceTimersByTimeAsync(10)
+    }
+    render(EvPanel, { props: { site, onclose: () => {} } })
+    await vi.advanceTimersByTimeAsync(500)
+    return { box, site }
+  }
+
+  const button = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === label
+    )
+
+  const slider = () => document.querySelector<HTMLInputElement>('input[type="range"]')
+
+  /** Move the thumb the way a browser reports it. */
+  function slide(to: number): void {
+    const s = slider()!
+    s.value = String(to)
+    s.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  it("offers the charger's own range of current, at its ceiling by default", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    await openedFor()
+
+    const s = slider()
+    expect(s, 'no slider for an owner with a plugged car').not.toBeNull()
+    expect(s!.min).toBe('6')
+    expect(s!.max).toBe('16')
+    expect(s!.value).toBe('16')
+    expect(document.body.textContent).toContain('16 A · 11.0 kW')
+    expect(document.body.textContent).toContain('until the car is full')
+  })
+
+  it('charges now at the current the thumb chose, and the whole household says so', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { box, site } = await openedFor()
+
+    slide(10)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(document.body.textContent).toContain('10 A · 6.9 kW')
+
+    const sent = vi.spyOn(site, 'command')
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    // The box page's own body: the watts for 10 A, a persistent hold, three
+    // phases. Then the panel repainted from the box, not from the button.
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, {
+      id: 'carport',
+      power_w: 6900,
+      hold_s: 0,
+      phase_mode: '3p',
+    })
+    expect(document.body.textContent).toMatch(/Charging at 6\.9 kW/)
+    expect(document.body.textContent).toContain('at 10 A until the car is full')
+    expect(button('Update')).toBeDefined()
+    expect(button('Stop charging')).toBeDefined()
+    // The thumb stays put, and Update has nothing new to send yet.
+    expect(slider()!.value).toBe('10')
+    expect(button('Update')!.disabled).toBe(true)
+
+    box.tick()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(site.session.fields.get(FID.EV_W)).toBe(6900)
+  })
+
+  it('updates a running hold to a new current', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('at 16 A until the car is full')
+
+    slide(8)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(button('Update')!.disabled).toBe(false)
+
+    const sent = vi.spyOn(site, 'command')
+    button('Update')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(
+      OP_LOADPOINT_HOLD,
+      expect.objectContaining({ power_w: 5520, hold_s: 0 })
+    )
+    expect(document.body.textContent).toContain('at 8 A until the car is full')
+    expect(document.body.textContent).toMatch(/Charging at 5\.5 kW/)
+  })
+
+  it('boosts from the house battery and stops it, saying why it ended', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+
+    button('Boost from the house battery')!.click()
+    await vi.advanceTimersByTimeAsync(50)
+
+    // The box page's own defaults: a 30 % reserve for an hour.
+    const reserve = document.querySelector<HTMLInputElement>('input[type="number"]')!
+    expect(reserve.value).toBe('30')
+    expect(button('1 h')!.getAttribute('aria-pressed')).toBe('true')
+    button('2 h')!.click()
+    await vi.advanceTimersByTimeAsync(10)
+
+    const sent = vi.spyOn(site, 'command')
+    button('Start boost')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, {
+      id: 'carport',
+      min_battery_soc_pct: 30,
+      duration_s: 7200,
+    })
+    expect(document.body.textContent).toContain('Battery boost is on')
+    expect(document.body.textContent).toContain('down to 30 %')
+    expect(button('Stop boost')).toBeDefined()
+    expect(button('Start boost')).toBeUndefined()
+
+    button('Stop boost')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, { id: 'carport', cancel: true })
+    expect(document.body.textContent).not.toContain('Battery boost is on')
+    expect(document.body.textContent).toContain('Boost stopped')
+    expect(document.body.textContent).toContain('stopped by hand')
+    expect(button('Boost from the house battery')).toBeDefined()
+  })
+
+  it('does not offer a boost while a manual charge runs, and says why', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    await openedFor()
+
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(button('Boost from the house battery')).toBeUndefined()
+    expect(document.body.textContent).toContain('stop that first')
+  })
+
+  it('never draws the slider or the boost for a viewer', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    await openedFor(ROLE_VIEWER)
+
+    expect(slider()).toBeNull()
+    expect(button('Boost from the house battery')).toBeUndefined()
+    expect(button('Stop boost')).toBeUndefined()
   })
 })
