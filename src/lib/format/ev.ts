@@ -343,8 +343,8 @@ export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = tru
 /**
  * The schedule, as one sentence.
  *
- * "Ready by 07:00 · weekdays", with the target charge in front when the
- * charger can measure it. A schedule the box does not have is null here and
+ * "85 % Ready by 07:00 · weekdays" names the saved goal, even when the
+ * current battery level is unknown. A schedule the box does not have is null here and
  * no sentence at all — the panel says nothing rather than "no schedule",
  * because an app that cannot read one cannot claim its absence.
  */
@@ -353,7 +353,7 @@ export function evScheduleSentence(lp: Loadpoint, at: Date = new Date()): string
   if (!s) return null
   const when = localClock(s.timeOfDayMinUtc, at)
   const cadence = s.recurring ? daysWord(s.days) : 'once'
-  const target = s.socPct !== null && lp.socPct !== null ? `${Math.round(s.socPct)} % ` : ''
+  const target = s.socPct !== null ? `${Math.round(s.socPct)} % ` : ''
   return `${target}Ready by ${when} · ${cadence}`
 }
 

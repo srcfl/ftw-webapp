@@ -60,11 +60,15 @@ describe('a charger described in words', () => {
     expect(s).toContain('every day')
   })
 
-  it('claims no target percentage when the charger cannot measure charge', () => {
-    // soc_source none: the box knows the goal but not the distance to it.
-    // "84 % ready by 07:00" reads as a measurement, so the percent stays off.
+  it('shows the saved target even when the current battery level is unknown', () => {
     const s = evScheduleSentence(toLoadpoint(WIRE))
-    expect(s).not.toContain('%')
+    expect(s).toContain('84 %')
+  })
+
+  it('keeps the saved goal percentage visible while the car is unplugged', () => {
+    const s = evScheduleSentence(toLoadpoint({ ...WIRE, plugged_in: false }))
+    expect(s).toContain('84 %')
+    expect(s).toContain(`Ready by ${localClock(360)}`)
   })
 
   it('shows the percent when the charge is really known', () => {
