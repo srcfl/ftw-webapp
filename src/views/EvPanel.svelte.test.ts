@@ -12,6 +12,7 @@ import EvPanel from './EvPanel.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { ApiError } from '$lib/protocol/session'
 import {
   ROLE_VIEWER,
   OP_LOADPOINT_HOLD,
@@ -91,6 +92,34 @@ describe('the charger behind its bubble', () => {
     // The battery opens its live line, not the charger's controls.
     const sheet = document.querySelector('[role="dialog"]')
     expect(sheet?.getAttribute('aria-label')).not.toBe('EV charger')
+  })
+
+  it('recovers from a busy first read after opening the car bubble without claiming setup is missing', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streaming()
+    const api = site.api.bind(site)
+    let chargerReads = 0
+    vi.spyOn(site, 'api').mockImplementation((req) => {
+      if (req.path === '/api/loadpoints' && ++chargerReads <= 2) {
+        return Promise.reject(new ApiError({ code: 'E_UNAVAILABLE', retryable: true, args: { reason: 'busy' } }))
+      }
+      return api(req)
+    })
+    const command = vi.spyOn(site, 'command')
+    render(Now, { props: { site } })
+    await vi.advanceTimersByTimeAsync(50)
+    document.querySelector('ftw-energy-flow')!.dispatchEvent(
+      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
+    )
+    await vi.advanceTimersByTimeAsync(500)
+    const sheet = document.querySelector('[role="dialog"]')!
+    expect(sheet.textContent).toContain('Your box is busy')
+    expect(sheet.textContent).not.toMatch(/not set up|Connect your first charger/)
+    await vi.advanceTimersByTimeAsync(12_000)
+    expect(sheet.textContent).toMatch(/Charging at 7\.\d kW/)
+    expect(sheet.textContent).not.toContain('Your box is busy')
+    expect(command).not.toHaveBeenCalled()
   })
 
   it('closes on Escape and on the backdrop', async () => {

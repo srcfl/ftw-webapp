@@ -414,7 +414,7 @@
   {#if !store.loaded && !store.error}
     <p class="note">Reading your box…</p>
   {:else}
-    {#if store.loaded && store.points.length === 0}
+    {#if store.loaded && !store.error && store.points.length === 0}
       <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
     {/if}
     {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
@@ -798,10 +798,9 @@
         {/if}
       </div>
     {:else}
-      <!-- The box answered, and the answer is: no charger. The bubble that
-           opened this panel draws from a live field, so meeting this means
-           the charger left between two reads — say so plainly. -->
-      <p class="note">Charging control is not set up. Open Settings → Chargers on your box’s page to add the charger.</p>
+      {#if store.loaded && !store.error && store.points.length > 0}
+        <p class="note">This charger is no longer listed. Close this view and choose a charger on the home screen.</p>
+      {/if}
     {/each}
   {/if}
 </div>
