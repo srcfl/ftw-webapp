@@ -238,7 +238,7 @@
 
   function beginEdit(lp: Loadpoint): void {
     saveError = null
-    scheduleNote = 'Changes apply as you make them.'
+    scheduleNote = lp.schedule ? 'Changes apply as you make them.' : 'No goal set yet. Choose this goal, or change the level or time.'
     // The wire's zero means every day; the draft holds all seven bits
     // instead, so tapping Saturday off an every-day schedule means "not
     // Saturday" — with a raw zero it would have meant "only Saturday",
@@ -525,7 +525,7 @@
                 bind:value={draft.socPct}
                 onchange={scheduleSave}
               />
-              <span>{draft.socPct} %</span>
+              <span class="readout">{draft.socPct} %</span>
             </div>
             <details class="extras">
               <summary>Solar timing</summary>
@@ -544,6 +544,11 @@
               {/if}
             </details>
             <div class="actions">
+              {#if !lp.schedule}
+                <button class="primary" disabled={saving || pendingSchedule} onclick={scheduleSave}>
+                  Use {draft.socPct} % by {draft.time}
+                </button>
+              {/if}
               <button class="quiet" disabled={saving || pendingSchedule} onclick={() => (draft = null)}>
                 Close goal settings
               </button>
@@ -946,6 +951,7 @@
   }
 
   .readout {
+    white-space: nowrap;
     margin-left: auto;
     font-family: var(--num);
   }

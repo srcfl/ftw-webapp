@@ -342,6 +342,21 @@ describe('the charger behind its bubble', () => {
     // No sentence claims a schedule; the offer to set one takes its place.
     expect(document.body.textContent).not.toContain('Ready by')
     expect(document.body.textContent).toContain('Set a ready time')
+    // Accept the shown proposal without moving either control away and back.
+    ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Set a ready time')!.click()
+    await vi.advanceTimersByTimeAsync(50)
+    const use = [...document.querySelectorAll('button')].find(b => /^Use \d+ % by 07:00$/.test(b.textContent?.trim() ?? ''))!
+    expect(use).toBeDefined()
+    const expectedSoc = Number(use.textContent!.trim().match(/^Use (\d+)/)![1]) / 100
+    const put = vi.spyOn(box.api, 'serve')
+    use.click()
+    await vi.advanceTimersByTimeAsync(1000)
+    const writes = put.mock.calls.filter(c => c[0].method === 'PUT' && c[0].path.endsWith('/schedule') && c[0].stepUp)
+    expect(writes).toHaveLength(1)
+    const selected = JSON.parse(new TextDecoder().decode(writes[0]![0].body!))
+    expect(selected.soc).toBe(expectedSoc)
+    expect(selected.time_of_day_min_utc).toBe(localInputToUtcMinutes('07:00'))
+    expect(document.body.textContent).toContain('Schedule saved')
   })
 
   it('charges now through the door, and the whole household says so', async () => {

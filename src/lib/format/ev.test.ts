@@ -46,7 +46,7 @@ describe('a charger described in words', () => {
   })
 
   it('does not call a plugged, resting charger anything but resting', () => {
-    const s = evStatusSentence(toLoadpoint({ ...WIRE, current_power_w: 0 }))
+    const s = evStatusSentence(toLoadpoint({ ...WIRE, current_power_w: 4.39 }))
     expect(s).toMatch(/not charging/i)
     expect(s).not.toMatch(/\d/)
   })

@@ -253,7 +253,7 @@ export function evStatusSentence(lp: Loadpoint): string {
   if (lp.charger && lp.charger.available !== true) return lp.charger.known ? 'Charger status is out of date. FTW cannot confirm whether the car is charging.' : 'Waiting for the charger’s first status report.'
   if (!lp.pluggedIn) return 'Not plugged in'
   if (lp.manualActive) return manualStatusSentence(lp)
-  if (lp.powerW > 0) {
+  if (lp.powerW >= 100) {
     const p = formatPower(lp.powerW)
     return `Charging at ${p.text} ${p.unit}`
   }
@@ -286,7 +286,7 @@ export function manualStatusSentence(lp: Loadpoint): string {
       if (m.limit_reason === 'fuse_cooldown') return 'Paused: main-fuse protection. Charging resumes on its own.'
       return `Main fuse limits this charge to ${limit} right now (${request} requested).`
     default:
-      if (lp.powerW > 0) {
+      if (lp.powerW >= 100) {
         const p = formatPower(lp.powerW)
         return `Charging at ${p.text} ${p.unit}`
       }
@@ -302,7 +302,8 @@ export function evPlanSentence(lp: Loadpoint, now = Date.now()): string | null {
     return `Charging planned ${clock(lp.planStartMs)}–${clock(lp.planEndMs)}.`
   }
   if (lp.surplusOnly) return 'Solar only: charging waits for spare solar power.'
-  if (!lp.schedule && lp.powerW <= 0) return 'No charging plan yet. Set a ready time, or choose Charge now.'
+  if (!lp.schedule && lp.powerW < 100) return 'No charging plan yet. Set a ready time, or choose Charge now.'
+  if (lp.schedule && lp.powerW < 100) return 'No charge window yet for this goal. Choose Charge now if you need to charge immediately.'
   return null
 }
 
