@@ -708,7 +708,7 @@ export class SimApi {
           ...(pluggedIn ? { soc_source: 'inferred' } : {}),
           current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
-          target_soc: 0.84,
+          target_soc: typeof this.#schedule?.soc === 'number' ? this.#schedule.soc : 0,
           updated_at_ms: now,
           min_charge_w: 4140,
           max_charge_w: 11000,

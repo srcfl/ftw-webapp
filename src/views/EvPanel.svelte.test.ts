@@ -347,7 +347,7 @@ describe('the charger behind its bubble', () => {
     ;[...document.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Set a ready time')!.click()
     await vi.advanceTimersByTimeAsync(50)
     const use = [...document.querySelectorAll('button')].find(b => /^Use \d+ % by 07:00$/.test(b.textContent?.trim() ?? ''))!
-    expect(use).toBeDefined()
+    expect(use?.textContent?.trim()).toBe('Use 80 % by 07:00')
     const expectedSoc = Number(use.textContent!.trim().match(/^Use (\d+)/)![1]) / 100
     const put = vi.spyOn(box.api, 'serve')
     use.click()

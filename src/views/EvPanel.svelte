@@ -289,7 +289,7 @@
       lpId: lp.id,
       time: lp.schedule ? utcMinutesToLocalInput(lp.schedule.timeOfDayMinUtc) : '07:00',
       days: wireDays === 0 ? 0x7f : wireDays & 0x7f,
-      socPct: Math.round(lp.schedule?.socPct ?? lp.targetSocPct ?? 80),
+      socPct: Math.round(lp.schedule?.socPct ?? (lp.targetSocPct != null && lp.targetSocPct >= 10 ? lp.targetSocPct : 80)),
       recurring: lp.schedule?.recurring ?? false,
       surplusUnlockPct: lp.schedule?.surplusUnlockPct ?? 0,
     }
