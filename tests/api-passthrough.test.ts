@@ -550,6 +550,114 @@ class ManualCarrier extends CarrierBase implements Carrier {
   }
 }
 
+describe('API admission while the box is busy', () => {
+  afterEach(() => vi.useRealTimers())
+
+  function setup() {
+    vi.useFakeTimers()
+    const carrier = new ManualCarrier()
+    const session = new Session({ build: 'test' })
+    session.connect(carrier)
+    const requests = () => carrier.sent.filter(e => e.t === 'api.req')
+    const answer = () => {
+      const id = requests().at(-1)!.id!
+      carrier.deliver({ t: 'api.head', id, b: { status: 200, headers: {}, len: 0 } })
+      carrier.deliver({ t: 'api.end', id, b: { bytes: 0, truncated: false } })
+    }
+    const busy = () => carrier.deliver({ t: 'error', id: requests().at(-1)!.id!,
+      b: { code: 'E_UNAVAILABLE', retryable: true, args: { reason: 'busy' } } })
+    return { carrier, session, requests, answer, busy }
+  }
+
+  it('retries an explicit busy refusal before admitting the next view', async () => {
+    const { session, requests, answer, busy } = setup()
+    const save = session.api({ method: 'PUT', path: '/api/loadpoints/easee/schedule' })
+    const read = session.api({ method: 'GET', path: '/api/loadpoints' })
+    await vi.advanceTimersByTimeAsync(0)
+    busy()
+    await vi.advanceTimersByTimeAsync(249)
+    expect(requests()).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(requests().map(e => (e.b as { method: string }).method)).toEqual(['PUT', 'PUT'])
+    answer()
+    await expect(save).resolves.toMatchObject({ status: 200 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect((requests().at(-1)!.b as { method: string }).method).toBe('GET')
+    answer()
+    await expect(read).resolves.toMatchObject({ status: 200 })
+  })
+
+  it('stops after three retries and leaves the queue usable', async () => {
+    const { session, requests, answer, busy } = setup()
+    const result = session.api({ method: 'PUT', path: '/api/loadpoints/easee/schedule' }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(0)
+    for (const delay of [250, 500, 1000]) {
+      busy()
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    busy()
+    expect(await result).toMatchObject({ detail: { code: 'E_UNAVAILABLE' } })
+    expect(requests()).toHaveLength(4)
+    const next = session.api({ method: 'GET', path: '/api/loadpoints' })
+    await vi.advanceTimersByTimeAsync(0)
+    answer()
+    await expect(next).resolves.toMatchObject({ status: 200 })
+  })
+
+  it.each([
+    { code: 'E_UNAVAILABLE', retryable: true, args: { reason: 'timeout' } },
+    { code: 'E_UNAVAILABLE', retryable: false, args: { reason: 'busy' } },
+    { code: 'E_NEEDS_STEP_UP', retryable: true },
+  ])('never retries another refusal: %j', async detail => {
+    const { session, carrier, requests } = setup()
+    const result = session.api({ method: 'POST', path: '/api/settings' }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(0)
+    carrier.deliver({ t: 'error', id: requests()[0]!.id!, b: detail })
+    expect(await result).toMatchObject({ detail })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(requests()).toHaveLength(1)
+  })
+
+  it('does not repeat a write whose answer was lost', async () => {
+    const { session, requests } = setup()
+    const result = session.api({ method: 'POST', path: '/api/settings' }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS + 2000)
+    expect(await result).toHaveProperty('message', 'api request timed out')
+    expect(requests()).toHaveLength(1)
+  })
+
+  it('discards retries and queued writes when a connection is replaced', async () => {
+    const { session, busy } = setup()
+    const retry = session.api({ method: 'PUT', path: '/api/settings' }).catch(e => e)
+    const queued = session.api({ method: 'POST', path: '/api/settings' }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(0)
+    busy()
+    await vi.advanceTimersByTimeAsync(1)
+    const replacement = new ManualCarrier()
+    session.connect(replacement)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await retry).toHaveProperty('message', 'carrier closed')
+    expect(await queued).toHaveProperty('message', 'carrier closed')
+    expect(replacement.sent.filter(e => e.t === 'api.req')).toHaveLength(0)
+  })
+
+  it('expires a queued write while a large read is still arriving', async () => {
+    const { session, carrier, requests, answer } = setup()
+    const read = session.api({ method: 'GET', path: '/api/energy/daily' })
+    const queued = session.api({ method: 'PUT', path: '/api/settings' }).catch(e => e)
+    await vi.advanceTimersByTimeAsync(0)
+    const id = requests()[0]!.id!
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS / 2)
+    carrier.deliver({ t: 'api.head', id, b: { status: 200, headers: {}, len: null } })
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS / 2 + 1)
+    expect(await queued).toHaveProperty('message', 'api queue wait timed out')
+    answer()
+    await read
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requests()).toHaveLength(1)
+  })
+})
+
 describe('a body that did not all arrive', () => {
   it('is refused rather than handed up as an answer', async () => {
     const carrier = new ManualCarrier()
