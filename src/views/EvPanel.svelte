@@ -304,7 +304,7 @@
       })
       if (revision === scheduleRevision) scheduleNote = 'Schedule saved. Reading the plan…'
       await store.load()
-      if (revision === scheduleRevision) scheduleNote = store.planMissing ? 'Schedule saved. Waiting for the plan.' : 'Schedule saved. The charging times below show the current plan.'
+      if (revision === scheduleRevision) scheduleNote = store.error ? 'Schedule saved. Current charging status is unavailable.' : 'Schedule saved.'
     } catch (err) {
       if (revision === scheduleRevision) {
         saveError = err instanceof BoxApiError ? err.help : "Your box didn't confirm the change. Check the current settings before trying again."
