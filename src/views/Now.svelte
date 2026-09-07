@@ -138,7 +138,9 @@
   $effect(() => {
     const readings = liveReadings
     if (!active || !flow || (flow === lastFlow && readings === lastReadings)) return
-    flow.setReadings(readings)
+    // The component retains an omitted daily share. Clear it when only
+    // telemetry totals remain, so old status details cannot survive fallback.
+    flow.setReadings({ ...readings, selfPoweredPctToday: readings.selfPoweredPctToday ?? null })
     lastFlow = flow
     lastReadings = readings
   })

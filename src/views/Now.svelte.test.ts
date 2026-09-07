@@ -218,8 +218,11 @@ describe('the Now screen', () => {
       await vi.advanceTimersByTimeAsync(1_000)
     }
     expect(site.srcState).toBe('live')
+    expect(flowEl()!.shadowRoot!.textContent, 'old daily share remained in the live diagram').not.toContain('SELF-POWERED TODAY')
     const fallback = fed.mock.lastCall?.[0] as FlowReadings
-    expect(fallback, 'stale status still supplied the diagram').toEqual(flowReadings(site.session.fields))
+    expect(fallback, 'stale status still supplied the diagram').toEqual({
+      ...flowReadings(site.session.fields), selfPoweredPctToday: null,
+    })
     expect(flowEl()!.hasAttribute('static'), 'fresh telemetry should keep moving').toBe(false)
     expect(document.body.textContent).toContain('Device details are out of date. Showing live totals.')
     expect(document.querySelector('.card.fuse')?.textContent).not.toContain('Live safety')
@@ -234,6 +237,7 @@ describe('the Now screen', () => {
     const recovered = fed.mock.lastCall?.[0] as FlowReadings
     expect(recovered.planets.some(p => p.id === 'pv-sungrow')).toBe(true)
     expect(recovered.selfPoweredPctToday).not.toBeNull()
+    expect(flowEl()!.shadowRoot!.textContent).toContain('SELF-POWERED TODAY')
     expect(document.body.textContent).not.toContain('Device details are out of date')
     expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
     expect(document.querySelector('#today-title')?.textContent).toBe('Today')
