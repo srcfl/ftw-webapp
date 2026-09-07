@@ -54,6 +54,8 @@ describe('the price chart, fed from the wire', () => {
   afterEach(() => {
     document.body.replaceChildren()
     vi.restoreAllMocks()
+    vi.useRealTimers()
+    globalThis.localStorage?.clear()
   })
 
   it('asks no origin for anything', async () => {
@@ -108,5 +110,39 @@ describe('the price chart, fed from the wire', () => {
     el.setPrices(chartPrices({ ...WIRE, slots: [] }))
 
     expect(el.shadowRoot!.querySelector('.empty')).not.toBeNull()
+  })
+
+  it('shows the current quarter from the wire at the interval boundary', async () => {
+    const now = todayAt(18) + 15 * 60_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    const el = await mount()
+    el.setPrices(chartPrices({ ...WIRE, slots: [
+      { startMs: now - 15 * 60_000, durationMs: 15 * 60_000, spotMinor: 17, totalMinor: 109 },
+      { startMs: now, durationMs: 15 * 60_000, spotMinor: 40, totalMinor: 137 },
+    ] }))
+
+    const current = el.shadowRoot!.querySelector('.meta-stats > span')!.textContent!
+    expect(current).toMatch(/now\s+137\.0 öre/)
+    expect(fetched).not.toHaveBeenCalled()
+  })
+
+  it('leaves NOW unavailable when the user selects Tomorrow', async () => {
+    const now = todayAt(18)
+    const tomorrow = new Date(now)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    tomorrow.setHours(0, 0, 0, 0)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(now)
+    const el = await mount()
+    el.setPrices(chartPrices({ ...WIRE, slots: [
+      { startMs: now, durationMs: 15 * 60_000, spotMinor: 40, totalMinor: 137 },
+      { startMs: tomorrow.getTime(), durationMs: 15 * 60_000, spotMinor: 17, totalMinor: 109 },
+    ] }))
+    el.shadowRoot!.querySelector<HTMLButtonElement>('button[data-horizon="tomorrow"]')!.click()
+
+    const current = el.shadowRoot!.querySelector('.meta-stats > span')!.textContent!
+    expect(current).toMatch(/now\s+—/)
+    expect(fetched).not.toHaveBeenCalled()
   })
 })
