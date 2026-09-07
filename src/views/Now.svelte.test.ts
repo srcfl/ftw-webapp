@@ -18,6 +18,7 @@ import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
 import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
 import { decodeFrame } from '$lib/protocol/frame'
+import { flowReadings, type FlowReadings } from '$lib/state/flow'
 
 /** Fixed so the simulated house is the same every run. */
 const NOON = new Date(2026, 6, 15, 12, 0, 0).getTime()
@@ -126,6 +127,11 @@ describe('the Now screen', () => {
     vi.setSystemTime(NOON)
 
     const box = new SimBox({ now: () => Date.now() })
+    // Exercise the telemetry path; the richer status has its own cadence.
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => req.path === '/api/status'
+      ? { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
+      : serve(req))
     const types: string[] = []
     box.onFrame((frame) => types.push(decodeFrame(frame).envelope.t))
     const site = new SiteStore('test')
@@ -147,7 +153,10 @@ describe('the Now screen', () => {
     box.tick(0)
     await vi.advanceTimersByTimeAsync(100)
 
-    expect(types, 'the simulator sent changed readings, so this is not a tick').toEqual(['tick'])
+    // Plan, price and API replies may finish loading in parallel with Now.
+    // Only these three message types can replace the telemetry being tested.
+    const telemetry = types.filter(t => t === 'snap' || t === 'delta' || t === 'tick')
+    expect(telemetry, 'the simulator sent changed readings, so this is not a tick').toEqual(['tick'])
     expect(fed, 'an unchanged 1 Hz tick rebuilt the full shadow DOM').not.toHaveBeenCalled()
 
     vi.setSystemTime(NOON + 3_600_000)
@@ -179,6 +188,57 @@ describe('the Now screen', () => {
       .find((r) => r.selfPoweredPctToday != null)
     expect(rich, 'the dashboard snapshot never reached the hero').toBeTruthy()
     expect(rich!.planets?.some((p) => p.id === 'pv-sungrow')).toBe(true)
+  })
+
+  it('uses fresh telemetry after a status failure and restores details when status recovers', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const box = new SimBox({ now: () => Date.now() })
+    const serve = box.api.serve.bind(box.api)
+    let failStatus = false
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      if (req.path === '/api/status' && failStatus) {
+        return { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
+      }
+      return serve(req)
+    })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    const view = render(Now, { props: { site } })
+    for (let i = 0; i < 300 && !document.querySelector('.card.fuse'); i++) {
+      box.tick(20)
+      await vi.advanceTimersByTimeAsync(20)
+    }
+    expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
+    const fed = vi.spyOn(flowEl()!, 'setReadings')
+
+    failStatus = true
+    for (let i = 0; i < 4; i++) {
+      box.tick(1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    expect(site.srcState).toBe('live')
+    const fallback = fed.mock.lastCall?.[0] as FlowReadings
+    expect(fallback, 'stale status still supplied the diagram').toEqual(flowReadings(site.session.fields))
+    expect(flowEl()!.hasAttribute('static'), 'fresh telemetry should keep moving').toBe(false)
+    expect(document.body.textContent).toContain('Device details are out of date. Showing live totals.')
+    expect(document.querySelector('.card.fuse')?.textContent).not.toContain('Live safety')
+    expect(document.querySelector('.card.fuse time')?.getAttribute('datetime')).toBeTruthy()
+    expect(document.querySelector('#today-title')?.textContent).toBe('Last totals')
+
+    failStatus = false
+    for (let i = 0; i < 4; i++) {
+      box.tick(1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    const recovered = fed.mock.lastCall?.[0] as FlowReadings
+    expect(recovered.planets.some(p => p.id === 'pv-sungrow')).toBe(true)
+    expect(recovered.selfPoweredPctToday).not.toBeNull()
+    expect(document.body.textContent).not.toContain('Device details are out of date')
+    expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
+    expect(document.querySelector('#today-title')?.textContent).toBe('Today')
+    view.unmount()
+    site.destroy()
   })
 
   it('draws price, the next plan step, today and the fuse under the house', async () => {

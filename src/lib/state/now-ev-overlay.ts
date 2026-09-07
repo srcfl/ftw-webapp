@@ -15,5 +15,5 @@ import { loadpointChargeW } from './flow'
 import type { SiteStore } from './site.svelte'
 
 export function watchLoadpointCharge(site: SiteStore, onWatts: (w: number) => void): () => void {
-  return watchCharging(site, snapshot => { if (snapshot.fresh) onWatts(loadpointChargeW(snapshot.points)) })
+  return watchCharging(site, snapshot => onWatts(snapshot.fresh ? loadpointChargeW(snapshot.points) : 0))
 }

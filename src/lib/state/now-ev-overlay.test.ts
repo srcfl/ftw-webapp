@@ -9,6 +9,7 @@ const EVENING = Date.UTC(2026, 6, 15, 18, 30, 0)
 describe('watchLoadpointCharge', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('reports charger watts from the box and can be stopped', async () => {
@@ -31,5 +32,26 @@ describe('watchLoadpointCharge', () => {
     stop()
     await vi.advanceTimersByTimeAsync(6_000)
     expect(seen.length, 'a stopped watch kept asking').toBe(n)
+  })
+
+  it('removes an old charger overlay so it cannot override fresh telemetry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(EVENING)
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.advanceTimersByTimeAsync(100)
+    const seen: number[] = []
+    const stop = watchLoadpointCharge(site, watts => seen.push(watts))
+    await vi.advanceTimersByTimeAsync(100)
+    expect(seen.at(-1)).toBeGreaterThan(7000)
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => req.path === '/api/loadpoints'
+      ? { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
+      : serve(req))
+    await vi.advanceTimersByTimeAsync(5_100)
+    expect(seen.at(-1)).toBe(0)
+    stop()
+    site.destroy()
   })
 })
