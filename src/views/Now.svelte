@@ -14,6 +14,7 @@
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
   import { explain } from '$lib/format/explanation'
+  import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
   import type { Component } from 'svelte'
@@ -86,15 +87,23 @@
   // overlay: callBox is not on the path to the first frame. Frozen fields
   // keep drawing until one lands, and after a drop.
   let status = $state<SiteStatus | null>(null)
+  let statusFresh = $state(false)
+  let statusReceivedAt = $state<number | null>(null)
+  const watchStatusNow = $derived(active && site.documentVisible &&
+    site.session.phase === 'streaming' && site.session.caps.has(CAP_API_PASSTHROUGH))
   $effect(() => {
-    if (!active) return
+    if (!watchStatusNow) return
     const s = untrack(() => site)
     let stop: (() => void) | undefined
     let cancelled = false
     void import('$lib/state/now-status').then((m) => {
       if (cancelled) return
       stop = m.watchStatus(s, (next) => {
-        status = next
+        if (next.status) {
+          status = next.status
+          statusReceivedAt = next.receivedAt
+        }
+        statusFresh = next.fresh
       })
     })
     return () => {
@@ -102,6 +111,7 @@
       stop?.()
     }
   })
+  const statusLive = $derived(statusFresh && live && watchStatusNow)
 
   const flowFields = $derived(withLoadpointEv(site.session.fields, evFromLp))
   const headline = $derived(
@@ -112,7 +122,7 @@
     }).headline
   )
   const liveReadings = $derived(
-    status ? flowReadingsFromStatus(status) : flowReadings(flowFields)
+    status && (statusLive || !live) ? flowReadingsFromStatus(status) : flowReadings(flowFields)
   )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
@@ -128,7 +138,9 @@
   $effect(() => {
     const readings = liveReadings
     if (!active || !flow || (flow === lastFlow && readings === lastReadings)) return
-    flow.setReadings(readings)
+    // The component retains an omitted daily share. Clear it when only
+    // telemetry totals remain, so old status details cannot survive fallback.
+    flow.setReadings({ ...readings, selfPoweredPctToday: readings.selfPoweredPctToday ?? null })
     lastFlow = flow
     lastReadings = readings
   })
@@ -178,6 +190,8 @@
   let Outlook = $state<Component<{
     site: SiteStore
     status: SiteStatus | null
+    statusFresh: boolean
+    statusReceivedAt: number | null
     active?: boolean
   }> | null>(null)
   $effect(() => {
@@ -335,10 +349,13 @@
          moving particle claims power is flowing at this very moment. -->
     <ftw-energy-flow bind:this={flow} embedded static={live && active ? undefined : true}
     ></ftw-energy-flow>
+    {#if status && !statusLive}
+      <p class="note" role="status">Device details are out of date.{live ? ' Showing live totals.' : ''}</p>
+    {/if}
   </div>
 
   {#if Outlook}
-    <Outlook {site} {status} {active} />
+    <Outlook {site} {status} {active} statusFresh={statusLive} {statusReceivedAt} />
   {/if}
 
   {#if evOpen && EvPanel}
