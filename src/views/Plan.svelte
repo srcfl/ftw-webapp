@@ -89,15 +89,22 @@
 
   function choose(mode: SiteMode) {
     void plan.setMode(mode)
+    // The selected fallback already renders when the drawer is closed.
+    // Folding the extras keeps "Use the plan" on screen instead of
+    // scrolling it off under Idle / Peak / Charge.
+    if (plan.advancedModes.some((m) => m.key === mode)) showAdvanced = false
   }
 
   // FTW's own split: forecast-driven strategies are the choice most people
-  // want, the manual fallbacks are a drawer. Open it if the box is already in
-  // one of them, so the current setting is never hidden from its owner.
+  // want, the manual fallbacks are a drawer. The current fallback stays on
+  // the page even when the drawer is closed — see selectedAdvanced — so a
+  // house already on Self (manual) never needs the extras opened to see
+  // what is running, or to get back to the plan.
   let showAdvanced = $state(false)
-  $effect(() => {
-    if (plan.advancedModes.some((m) => m.key === plan.actualMode)) showAdvanced = true
-  })
+
+  const selectedAdvanced = $derived(
+    plan.advancedModes.find((m) => m.key === plan.shownMode) ?? null
+  )
 
   // ---- Prices ------------------------------------------------------------
 
@@ -243,17 +250,52 @@
 <section class="modes">
   <h2 class="label">How your home is run</h2>
 
+  <!-- The missing way back. Manual fallbacks live in a drawer so the
+       everyday choice stays two cards, and once someone is in one there
+       was nothing that said "the plan" in so many words — Passive
+       arbitrage does not read as "just optimal". This action names the
+       return without inventing a third strategy: it is the first primary
+       mode, the same one the box already puts first. -->
+  {#if plan.inManual && plan.planHome}
+    {@const home = plan.planHome}
+    <div class="use-plan">
+      <p class="use-plan-copy">The plan is not running the battery.</p>
+      {#if plan.canControl}
+        <button
+          type="button"
+          class="use-plan-btn"
+          disabled={plan.command.kind === 'sending'}
+          onclick={() => choose(home.key)}
+        >
+          {plan.command.kind === 'sending' && plan.command.mode === home.key
+            ? 'Sending…'
+            : 'Use the plan'}
+        </button>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Pressed buttons rather than radios, the way History's range picker
        solves the same exclusive choice: role=radio promises arrow-key moves
        between the options, and these buttons never had them. -->
   {#snippet choice(info: ModeInfo)}
+    {@const pressed = plan.shownMode === info.key}
+    {@const sending = plan.command.kind === 'sending' && plan.command.mode === info.key}
     <button
+      type="button"
       class="choice"
-      aria-pressed={plan.shownMode === info.key}
+      aria-pressed={pressed}
       disabled={!plan.canControl || plan.command.kind === 'sending'}
       onclick={() => choose(info.key)}
     >
-      <span class="choice-label">{modeLabel(info)}</span>
+      <span class="choice-label-row">
+        <span class="choice-label">{modeLabel(info)}</span>
+        {#if sending}
+          <span class="choice-state">Sending…</span>
+        {:else if pressed}
+          <span class="choice-state">In use</span>
+        {/if}
+      </span>
       <span class="choice-help">{modeHelp(info)}</span>
     </button>
   {/snippet}
@@ -268,8 +310,14 @@
         {#each plan.advancedModes as info (info.key)}
           {@render choice(info)}
         {/each}
+        <button type="button" class="more" onclick={() => (showAdvanced = false)}>
+          Fewer options
+        </button>
       {:else}
-        <button class="more" onclick={() => (showAdvanced = true)}>
+        {#if selectedAdvanced}
+          {@render choice(selectedAdvanced)}
+        {/if}
+        <button type="button" class="more" onclick={() => (showAdvanced = true)}>
           More ways to run it
         </button>
       {/if}
@@ -431,6 +479,38 @@
     gap: var(--space-2);
   }
 
+  .use-plan {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    padding: var(--pad-card);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+
+  .use-plan-copy {
+    font-size: 13px;
+    color: var(--fg-dim);
+    line-height: 1.4;
+  }
+
+  .use-plan-btn {
+    min-height: 44px;
+    padding: 0 var(--space-4);
+    background: var(--accent);
+    color: var(--on-accent);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+  }
+
+  .use-plan-btn:disabled {
+    opacity: 0.7;
+    cursor: default;
+  }
+
   .choice {
     display: flex;
     flex-direction: column;
@@ -443,17 +523,23 @@
     border-radius: var(--radius-md);
     transition:
       border-color var(--motion-base) var(--ease),
-      background var(--motion-base) var(--ease);
+      background var(--motion-base) var(--ease),
+      box-shadow var(--motion-base) var(--ease);
   }
 
   .choice[aria-pressed='true'] {
     border-color: var(--accent);
     background: var(--surface-elevated);
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .choice:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .choice[aria-pressed='true']:disabled {
+    opacity: 1;
   }
 
   .more {
@@ -466,8 +552,25 @@
        target on a phone held one-handed. */
   }
 
+  .choice-label-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
   .choice-label {
     font-weight: 500;
+  }
+
+  .choice-state {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    flex-shrink: 0;
   }
 
   .choice-help {

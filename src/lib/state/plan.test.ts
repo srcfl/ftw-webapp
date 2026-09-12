@@ -38,3 +38,55 @@ describe('a replan this phone never asked for', () => {
     site.destroy()
   })
 })
+
+describe('the mode the Plan store offers a way back from', () => {
+  async function connected(mode?: string) {
+    const box = new SimBox(mode ? { mode } : {})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    return { box, site, store }
+  }
+
+  it('names the first primary mode as the plan to return to', async () => {
+    const { store } = await connected()
+    expect(store.planHome?.key).toBe('planner_passive_arbitrage')
+    expect(store.inManual).toBe(false)
+    store.destroy()
+  })
+
+  it('treats Self (manual) as a manual fallback, not a plan', async () => {
+    const { store, site } = await connected()
+    await store.setMode('self_consumption')
+    expect(store.inManual).toBe(true)
+    expect(store.shownMode).toBe('self_consumption')
+    expect(site.session.modes.find((m) => m.key === store.shownMode)?.tier).toBe('advanced')
+    store.destroy()
+  })
+
+  it('waits for the in-flight request before accepting another mode', async () => {
+    const box = new SimBox({})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 60 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    const sent = vi.spyOn(site, 'command')
+
+    const first = store.setMode('self_consumption')
+    expect(store.command.kind).toBe('sending')
+    await store.setMode('idle')
+    expect(sent).toHaveBeenCalledTimes(1)
+    expect(store.shownMode).toBe('self_consumption')
+
+    await first
+    expect(box.mode).toBe('self_consumption')
+    await store.setMode('idle')
+    expect(sent).toHaveBeenCalledTimes(2)
+    expect(store.command.kind).toBe('applied')
+    expect(box.mode).toBe('idle')
+    expect(store.shownMode).toBe('idle')
+    store.destroy()
+    site.destroy()
+  })
+})
