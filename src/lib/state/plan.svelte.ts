@@ -32,7 +32,6 @@ export class PlanStore {
    * Which `setMode` call is current. A tap while another is in flight must
    * not let the earlier result paint over the later one.
    */
-  #cmdGen = 0
 
   /**
    * What the box intends to do, read where the session keeps it.
@@ -229,15 +228,14 @@ export class PlanStore {
    * the toggle snaps back to the truth.
    */
   async setMode(mode: SiteMode): Promise<void> {
-    if (mode === this.shownMode) return
+    // A second request would carry the in-flight request's control revision.
+    if (this.command.kind === 'sending' || mode === this.shownMode) return
 
-    const mine = ++this.#cmdGen
     this.#clearTimer()
     this.command = { kind: 'sending', mode }
 
     try {
       const result: CmdResult = await this.#site.command(OP_SET_MODE, { mode })
-      if (mine !== this.#cmdGen) return
 
       switch (result.state) {
         case 'applied':
@@ -258,14 +256,13 @@ export class PlanStore {
           this.command = { kind: 'failed', help: commandHelp(result) }
       }
     } catch (err) {
-      if (mine !== this.#cmdGen) return
       this.command = {
         kind: 'failed',
         help: err instanceof CommandError ? err.help : "That didn't go through. Try again.",
       }
     }
 
-    if (mine === this.#cmdGen) this.#settleLater()
+    this.#settleLater()
   }
 
   destroy(): void {

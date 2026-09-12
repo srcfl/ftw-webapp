@@ -65,36 +65,28 @@ describe('the mode the Plan store offers a way back from', () => {
     store.destroy()
   })
 
-  it('does not let an earlier mode change paint over a later one', async () => {
+  it('waits for the in-flight request before accepting another mode', async () => {
     const box = new SimBox({})
     const site = new SiteStore('test')
     const store = new PlanStore(site)
-    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    site.connect(new LoopbackCarrier(box, { latencyMs: 60 }))
     await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
-
-    const real = site.command.bind(site)
-    let release!: () => void
-    const held = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let calls = 0
-    vi.spyOn(site, 'command').mockImplementation(async (op, args) => {
-      const n = ++calls
-      if (n === 1) await held
-      return real(op, args)
-    })
+    const sent = vi.spyOn(site, 'command')
 
     const first = store.setMode('self_consumption')
-    await vi.waitFor(() => expect(store.command.kind).toBe('sending'))
+    expect(store.command.kind).toBe('sending')
+    await store.setMode('idle')
+    expect(sent).toHaveBeenCalledTimes(1)
     expect(store.shownMode).toBe('self_consumption')
 
-    const second = store.setMode('idle')
-    await vi.waitFor(() => expect(store.shownMode).toBe('idle'))
-    release()
-    await Promise.all([first, second])
-
-    expect(store.shownMode).toBe('idle')
+    await first
+    expect(box.mode).toBe('self_consumption')
+    await store.setMode('idle')
+    expect(sent).toHaveBeenCalledTimes(2)
+    expect(store.command.kind).toBe('applied')
     expect(box.mode).toBe('idle')
+    expect(store.shownMode).toBe('idle')
     store.destroy()
+    site.destroy()
   })
 })

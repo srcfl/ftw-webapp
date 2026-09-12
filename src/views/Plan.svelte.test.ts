@@ -967,6 +967,12 @@ describe('switching how the home is run', () => {
     const self = choice('Self (manual)')!
     expect(self.getAttribute('aria-pressed')).toBe('true')
     expect(self.textContent).toMatch(/sending/i)
+    expect(choice('Passive arbitrage')!.disabled).toBe(true)
+    const back = document.querySelector('button.use-plan-btn') as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+    back.click()
+    choice('Passive arbitrage')!.click()
+
     expect(choice('Peak'), 'the extras stayed open after the tap').toBeUndefined()
     expect(box.mode, 'the box confirmed before the UI had anything to show').not.toBe(
       'self_consumption'
@@ -974,6 +980,8 @@ describe('switching how the home is run', () => {
 
     await vi.waitFor(() => expect(box.mode).toBe('self_consumption'))
     await vi.waitFor(() => expect(choice('Self (manual)')!.textContent).toMatch(/in use/i))
+    expect(choice('Passive arbitrage')!.disabled).toBe(false)
+    expect(back.disabled).toBe(false)
   })
 
   it('does not offer Use the plan to a viewer', async () => {

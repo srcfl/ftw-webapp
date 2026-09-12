@@ -264,7 +264,7 @@
         <button
           type="button"
           class="use-plan-btn"
-          disabled={plan.command.kind === 'sending' && plan.command.mode === home.key}
+          disabled={plan.command.kind === 'sending'}
           onclick={() => choose(home.key)}
         >
           {plan.command.kind === 'sending' && plan.command.mode === home.key
@@ -285,7 +285,7 @@
       type="button"
       class="choice"
       aria-pressed={pressed}
-      disabled={!plan.canControl}
+      disabled={!plan.canControl || plan.command.kind === 'sending'}
       onclick={() => choose(info.key)}
     >
       <span class="choice-label-row">
