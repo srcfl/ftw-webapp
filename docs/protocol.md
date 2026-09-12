@@ -16,6 +16,17 @@ an opinion without both, and the box's CI runs the same comparison the other
 way round. Never hand-write one of those names anywhere else in either
 language.
 
+## Product direction for agent clients
+
+[The shared vision](https://github.com/srcfl/ftw/blob/master/VISION.md) calls for structured
+analysis, durable schedule and goal changes, and proposed-plan submission by
+authorized agents, locally and through cloud MCP. These are targets. They do
+not imply that the operations below already implement them. Extend the registry
+and Core/client implementations together with authorization, expiry, replay,
+revocation and result tests. Core still owns admission and physical dispatch.
+Temporary external control must expire; a saved household goal must survive
+client disconnect. Relay and escrow remain unable to read session contents.
+
 ## Frames
 
 Each Noise transport message carries exactly one frame.
