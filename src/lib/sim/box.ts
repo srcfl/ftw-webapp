@@ -307,6 +307,13 @@ export interface SimBoxOptions {
   scopes?: string[]
   /** False models a box from before hello could carry a subscription. */
   inlineSubscribe?: boolean
+  /**
+   * Starting dispatch mode. Defaults to FTW's own default (passive
+   * arbitrage). Tests that open the Plan screen already on a manual
+   * fallback pass `self_consumption` so they do not have to click through
+   * the disclosure first.
+   */
+  mode?: SiteMode
 }
 
 export class SimBox {
@@ -376,6 +383,7 @@ export class SimBox {
     this.#role = opts.role ?? ROLE_OWNER
     this.#scopes = opts.scopes ?? null
     this.#inlineSubscribe = opts.inlineSubscribe ?? true
+    if (opts.mode && MODE_KEYS.includes(opts.mode)) this.#mode = opts.mode
     this.#api = new SimApi({
       house: this.house,
       now: this.#now,

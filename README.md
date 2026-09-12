@@ -14,8 +14,9 @@ clear outcomes for both people and authorized agents. The
 [roadmap](https://github.com/srcfl/ftw/blob/master/docs/roadmap.md) states acceptance evidence.
 Goals such as cloud MCP access are distinct from implemented protocol support.
 
-Sourceful maintains the app. External users report needs and bugs through
-[issues](https://github.com/srcfl/ftw-webapp/issues), not PRs.
+Sourceful maintains the app. PRs are welcome, preferably based on
+[issues](https://github.com/srcfl/ftw-webapp/issues). Share a short Markdown
+proposal or a focused fix with relevant test evidence.
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## The shape of it
