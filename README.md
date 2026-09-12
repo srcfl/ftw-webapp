@@ -2,9 +2,21 @@
 
 Your home's energy, from wherever you are.
 
-This is the FTW client — an installable web app that replaces a native mobile
-app. It talks to the FTW box in your home, which is the authority on your
+This is FTW's installable web client. It talks to the FTW box in your home,
+which is the authority on your
 energy system. Sourceful's cloud carries the traffic and cannot read it.
+
+## Product direction and contributions
+
+[The shared FTW vision](https://github.com/srcfl/ftw/blob/master/VISION.md) guides the client:
+fast, honest live feedback; simple daily charging; useful expert access; and
+clear outcomes for both people and authorized agents. The
+[roadmap](https://github.com/srcfl/ftw/blob/master/docs/roadmap.md) states acceptance evidence.
+Goals such as cloud MCP access are distinct from implemented protocol support.
+
+Sourceful maintains the app. External users report needs and bugs through
+[issues](https://github.com/srcfl/ftw-webapp/issues), not PRs.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## The shape of it
 
@@ -51,14 +63,14 @@ whole database costs a QR scan.
 
 ## Status
 
-Early. The architecture is decided and the protocol is specified; the client
-is being built against a box simulator. See [docs/architecture.md](docs/architecture.md)
-for what was decided and what was rejected, and [docs/protocol.md](docs/protocol.md)
-for the wire contract.
+See [docs/architecture.md](docs/architecture.md) for the architecture and
+[docs/protocol.md](docs/protocol.md) for the wire contract. Some design notes
+record earlier delivery stages; use the current implementation, tests and
+release evidence to establish what a particular box and app support.
+The product vision is a target, not an availability list.
 
-Not yet built: push notifications, the LAN carrier, sharing beyond two roles,
-multi-site. Each is listed with its reason in the architecture doc rather than
-left implied.
+Not yet built: cloud MCP agent access and the WebRTC LAN carrier. The vision
+sets the direction for agent access; the architecture records the LAN work.
 
 ## Running it
 
@@ -67,9 +79,9 @@ npm install
 npm run dev
 ```
 
-The app needs a box to talk to. Until the simulator lands, point it at a local
-FTW with `make dev` in [forty-two-watts](https://github.com/srcfl/ftw) — that
-starts simulated drivers and seeds history, so no hardware is needed.
+For local integration work, run `make dev` in
+[FTW](https://github.com/srcfl/ftw). That starts simulated drivers and seeds
+history, so no hardware is needed.
 
 ```bash
 npm run verify

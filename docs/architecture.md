@@ -3,6 +3,23 @@
 What was decided, what was rejected, and why. Read this before changing
 anything structural.
 
+## Product requirements
+
+Follow [FTW's vision](https://github.com/srcfl/ftw/blob/master/VISION.md). The normal UI should
+show requested intent, Core acceptance, device response, measured effect and
+freshness. Opening after car connection should expose the SoC control without
+extra navigation or a Save step, then show the accepted plan. Keep offline-car
+estimates distinct from readings. Charging failures and goal risks require
+notifications, including when the app is closed.
+
+Agent access is part of the product direction. A cloud MCP endpoint may be an
+authorized client of the box; the relay remains a carrier of encrypted frames.
+An authorized endpoint can read its granted data, so its access must be explicit
+and revocable. Reuse the session where suitable and test Core authorization,
+expiry and outcome reporting. This section adds no operation or grant to the
+current protocol. Retain the difference between persistent schedule changes
+and temporary control that needs renewal.
+
 ## The model
 
 **Edge-authoritative, client-local, cloud-blind.**
