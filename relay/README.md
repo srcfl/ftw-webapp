@@ -186,3 +186,12 @@ Honesty about the residue, in the spirit of `docs/architecture.md`:
   phones must land on the same instance. Sharding on the handle would work and
   would need the handle to reach the load balancer, which is worth thinking
   about before doing.
+
+## License and source
+
+This service uses AGPL-3.0-only with the Energyplan combination permission.
+See [LICENSE](../LICENSE), [LICENSING.md](../LICENSING.md) and
+[NOTICE](../NOTICE). Commercial use is allowed under those terms.
+The container serves its matching build source at `/source`. Keep that offer
+available to network users and include your changes when hosting a modified
+version. The archive contains build-time source, not runtime household data.
