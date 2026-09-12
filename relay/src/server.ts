@@ -35,7 +35,12 @@ import {
 } from 'node:http'
 import { currentEpoch } from './epoch.ts'
 import { Deadman, rowError } from './deadman.ts'
-import { FleetStats, fleetReportError, type FleetReport } from './fleet.ts'
+import {
+  FleetStats,
+  fleetReportError,
+  type FleetReport,
+  type FleetStatsView,
+} from './fleet.ts'
 import { AttemptCounter, TokenBucket } from './limits.ts'
 import {
   CLOSE_BAD_JOIN,
@@ -120,6 +125,19 @@ export interface RelayInspection {
   deadman: { rows: number; claimed: number; armed: number }
   /** Counts only. Detailed daily totals stay on the local operator route. */
   fleet: { days: number; reportsToday: number }
+}
+
+export interface RelayAggregateStats {
+  schema: 'ftw.relay-stats/1'
+  observed_at: string
+  relay: {
+    uptime_seconds: number
+    rooms: number
+    sockets: number
+    frames_routed: number
+    bytes_routed: number
+  }
+  fleet: FleetStatsView
 }
 
 type Role = 'box' | 'app'
@@ -229,6 +247,7 @@ export class RelayServer {
     Omit<RelayOptions, 'port' | 'host' | 'deadmanPath' | 'deadmanPost' | 'fleetStatsPath'>
   >
   #epoch: number
+  #startedAtMs: number
   #rotateStartedAtMs: number | null = null
   #sockets = 0
   /** Concurrent sockets per address, so one client cannot fill the relay. */
@@ -260,6 +279,7 @@ export class RelayServer {
     }
 
     const now = this.#opts.now()
+    this.#startedAtMs = now
     this.#epoch = currentEpoch(now)
     this.#attempts = new AttemptCounter(
       { limit: this.#opts.attemptLimit, windowMs: this.#opts.attemptWindowMs },
@@ -377,6 +397,31 @@ export class RelayServer {
       heartbeats: this.#heartbeats,
       deadman: this.#deadman.inspect(),
       fleet: this.#fleet.inspect(),
+    }
+  }
+
+  /**
+   * The only body allowed to leave for project statistics.
+   *
+   * It has process counters and the same daily fleet totals the local operator
+   * route already serves. It has no epoch, handle, address, dead-man state or
+   * routed payload. Fourteen days are enough to heal a short export outage while
+   * keeping the signed request small.
+   */
+  aggregateStats(): RelayAggregateStats {
+    const now = this.#opts.now()
+    const fleet = this.#fleet.view()
+    return {
+      schema: 'ftw.relay-stats/1',
+      observed_at: new Date(now).toISOString(),
+      relay: {
+        uptime_seconds: Math.max(0, Math.floor((now - this.#startedAtMs) / 1000)),
+        rooms: this.#rooms.size,
+        sockets: this.#sockets,
+        frames_routed: this.#framesRouted,
+        bytes_routed: this.#bytesRouted,
+      },
+      fleet: { ...fleet, days: fleet.days.slice(0, 14) },
     }
   }
 

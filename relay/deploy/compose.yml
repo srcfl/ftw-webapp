@@ -29,6 +29,10 @@ services:
       # volume. Fleet request bodies and source addresses are never written.
       RELAY_DEADMAN_PATH: /state/deadman.json
       RELAY_FLEET_STATS_PATH: /state/fleet-stats.json
+      # Optional. When both exist, the relay sends aggregate process counters
+      # and daily fleet totals. It never sends handles, addresses or frames.
+      RELAY_STATS_EXPORT_URL: ${RELAY_STATS_EXPORT_URL:-}
+      RELAY_STATS_EXPORT_SECRET: ${RELAY_STATS_EXPORT_SECRET:-}
     volumes:
       - relay-state:/state
     logging:
