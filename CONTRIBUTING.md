@@ -20,3 +20,12 @@ Follow the repository guide and coordinate overlap with open PRs.
 Sourceful reviews and maintains changes. A contribution grants no merge,
 release or deployment authority. Existing license rights and attribution
 remain unchanged. See [FTW's contribution guide](https://github.com/srcfl/ftw/blob/master/CONTRIBUTING.md).
+
+## License of contributions
+
+Contributions to this version use GNU AGPL v3 only with the Energyplan
+combination permission in [LICENSE](LICENSE), including that permission.
+Preserve third-party licenses and notices. Sign each commit with the DCO
+as described in [FTW's contribution guide](https://github.com/srcfl/ftw/blob/master/CONTRIBUTING.md).
+A sign-off does not assign copyright or grant commercial relicensing rights.
+See [LICENSING.md](LICENSING.md).

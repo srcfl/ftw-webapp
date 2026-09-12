@@ -111,4 +111,6 @@ fails if the two drift. Do not hand-write those names in either language.
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE).
+AGPL-3.0-only with the Energyplan combination permission. See
+[LICENSE](LICENSE), [LICENSING.md](LICENSING.md) and [NOTICE](NOTICE).
+Earlier Apache-licensed versions retain their earlier grants.

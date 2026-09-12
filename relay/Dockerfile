@@ -16,6 +16,20 @@ RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
 
 COPY relay/src ./src
 COPY src/lib/carrier/rendezvous.ts ./shared/rendezvous.ts
+COPY LICENSE NOTICE LICENSING.md ./
+COPY relay/Dockerfile relay/README.md ./
+# Keep the original build paths so the downloaded source can build this image.
+COPY LICENSE NOTICE LICENSING.md /usr/share/ftw/source/
+COPY relay/src /usr/share/ftw/source/relay/src
+COPY relay/Dockerfile relay/README.md /usr/share/ftw/source/relay/
+COPY relay/deploy /usr/share/ftw/source/relay/deploy
+COPY relay/package.json /usr/share/ftw/source/relay/
+COPY src/lib/carrier/rendezvous.ts /usr/share/ftw/source/src/lib/carrier/rendezvous.ts
+RUN cp package-lock.json /usr/share/ftw/source/relay/ \
+    && cp -R node_modules /usr/share/ftw/source/relay/
+# Runtime state does not exist yet and is never added to this archive.
+RUN tar -czf /usr/share/ftw/source.tar.gz -C /usr/share/ftw/source . \
+    && rm -rf /usr/share/ftw/source
 
 # A fresh named volume inherits this directory's owner, so the unprivileged
 # process can write the two bounded state files without running as root.

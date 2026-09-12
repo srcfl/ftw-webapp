@@ -9,6 +9,7 @@
   import { onMount, tick, untrack } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import InstallHint from '$lib/ui/InstallHint.svelte'
+  import SourceNotice from '$lib/ui/SourceNotice.svelte'
   import Now from '$views/Now.svelte'
   import Plan from '$views/Plan.svelte'
   import Pair from '$views/Pair.svelte'
@@ -759,6 +760,7 @@
       {/if}
     {/if}
     </div>
+    <SourceNotice />
   </main>
 
   <!-- Four screens, so four buttons. The hash already works and the back
