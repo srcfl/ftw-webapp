@@ -11,8 +11,9 @@ structural, and [docs/protocol.md](docs/protocol.md) before touching the wire.
 
 Read [FTW's vision](https://github.com/srcfl/ftw/blob/master/VISION.md) and
 [roadmap](https://github.com/srcfl/ftw/blob/master/docs/roadmap.md). Fredrik owns the direction;
-Sourceful develops it. External users submit issues, not pull requests.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Sourceful develops it. External PRs are welcome, preferably based on issues.
+Work is agentic first: state the problem, scope and reproducible results.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for code and Markdown proposals.
 
 The webapp owns the everyday experience: clear live command/result feedback,
 few routine decisions, direct offline-car SoC entry after connection, persistent
@@ -126,8 +127,9 @@ Several people and agents work on FTW at once. These rules come from
 - Prefer small PRs in one area.
 - Review UI changes in a browser. Reading the source is not enough.
 
-Planning documents and agent notes stay out of the repository. Commit the
-change, its tests and a changeset; put the reasoning in the PR description.
+Short Markdown proposals may update relevant maintained docs or use the PR
+description. Keep task breakdowns and agent scratch notes out of the repo.
+Code PRs include relevant tests and a changeset when required.
 
 ## Related
 
