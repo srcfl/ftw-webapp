@@ -1,11 +1,19 @@
 <script lang="ts">
-  import licenseText from '../../../LICENSE?raw'
-  import notices from '../../../NOTICE?raw'
+  let texts = $state<{ licenseText: string; notices: string } | null>(null)
+  let loadFailed = $state(false)
+  async function loadTexts(event: Event) {
+    if (!(event.currentTarget as HTMLDetailsElement).open || texts) return
+    try {
+      texts = await import('./license-text')
+    } catch {
+      loadFailed = true
+    }
+  }
   const revision = /^[0-9a-f]{7,40}$/.test(__APP_BUILD__) ? __APP_BUILD__ : null
   const base = 'https://github.com/srcfl/ftw-webapp'
 </script>
 
-<details class="source-notice">
+<details class="source-notice" ontoggle={loadTexts}>
   <summary>Source &amp; licenses</summary>
   <p>© 2026 Sourceful Labs AB and contributors. AGPLv3 with the Energyplan
     combination permission. You may copy, modify and redistribute this app
@@ -13,14 +21,22 @@
   <a href={revision ? `${base}/archive/${revision}.tar.gz` : base} target="_blank" rel="noreferrer">
     {revision ? 'Download this app’s source' : 'Source repository (development build)'}
   </a>
-  <details>
-    <summary>Read license</summary>
-    <pre>{licenseText}</pre>
-  </details>
-  <details>
-    <summary>Earlier licenses and notices</summary>
-    <pre>{notices}</pre>
-  </details>
+  {#if texts}
+    <details>
+      <summary>Read license</summary>
+      <pre>{texts.licenseText}</pre>
+    </details>
+    <details>
+      <summary>Earlier licenses and notices</summary>
+      <pre>{texts.notices}</pre>
+    </details>
+  {:else if loadFailed}
+    <p>License text could not load.
+      <a href={`${base}/blob/${revision ?? 'main'}/LICENSE`} target="_blank" rel="noreferrer">Read license on GitHub</a>
+    </p>
+  {:else}
+    <p>Loading license text…</p>
+  {/if}
 </details>
 
 <style>
