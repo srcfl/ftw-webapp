@@ -16,6 +16,17 @@ an opinion without both, and the box's CI runs the same comparison the other
 way round. Never hand-write one of those names anywhere else in either
 language.
 
+## Product direction for agent clients
+
+[The shared vision](https://github.com/srcfl/ftw/blob/master/VISION.md) calls for structured
+analysis, durable schedule and goal changes, and proposed-plan submission by
+authorized agents, locally and through cloud MCP. These are targets. They do
+not imply that the operations below already implement them. Extend the registry
+and Core/client implementations together with authorization, expiry, replay,
+revocation and result tests. Core still owns admission and physical dispatch.
+Temporary external control must expire; a saved household goal must survive
+client disconnect. Relay and escrow remain unable to read session contents.
+
 ## Frames
 
 Each Noise transport message carries exactly one frame.
@@ -287,11 +298,14 @@ is a different instruction than the one given, it is a `cmd`; if it is merely a
 late setting, it is a passthrough.*
 
 The refusal carries an `op` argument **only when a command for that route
-exists**. Today exactly one does — `POST /api/mode`, which names
-`site.mode.set`. Every other actuating route names nothing, and the honest
-reading of an absent `op` is that the box has no command for it yet, so that
-control is not available over the session at all. An app that assumed `op` was
-always there would draw a button leading nowhere.
+exists**. Today three do: `POST /api/mode` names `site.mode.set`,
+`POST /api/loadpoints/{id}/soc` names `loadpoint.soc.set`, and
+`POST /api/loadpoints/{id}/target` names `loadpoint.surplus_only.set` — the
+one field of that route's body the session can set; the target and its
+deadline still have no command. Every other actuating route names nothing, and
+the honest reading of an absent `op` is that the box has no command for it
+yet, so that control is not available over the session at all. An app that
+assumed `op` was always there would draw a button leading nowhere.
 
 A route whose body replaces a whole document rather than editing part of one —
 `POST /api/config` is the one — is refused with `E_WHOLE_DOCUMENT` even for an

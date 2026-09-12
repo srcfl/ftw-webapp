@@ -234,7 +234,7 @@
           {#each yLabels as label (label.value)}
             <span class="ytick num" style:top="{label.at * 100}%">
               {label.text}
-              {#if label.dir}<em>{label.dir}</em>{/if}
+              {#if label.dir}<em class="label">{label.dir}</em>{/if}
             </span>
           {/each}
         </div>
@@ -280,8 +280,9 @@
           {/if}
         </span>
         <!-- The wire's sign convention is right for the wire and wrong for a
-             person. Never a minus sign; a direction word instead. -->
-        <span class="dir">
+             person. Never a minus sign; a direction word instead, set in the
+             shared .label grammar like every other small caps word here. -->
+        <span class="label">
           {#if watts === null}
             no reading
           {:else if trace.name === 'load_w'}
@@ -334,14 +335,6 @@
     flex-wrap: wrap;
   }
 
-  .label {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
-  }
-
   hr {
     width: 100%;
     height: 1px;
@@ -360,7 +353,8 @@
   }
 
   .range {
-    min-height: 34px;
+    /* Height comes from base.css: 44px is the smallest reliably hittable
+       target on a phone held one-handed. */
     padding: 0 var(--space-4);
     border-radius: var(--radius-xs);
     font-family: var(--mono);
@@ -402,21 +396,19 @@
     right: 0;
     transform: translateY(-50%);
     text-align: right;
-    font-size: 9px;
+    font-size: 10px;
     line-height: 1.2;
     color: var(--fg-muted);
     white-space: nowrap;
   }
 
   /* The direction word, under its number. The chart never shows a minus
-     sign; this is what carries the sign convention instead. */
+     sign; this is what carries the sign convention instead. The word itself
+     follows the shared .label grammar from base.css; placement and dimming
+     are all this chart adds. */
   .ytick em {
     display: block;
     font-style: normal;
-    font-size: 8px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
     opacity: 0.75;
   }
 
@@ -487,14 +479,6 @@
     color: var(--fg-muted);
     margin-left: 0.3em;
     letter-spacing: 0;
-  }
-
-  .dir {
-    font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
   }
 
   .note {

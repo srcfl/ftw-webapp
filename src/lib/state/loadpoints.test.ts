@@ -10,6 +10,12 @@ import { LoadpointsStore, chargeWindows } from './loadpoints.svelte'
 import { SiteStore } from './site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import {
+  OP_LOADPOINT_HOLD,
+  OP_LOADPOINT_BOOST,
+  OP_LOADPOINT_SOC_SET,
+  OP_LOADPOINT_SURPLUS_ONLY_SET,
+} from '$lib/protocol/messages'
 
 /** Half past six in the evening UTC: the sim car is plugged in and drawing. */
 const CHARGING_EVENING = Date.UTC(2026, 6, 15, 18, 30, 0)
@@ -47,8 +53,10 @@ describe('the charger over the wire', () => {
     expect(lp.id).toBe('carport')
     expect(lp.pluggedIn).toBe(true)
     expect(lp.powerW).toBeGreaterThan(7000)
-    // The sim charger honestly does not know the car's charge.
-    expect(lp.socPct).toBeNull()
+    // The sim charger estimates the car's level the way the box does for a
+    // charger without a car API: a fraction on the wire, inferred.
+    expect(lp.socPct).toBe(42)
+    expect(lp.socSource).toBe('inferred')
     expect(lp.schedule).not.toBeNull()
 
     // The plan's charging window covers this very evening.
@@ -86,6 +94,45 @@ describe('the charger over the wire', () => {
     expect(store.planMissing, 'a missing plan was passed off as an idle week').toBe(true)
   })
 
+  it('hides old windows when replanning begins between the charger and plan reads', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const site = await streamingSite(new SimBox({ now: () => Date.now() }))
+    let pending = true
+    let outdated = false
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(async req => {
+      const answer = await api(req)
+      if (req.path === '/api/mpc/plan') {
+        const payload = JSON.parse(new TextDecoder().decode(answer.body))
+        payload.meta = { ...payload.meta, replanning: pending, outdated }
+        return { ...answer, body: new TextEncoder().encode(JSON.stringify(payload)) }
+      }
+      return answer
+    })
+    const store = new LoadpointsStore(site)
+    const first = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await first
+    expect(store.points[0]!.powerW).toBeGreaterThan(7000)
+    expect(store.planPending).toBe(true)
+    expect(store.windows['carport']).toEqual([])
+    pending = false
+    outdated = true
+    const next = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await next
+    expect(store.planPending).toBe(false)
+    expect(store.planOutdated).toBe(true)
+    expect(store.windows['carport']).toEqual([])
+    outdated = false
+    const recovered = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await recovered
+    expect(store.planOutdated).toBe(false)
+    expect(store.windows['carport']!.length).toBeGreaterThan(0)
+  })
+
   it('rejects and says so when the box is out of reach, keeping what was drawn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
@@ -114,6 +161,200 @@ describe('the charger over the wire', () => {
     // The panel keeps the charger it drew, under a sentence about the wire.
     expect(store.points).toHaveLength(1)
     expect(store.error).toMatch(/out of reach/i)
+  })
+
+  /** A store that has read the charger once, with the clock in the evening. */
+  async function loadedStore(): Promise<{ site: SiteStore; store: LoadpointsStore }> {
+    const site = await streamingSite(new SimBox({ now: () => Date.now() }))
+    const store = new LoadpointsStore(site)
+    const first = store.load()
+    await vi.advanceTimersByTimeAsync(500)
+    await first
+    return { site, store }
+  }
+
+  /** Run one command and let the reread it triggers land. */
+  async function settled(run: Promise<void>): Promise<void> {
+    await vi.advanceTimersByTimeAsync(500)
+    await run
+    await vi.advanceTimersByTimeAsync(500)
+  }
+
+  it('charges now at the chosen current, as the box page would send it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.chargeNow(store.points[0]!, 10))
+
+    // 10 A × 3 × 230 V, a hold only Stop or an unplug releases, on three
+    // phases: the body the box's own page posts to manual_hold.
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_HOLD, {
+      id: 'carport',
+      power_w: 6900,
+      hold_s: 0,
+      phase_mode: '3p',
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'hold', did: 'hold' })
+
+    // The reread says the same: a hold at that setpoint, and the car drawing it.
+    const lp = store.points[0]!
+    expect(lp.manualActive).toBe(true)
+    expect(lp.manualChargeW).toBe(6900)
+    expect(lp.powerW).toBe(6900)
+  })
+
+  it('boosts from the house battery with a reserve and a bound, then stops it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.boost(store.points[0]!, 30, 3600))
+
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, {
+      id: 'carport',
+      min_battery_soc_pct: 30,
+      duration_s: 3600,
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'boost', did: 'boost' })
+
+    let lp = store.points[0]!
+    expect(lp.boostActive).toBe(true)
+    expect(lp.boostReservePct).toBe(30)
+    expect(lp.boostExpiresAtMs).toBeGreaterThan(Date.now())
+    expect(lp.boostExpiresAtMs).toBeLessThanOrEqual(Date.now() + 3600_000)
+    expect(lp.boostStopReason).toBeNull()
+
+    await settled(store.stopBoost(lp))
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, { id: 'carport', cancel: true })
+    expect(store.command).toEqual({ kind: 'applied', of: 'boost', did: 'unboost' })
+
+    lp = store.points[0]!
+    expect(lp.boostActive).toBe(false)
+    expect(lp.boostStopReason).toBe('cancelled')
+  })
+
+  it('reports a hold ending a boost, and the box refusing a boost under a hold', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    await settled(store.boost(store.points[0]!, 30, 3600))
+    expect(store.points[0]!.boostActive).toBe(true)
+
+    // A hold takes priority: the box withdraws the boost and keeps the why.
+    await settled(store.chargeNow(store.points[0]!, 16))
+    let lp = store.points[0]!
+    expect(lp.manualActive).toBe(true)
+    expect(lp.boostActive).toBe(false)
+    expect(lp.boostStopReason).toBe('operator_hold')
+
+    // And a boost asked for under that hold is refused, in a sentence about
+    // the boost rather than about the charger being out of reach.
+    await settled(store.boost(lp, 30, 3600))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/won't boost/)
+    lp = store.points[0]!
+    expect(lp.boostActive).toBe(false)
+    expect(lp.manualActive).toBe(true)
+  })
+
+  it('carries the sentence for a lease the box would not take', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    // Five hours: over the box's four-hour cap, so the lease is refused.
+    await settled(store.boost(store.points[0]!, 30, 5 * 3600))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/reserve and time/)
+    expect(store.points[0]!.boostActive).toBe(false)
+  })
+
+  it("corrects the car's level as a fraction, and reads back what the box holds", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+    expect(store.points[0]!.socPct).toBe(42)
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.setSoc(store.points[0]!, 60))
+
+    // Whole percent in, the wire's fraction out: the body the box's own
+    // page posts to `soc`.
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SOC_SET, { id: 'carport', soc: 0.6 })
+    expect(store.command).toEqual({ kind: 'applied', of: 'soc', did: 'soc' })
+    // The reread is the level the box holds, not the slider's echo.
+    expect(store.points[0]!.socPct).toBe(60)
+  })
+
+  it('resolves a command only once the charger has been reread', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    // The panel holds a slider draft until this resolves and lets the box's
+    // value through afterwards, so the order is load-bearing.
+    const run = store.setSoc(store.points[0]!, 60)
+    await vi.advanceTimersByTimeAsync(500)
+    await run
+    expect(store.points[0]!.socPct).toBe(60)
+  })
+
+  it('says to plug the car in when the box has no car to set a level for', async () => {
+    vi.useFakeTimers()
+    // Midday: the sim car left with the morning commute.
+    vi.setSystemTime(Date.UTC(2026, 6, 15, 12, 0, 0))
+    const { store } = await loadedStore()
+    expect(store.points[0]!.pluggedIn).toBe(false)
+
+    await settled(store.setSoc(store.points[0]!, 60))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/Plug the car in first/)
+  })
+
+  it('turns PV only on and off, and the box refuses a boost while it is on', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site, store } = await loadedStore()
+    expect(store.points[0]!.surplusOnly).toBe(false)
+
+    const sent = vi.spyOn(site, 'command')
+    await settled(store.setSurplusOnly(store.points[0]!, true))
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SURPLUS_ONLY_SET, {
+      id: 'carport',
+      surplus_only: true,
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'surplus', did: 'surplus_on' })
+    expect(store.points[0]!.surplusOnly).toBe(true)
+
+    await settled(store.boost(store.points[0]!, 30, 3600))
+    expect(store.command.kind).toBe('failed')
+    expect(store.command.kind === 'failed' && store.command.help).toMatch(/won't boost/)
+
+    await settled(store.setSurplusOnly(store.points[0]!, false))
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_SURPLUS_ONLY_SET, {
+      id: 'carport',
+      surplus_only: false,
+    })
+    expect(store.command).toEqual({ kind: 'applied', of: 'surplus', did: 'surplus_off' })
+    expect(store.points[0]!.surplusOnly).toBe(false)
+  })
+
+  it('reports PV only ending a running boost', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { store } = await loadedStore()
+
+    await settled(store.boost(store.points[0]!, 30, 3600))
+    expect(store.points[0]!.boostActive).toBe(true)
+
+    await settled(store.setSurplusOnly(store.points[0]!, true))
+    const lp = store.points[0]!
+    expect(lp.boostActive).toBe(false)
+    expect(lp.boostStopReason).toBe('surplus_only')
   })
 })
 

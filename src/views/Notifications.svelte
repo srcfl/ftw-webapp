@@ -54,33 +54,43 @@
     () => Promise.all([notify.loadHistory(), notify.loadRules()]).then(() => {})
   )
 
-  /**
-   * The unsaved toggle edits, or null when the switches show the box's own
-   * document. One draft, one save, one ceremony — the schedule editor's rule.
-   */
   let draft = $state<Record<string, boolean> | null>(null)
-
-  // Off until the box's document says otherwise: the box seeds every rule
-  // disabled — sparse by design — and a switch drawn on before the document
-  // was read would promise a notification nobody arranged.
-  const dirty = $derived(
-    draft !== null &&
-      RULE_KINDS.some((kind) => (draft?.[kind] ?? false) !== (notify.rules[kind] ?? false))
-  )
+  let writeStatus = $state('')
+  let failed = $state(false)
+  let writing = false
+  let version = 0
 
   function shown(kind: string): boolean {
     return (draft ?? notify.rules)[kind] ?? false
   }
 
   function toggle(kind: string): void {
-    const next = { ...(draft ?? notify.rules) }
-    next[kind] = !(next[kind] ?? false)
-    draft = next
+    draft = { ...(draft ?? notify.rules), [kind]: !shown(kind) }
+    version++
+    failed = false
+    writeStatus = 'Saving…'
+    void save()
   }
 
   async function save(): Promise<void> {
-    if (draft === null) return
-    if (await notify.saveRules(draft)) draft = null
+    if (writing || draft === null) return
+    writing = true
+    failed = false
+    writeStatus = 'Saving…'
+    try {
+      while (draft !== null) {
+        const sentVersion = version
+        const saved = await notify.saveRules({ ...draft })
+        if (version !== sentVersion) continue
+        if (!saved) {
+          failed = true
+          writeStatus = 'Changes have not been saved.'
+          break
+        }
+        draft = null
+        writeStatus = 'Saved'
+      }
+    } finally { writing = false }
   }
 
   function when(ms: number | null): string {
@@ -116,13 +126,13 @@
   <p>Your box can reach this phone, even with the app closed.</p>
 
   <ul class="kinds">
-    {#each RULE_KINDS as kind (kind)}
+    {#each RULE_KINDS.filter(kind => notify.availableKinds.includes(kind)) as kind (kind)}
       <li>
         <label>
           <input
             type="checkbox"
             checked={shown(kind)}
-            disabled={notify.busy !== 'none'}
+            disabled={notify.busy !== 'none' && notify.busy !== 'saving'}
             onchange={() => toggle(kind)}
           />
           <span>{KIND_LABELS[kind]}</span>
@@ -135,10 +145,9 @@
        being enabled here is what turns it on. -->
   <p class="hint">{KIND_LABELS['box.unreachable']} is always on while this is enabled.</p>
 
-  {#if dirty}
-    <button class="quiet outline" disabled={notify.busy !== 'none'} onclick={() => void save()}>
-      {notify.busy === 'saving' ? 'Saving…' : 'Save'}
-    </button>
+  {#if writeStatus}<p class="meta" role="status">{writeStatus}</p>{/if}
+  {#if failed}
+    <button class="quiet outline" disabled={notify.busy !== 'none'} onclick={() => void save()}>Try again</button>
   {/if}
 
   <div class="actions">

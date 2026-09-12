@@ -78,11 +78,11 @@ export class EnergyStore {
   /** Oldest first, today last. Empty until an answer lands. */
   days = $state.raw<EnergyDay[]>([])
 
-  /** True only while waiting on the box. Whatever is drawn stays drawn. */
+  /** True only while waiting on the box for the selected period. */
   loading = $state(false)
 
   /**
-   * Whether the box has ever answered with a set of days.
+   * Whether the box has answered for the selected period.
    *
    * Three states, not two, for the same reason the roster needs three: a
    * period this app has not read is not a period with nothing in it. Without
@@ -125,17 +125,23 @@ export class EnergyStore {
   /**
    * Choose what the figures cover.
    *
-   * Only sets the range, exactly as the history chart does: the range is the
-   * question `askWhenLive` asks under, so changing it is already what fetches
-   * and what heals a tap whose answer never arrives. Fetching here as well
-   * would spend a second round trip on one tap.
+   * Clear the previous period before its figures can take the new label.
+   * `askWhenLive` fetches the selected range and retries failures.
    */
   select(range: EnergyRangeKey): void {
+    if (range === this.range) return
+    // A selection can change while offline, before another load starts.
+    // Invalidate that period's pending reply at selection time.
+    this.#token += 1
     this.range = range
+    this.days = []
+    this.loaded = false
+    this.loading = false
+    this.error = null
   }
 
   /**
-   * Ask the box, and keep whatever is on screen until a better answer comes.
+   * Refresh the selected period, keeping any figures from that period.
    *
    * Rejects when the box did not answer, because the caller that heals this
    * has no other way to tell an answer from a failure that was swallowed.
@@ -163,8 +169,7 @@ export class EnergyStore {
       // range's news, and not a reason to ask for this one again.
       if (token !== this.#token) return
 
-      // What happens now. Whatever was drawn stays drawn — last week's totals
-      // are still last week's — with a line saying they are not current.
+      // Retain figures only for this period, with a note that the refresh failed.
       this.error =
         err instanceof BoxApiError
           ? this.days.length > 0

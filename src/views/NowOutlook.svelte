@@ -28,10 +28,16 @@
   interface Props {
     site: SiteStore
     status: SiteStatus | null
+    statusFresh?: boolean
+    statusReceivedAt?: number | null
     active?: boolean
   }
 
-  let { site, status, active = true }: Props = $props()
+  let { site, status, statusFresh = false, statusReceivedAt = null, active = true }: Props = $props()
+  const statusTime = $derived(statusReceivedAt === null ? null : new Date(statusReceivedAt))
+  const statusStamp = $derived(statusTime?.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }))
 
   const CAP_PRICE_SPOT = 'price.spot'
   const PRICE_HORIZON_MS = 48 * 3_600_000
@@ -158,7 +164,8 @@
     const wire = await callBox<{ days?: unknown[] }>(site, {
       method: 'GET',
       path: '/api/savings/daily',
-      query: { days: '31' },
+      // This card only shows today and the last seven days.
+      query: { days: '7' },
     })
     const days = (wire.days ?? [])
       .map((row) => (row && typeof row === 'object' ? toSavingsDay(row) : null))
@@ -213,10 +220,13 @@
   <section class="card today" aria-labelledby="today-title">
     <div class="card-head">
       <div>
-        <p class="kicker">Since midnight</p>
-        <h2 id="today-title">Today</h2>
+        <p class="kicker">{statusFresh ? 'Since midnight' : 'Last known'}</p>
+        <h2 id="today-title">{statusFresh ? 'Today' : 'Last totals'}</h2>
       </div>
     </div>
+    {#if !statusFresh && statusTime}
+      <p class="note">Energy totals last updated <time datetime={statusTime.toISOString()}>{statusStamp}</time>.</p>
+    {/if}
     <div class="today-grid">
       <div class="tile">
         <span>Imported</span>
@@ -260,9 +270,12 @@
 {#if fuse}
   <section class="card fuse" aria-label="Fuse">
     <div class="card-head">
-      <p class="kicker">Live safety</p>
+      <p class="kicker">{statusFresh ? 'Live safety' : 'Last known'}</p>
       <h2>Fuse</h2>
     </div>
+    {#if !statusFresh && statusTime}
+      <p class="note">Fuse readings last updated <time datetime={statusTime.toISOString()}>{statusStamp}</time>.</p>
+    {/if}
     {#if fuse.phases.length > 0}
       <div class="phases" style:--n={fuse.phases.length}>
         {#each fuse.phases as phase (phase.label)}
@@ -329,13 +342,15 @@
     margin-bottom: var(--space-3);
   }
 
+  /* Kicker follows the shared .label grammar from base.css; the margin is
+     the only thing this card adds. */
   .kicker {
     font-family: var(--mono);
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-muted);
-    margin-bottom: 4px;
+    margin-bottom: var(--space-1);
   }
 
   h2 {
@@ -429,7 +444,7 @@
     min-height: 74px;
     flex-direction: column;
     justify-content: center;
-    gap: 5px;
+    gap: var(--space-1);
     padding: 12px 14px;
     background: var(--surface-sunken);
     border: 1px solid var(--line);
@@ -439,14 +454,14 @@
   .tile span {
     color: var(--fg-muted);
     font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.1em;
+    font-size: 10px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   .tile strong {
     overflow: hidden;
-    font-size: 1.05rem;
+    font-size: 17px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -482,8 +497,8 @@
   .fallback {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: var(--space-1);
+    padding: var(--pad-card-tight);
     background: var(--surface-sunken);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
@@ -491,26 +506,26 @@
 
   .phase-lab {
     font-family: var(--mono);
-    font-size: 9px;
-    letter-spacing: 0.1em;
+    font-size: 10px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-muted);
   }
 
   .phase-val {
-    font-size: 1rem;
+    font-size: 16px;
   }
 
   .bar {
     height: 6px;
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     background: var(--line);
     overflow: hidden;
   }
 
   .fill {
     height: 100%;
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     background: var(--energy-export);
   }
 

@@ -45,6 +45,7 @@ const RULE_TYPES = [
   'update_available',
   'fuse_over_limit',
   'concurrent_drivers_offline',
+  'charging.connected',
   'charging.session_complete',
   'charging.interrupted',
   'update.installed',
@@ -125,6 +126,7 @@ const ROUTES: Record<string, RouteFacts> = {
   // stays actuation, because target also carries one-shot fields that move
   // energy now.
   'GET /api/loadpoints': { tier: 'read' },
+  'POST /api/loadpoints/{id}/vehicle': { tier: 'configure' },
   'PUT /api/loadpoints/{id}/schedule': { tier: 'configure' },
   'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure' },
   'GET /api/mpc/plan': { tier: 'read' },
@@ -240,7 +242,15 @@ export interface SimApiOptions {
    * What the door has done to the charger, read live from the box. The
    * loadpoints answer must describe the same household the stream does.
    */
-  loadpointState?: () => { holdW: number | null; boostActive: boolean }
+  loadpointState?: () => {
+    holdW: number | null
+    boost: { expiresAtMs: number; minBatterySoc: number } | null
+    /** The last stop's reason, kept until the next boost, as the box keeps it. */
+    boostStop: { reason: string; atMs: number } | null
+    /** The car's level as the box holds it, a 0–1 fraction. */
+    soc: number
+    surplusOnly: boolean
+  }
   /**
    * The live sample the 1 Hz stream is already sending. Status must describe
    * the same moment or the hero and the charger sheet disagree.
@@ -249,6 +259,18 @@ export interface SimApiOptions {
 }
 
 const DAY_MS = 86_400_000
+
+/**
+ * Whether the simulated car is on the cable: from the evening commute until
+ * the morning departure, UTC. One rule for the loadpoints answer and for the
+ * door, so a level set for a car that is not there is refused the way the
+ * box refuses it.
+ */
+export function evPluggedIn(nowMs: number): boolean {
+  const d = new Date(nowMs)
+  const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
+  return hourOfDay >= 17 || hourOfDay < 7
+}
 
 /** The box's own word for a code somebody reads aloud, and its own TTL. */
 const appPairingKindSpoken = 'spoken'
@@ -284,6 +306,7 @@ function json(status: number, value: unknown): ApiAnswer {
 export class SimApi {
   #opts: SimApiOptions
   #devices: SimDevice[]
+  #vehicleCapacityWh = 60000
   #pairing: { code: string; role: Role; expiresAtMs: number } | null = null
   /**
    * The charger's standing instruction, mutable the way the box's is.
@@ -291,7 +314,7 @@ export class SimApi {
    * app must meet that as an absence rather than an empty object.
    */
   #schedule: Record<string, unknown> | null = {
-    soc_pct: 84,
+    soc: 0.84,
     time_of_day_min_utc: 360,
     recurring: true,
   }
@@ -483,6 +506,16 @@ export class SimApi {
     if (route === 'GET /api/savings/daily') return this.#savingsDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()
     if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
+    if (route === 'POST /api/loadpoints/{id}/vehicle') {
+      if (matched.params['id'] !== 'carport') return json(404, { error: 'Unknown charger' })
+      let body: { capacity_wh?: unknown }
+      try { body = JSON.parse(new TextDecoder().decode(req.body ?? new Uint8Array())) }
+      catch { return json(400, { error: 'Enter a valid battery size' }) }
+      const capacity = body.capacity_wh
+      if (typeof capacity !== 'number' || !Number.isFinite(capacity) || capacity < 1000 || capacity > 300000) return json(400, { error: 'Enter a battery size from 1 to 300 kWh' })
+      this.#vehicleCapacityWh = capacity
+      return json(200, { ok: true, vehicle_capacity_wh: capacity, capacity_source: 'configured' })
+    }
     if (route === 'PUT /api/loadpoints/{id}/schedule') {
       return this.#putSchedule(matched.params['id'] ?? '', req.body)
     }
@@ -626,22 +659,29 @@ export class SimApi {
    *
    * Field names are the box's own: `loadpoint.State` marshals snake_case,
    * and an app built against camelCase here would render blanks against
-   * every real box while this tree stayed green. No `current_soc_pct` on
-   * purpose — an easee without a car API genuinely does not know it, and
-   * the honest absence is a case the panel has to carry.
+   * every real box while this tree stayed green. `current_soc` is a
+   * fraction and its source is `inferred`: an easee without a car API does
+   * not know the car's level, and the box estimates one from energy
+   * delivered rather than serving none — which is what its own page
+   * prefills the slider with, and what this app's panel must meet.
    */
   #loadpoints(): ApiAnswer {
     const now = this.#opts.now()
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
     // What the door has done overrides what the generator would do — the
     // stream applies the same override, so both surfaces tell one story.
-    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    const door = this.#opts.loadpointState?.() ?? {
+      holdW: null,
+      boost: null,
+      boostStop: null,
+      soc: 0,
+      surplusOnly: false,
+    }
     const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
 
-    // Plugged in from the evening commute until the morning departure.
-    const pluggedIn = hourOfDay >= 17 || hourOfDay < 7
+    const pluggedIn = evPluggedIn(now)
 
     // What the session has delivered so far: the charging window is flat
     // ~7.2 kW, so the meter is minutes-into-window times that rate.
@@ -660,22 +700,42 @@ export class SimApi {
         {
           id: 'carport',
           driver_name: 'easee',
+          vehicle_capacity_wh: this.#vehicleCapacityWh,
+          capacity_source: 'configured',
           plugged_in: pluggedIn,
+          // The box's zero values for an empty bay; it omits an empty source.
+          current_soc: pluggedIn ? door.soc : 0,
+          ...(pluggedIn ? { soc_source: 'inferred' } : {}),
           current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
-          target_soc_pct: 84,
+          target_soc: typeof this.#schedule?.soc === 'number' ? this.#schedule.soc : 0,
           updated_at_ms: now,
-          soc_source: 'none',
           min_charge_w: 4140,
           max_charge_w: 11000,
           phases: 3,
           voltage_v: 230,
           manual_active: door.holdW !== null,
-          battery_boost: door.boostActive
-            ? { state: 'active', active: true }
-            : { state: 'inactive', active: false },
-          surplus_only: false,
-          ...(this.#schedule ? { schedule: this.#schedule } : {}),
+          // Zero is a pause; the manual status still names it if a box omits zero watts.
+          ...(door.holdW !== null ? { manual_charge_w: door.holdW } : {}),
+          ...(door.holdW === 0 ? { manual: { active: true, state: 'paused', requested_a: 0 } } : {}),
+          // The box's BatteryBoostStatus, in its three states.
+          battery_boost: door.boost
+            ? {
+                state: 'active',
+                active: true,
+                expires_at_ms: door.boost.expiresAtMs,
+                min_battery_soc: door.boost.minBatterySoc,
+              }
+            : door.boostStop
+              ? {
+                  state: 'stopped',
+                  active: false,
+                  stop_reason: door.boostStop.reason,
+                  stopped_at_ms: door.boostStop.atMs,
+                }
+              : { state: 'inactive', active: false },
+          surplus_only: door.surplusOnly,
+          schedule: this.#schedule ?? { soc: 0, time_of_day_min_utc: 0, recurring: false },
         },
       ],
     })
@@ -711,7 +771,10 @@ export class SimApi {
     if (days !== undefined && (typeof days !== 'number' || days < 0 || days > 127)) {
       return json(400, { error: 'days must be a 7-bit weekday mask (0..127, bit 0 = Monday)' })
     }
-    this.#schedule = s
+    const soc = typeof s['soc'] === 'number' ? s['soc'] : typeof s['soc_pct'] === 'number' ? s['soc_pct'] / 100 : 0
+    if (soc < 0 || soc > 1) return json(400, { error: 'soc must be between 0 and 1' })
+    const { soc_pct: _legacy, ...fields } = s
+    this.#schedule = { ...fields, soc }
     return json(200, { ok: true })
   }
 

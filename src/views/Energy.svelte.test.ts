@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { fireEvent, render, screen } from '@testing-library/svelte'
 import Energy from './Energy.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
@@ -128,6 +128,78 @@ describe('the energy screen', () => {
     expect(site.session.phase).toBe('streaming')
     expect(asked.mock.calls.length, 'nothing asked again once the box was back').toBeGreaterThan(1)
     expect((await chartWhenDrawn()).data).toHaveLength(7)
+  })
+
+  it('never labels the previous period as today while loading or after a failure, then retries', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const box = new SimBox({ now: () => Date.now() })
+    const serve = box.api.serve.bind(box.api)
+    let failDaily = false
+    vi.spyOn(box.api, 'serve').mockImplementation(req => {
+      if (req.path === '/api/energy/daily' && failDaily) {
+        return { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
+      }
+      return serve(req)
+    })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 40 }))
+    const view = render(Energy, { props: { site } })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect((await chartWhenDrawn()).data).toHaveLength(7)
+    const week = document.querySelector('.card-value')?.textContent
+
+    failDaily = true
+    await fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+    expect(screen.getByRole('heading', { name: 'Today' })).toBeTruthy()
+    expect(document.querySelector('.card-value')?.textContent, 'week total relabelled as Today').toBe('—')
+    expect(document.querySelector('ftw-bar-chart'), 'week bars remained under Today').toBeNull()
+    expect(text()).toContain('Reading your box…')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(text()).toContain('Still trying.')
+    expect(document.querySelector('.card-value')?.textContent).toBe('—')
+    expect(text()).not.toContain('Nothing recorded')
+
+    failDaily = false
+    for (let i = 0; i < 32; i++) {
+      box.tick(1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    const today = document.querySelector('.card-value')?.textContent
+    expect(today).toContain('kWh')
+    expect(today).not.toBe(week)
+    expect(document.querySelector('ftw-bar-chart')).toBeNull()
+    expect(text()).not.toContain('Still trying.')
+    expect(screen.getByRole('button', { name: 'Today' }).getAttribute('aria-pressed')).toBe('true')
+    view.unmount()
+    site.destroy()
+  })
+
+  it('keeps figures for the same period when its refresh fails', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const box = new SimBox({ now: () => Date.now() })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    const view = render(Energy, { props: { site } })
+    await vi.advanceTimersByTimeAsync(500)
+    const chart = await chartWhenDrawn()
+    const before = document.querySelector('.card-value')?.textContent
+    const serve = box.api.serve.bind(box.api)
+    vi.spyOn(box.api, 'serve').mockImplementation(req => req.path === '/api/energy/daily'
+      ? { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
+      : serve(req))
+
+    site.setVisible(false)
+    await vi.advanceTimersByTimeAsync(20)
+    site.setVisible(true)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(document.querySelector('.card-value')?.textContent).toBe(before)
+    expect(chart.data).toHaveLength(7)
+    expect(text()).toContain('Last 7 days')
+    expect(text()).toContain('Not up to date')
+    view.unmount()
+    site.destroy()
   })
 
   it('asks again once the hour turns, on a wire that never drops', async () => {

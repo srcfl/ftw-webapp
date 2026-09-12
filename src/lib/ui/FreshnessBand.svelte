@@ -165,9 +165,9 @@
 
 <style>
   .band {
-    position: sticky;
-    top: 0;
-    z-index: 5;
+    /* Sits above the scroller as an .app sibling, so it never scrolls and
+         needs no sticky of its own. */
+    z-index: var(--z-band);
     display: flex;
     align-items: center;
     gap: var(--space-2);

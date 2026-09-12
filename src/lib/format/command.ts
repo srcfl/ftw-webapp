@@ -22,8 +22,46 @@ export function commandHelp(result: CmdResult): string {
     case 'E_BOOTING':
       return 'Your box is still starting. Give it a minute.'
     case 'E_UNAVAILABLE':
+      if (result.error.args?.['op'] === 'loadpoint.surplus_only.set') return 'Solar rule not saved. Your previous choice is unchanged. Try again.'
       return "Your box can't reach the charger right now. Try again shortly."
     default:
       return "That didn't go through. Try again."
   }
+}
+
+/**
+ * The boost's own refusals, before the door's.
+ *
+ * The box answers a boost the live site cannot carry with E_UNAVAILABLE
+ * naming the op — the session's spelling of the HTTP 409 — and a lease
+ * outside its bounds with E_UNKNOWN_OP naming `lease`. Neither is the
+ * charger being out of reach, which is what the shared table says for
+ * E_UNAVAILABLE, so they get their own sentences and everything else falls
+ * through to it.
+ */
+export function boostHelp(result: CmdResult): string {
+  const e = result.error
+  if (e?.code === 'E_UNAVAILABLE' && typeof e.args?.['op'] === 'string') {
+    return "Your box won't boost right now — the house battery or the site isn't ready for it."
+  }
+  if (e?.code === 'E_UNKNOWN_OP' && e.args?.['arg'] === 'lease') {
+    return 'Your box refused that reserve and time. Try other values.'
+  }
+  return commandHelp(result)
+}
+
+/**
+ * The level correction's own refusal, before the door's.
+ *
+ * The box refuses a level for a car that is not on the cable with
+ * E_UNAVAILABLE naming the op and `reason: "unplugged"` — the session's
+ * spelling of the HTTP route's 409. That is not the charger being out of
+ * reach, so it gets its own sentence and everything else falls through.
+ */
+export function socHelp(result: CmdResult): string {
+  const e = result.error
+  if (e?.code === 'E_UNAVAILABLE' && e.args?.['reason'] === 'unplugged') {
+    return 'Plug the car in first — your box has no car to set a level for.'
+  }
+  return commandHelp(result)
 }

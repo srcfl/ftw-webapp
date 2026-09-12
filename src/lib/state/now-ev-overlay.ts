@@ -10,41 +10,10 @@
  * putting them on Now pushed the entry bundle 33 bytes over the budget.
  */
 
-import { callBox } from './box-api'
-import { toLoadpoint, type WireLoadpoint } from '$lib/format/ev'
+import { watchCharging } from './charging-watch'
 import { loadpointChargeW } from './flow'
-import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
 import type { SiteStore } from './site.svelte'
 
-const PERIOD_MS = 5_000
-
-/**
- * Poll charger power while the session is live. Calls `onWatts` with the
- * sum of loadpoints that are actually drawing. Returns a stop function.
- */
 export function watchLoadpointCharge(site: SiteStore, onWatts: (w: number) => void): () => void {
-  let stopped = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-
-  const tick = async () => {
-    if (stopped) return
-    if (site.session.phase === 'streaming' && site.session.caps.has(CAP_API_PASSTHROUGH)) {
-      try {
-        const wire = await callBox<{ loadpoints?: WireLoadpoint[] }>(site, {
-          method: 'GET',
-          path: '/api/loadpoints',
-        })
-        if (!stopped) onWatts(loadpointChargeW((wire.loadpoints ?? []).map(toLoadpoint)))
-      } catch {
-        // Keep the last reading. A failed ask is not "the car went to 0 W".
-      }
-    }
-    if (!stopped) timer = setTimeout(() => void tick(), PERIOD_MS)
-  }
-
-  void tick()
-  return () => {
-    stopped = true
-    clearTimeout(timer)
-  }
+  return watchCharging(site, snapshot => onWatts(snapshot.fresh ? loadpointChargeW(snapshot.points) : 0))
 }
