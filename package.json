@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "FTW — the user's app for local-first home energy coordination.",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "engines": {
     "node": ">=22"

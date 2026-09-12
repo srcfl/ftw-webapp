@@ -20,6 +20,17 @@ WORKDIR /srv/escrow
 # in the image that could learn anything.
 COPY escrow/src ./src
 COPY escrow/layout.md ./layout.md
+COPY LICENSE NOTICE LICENSING.md ./
+COPY escrow/Dockerfile escrow/README.md ./
+# Keep the original build paths so the downloaded source can build this image.
+COPY LICENSE NOTICE LICENSING.md /usr/share/ftw/source/
+COPY escrow/src /usr/share/ftw/source/escrow/src
+COPY escrow/Dockerfile escrow/README.md /usr/share/ftw/source/escrow/
+COPY escrow/deploy /usr/share/ftw/source/escrow/deploy
+COPY escrow/layout.md /usr/share/ftw/source/escrow/
+# Runtime state does not exist yet and is never added to this archive.
+RUN tar -czf /usr/share/ftw/source.tar.gz -C /usr/share/ftw/source . \
+    && rm -rf /usr/share/ftw/source
 
 # The file lives on a volume so a rebuild does not take a household's copy with
 # it. Owned by the unprivileged user the process runs as. It is made once, at

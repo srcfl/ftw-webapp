@@ -32,7 +32,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { statSync } from 'node:fs'
+import { createReadStream, existsSync, statSync } from 'node:fs'
 import { DEFAULT_ORIGIN, ESCROW_REQUEST_BYTES, handle } from './escrow.ts'
 import { DEFAULT_HOUSEHOLDS, openSlotStore } from './store.ts'
 
@@ -70,6 +70,18 @@ const server = createServer((req, res) => {
 })
 
 async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method === 'GET' && req.url === '/source') {
+    const source = '/usr/share/ftw/source.tar.gz'
+    if (existsSync(source)) {
+      res.writeHead(200, { 'content-type': 'application/gzip', 'content-disposition': 'attachment; filename="ftw-escrow-source.tar.gz"' })
+      createReadStream(source).on('error', () => res.destroy()).pipe(res)
+    } else {
+      res.writeHead(503, { 'content-type': 'text/plain' })
+      res.end('Development build: matching source must be supplied by the operator. https://github.com/srcfl/ftw-webapp\n')
+    }
+    return
+  }
+  res.setHeader('Link', '</source>; rel="copyright"; title="AGPLv3 source"')
   // Liveness, and it is not part of the wire. `handle` answers one path for
   // every household; this sits in front of it so that stays true.
   //

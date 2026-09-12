@@ -27,6 +27,7 @@
  */
 
 import { WebSocketServer, type WebSocket, type RawData } from 'ws'
+import { createReadStream, existsSync } from 'node:fs'
 import {
   createServer,
   type IncomingMessage,
@@ -303,6 +304,18 @@ export class RelayServer {
     let relayRoutes: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null
 
     const http = createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/source') {
+        const source = '/usr/share/ftw/source.tar.gz'
+        if (existsSync(source)) {
+          res.writeHead(200, { 'content-type': 'application/gzip', 'content-disposition': 'attachment; filename="ftw-relay-source.tar.gz"' })
+          createReadStream(source).on('error', () => res.destroy()).pipe(res)
+        } else {
+          res.writeHead(503, { 'content-type': 'text/plain' })
+          res.end('Development build: matching source must be supplied by the operator. https://github.com/srcfl/ftw-webapp\n')
+        }
+        return
+      }
+      res.setHeader('Link', '</source>; rel="copyright"; title="AGPLv3 source"')
       if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/healthz/')) {
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
         res.end('ok\n')
@@ -319,6 +332,10 @@ export class RelayServer {
       // would leak through padding that exists precisely to stop that.
       perMessageDeflate: false,
       maxPayload: opts.maxFrameBytes ?? DEFAULTS.maxFrameBytes,
+    })
+
+    wss.on('headers', (headers) => {
+      headers.push('Link: </source>; rel="copyright"; title="AGPLv3 source"')
     })
 
     return new Promise((resolve, reject) => {
