@@ -258,7 +258,8 @@ about the method.** Ask what the code on the other side does:
 1. **read** — answers a question, changes nothing, and hands back nothing that
    could be replayed as authority. A shared viewer may ask for it.
 2. **configure** — changes a setting. A late execution is the same
-   instruction, only later. Owner, with a step-up.
+   instruction, only later. Owner. Most of these also need a step-up;
+   a few household settings skip the ceremony.
 3. **actuate** — moves energy, or takes control of what is moving it. A late
    execution here is a *different* instruction.
 4. **local** — served only on the box's own page, at home. Either the answer
@@ -317,16 +318,17 @@ has no such guarantee.
 A `local` route is refused with `E_LOCAL_ONLY`, before the role and before the
 ceremony, because neither of them changes it.
 
-`configure` needs role `owner` and a `stepUp` flag. The app carries no list of
-tiers — it asks, is refused with `E_NEEDS_STEP_UP`, runs the passkey ceremony
-and replays the identical request once.
+`configure` needs role `owner`. Most configure routes also need a `stepUp`
+flag. A few household settings — the charging schedule today — skip the
+ceremony: the session already proved who is asking, and a second Face ID is
+more friction than the table-phone risk is worth. The box names those routes
+beside the handler. The app still carries no list of tiers — it asks without
+the flag, and a route that still needs a ceremony answers `E_NEEDS_STEP_UP`.
 
-That cost is per write, not per session. The box refuses on the flag alone and
-keeps nothing about a ceremony that already ran, so the second write of a
-session is refused exactly as the first was: a round trip, a face or a
-fingerprint, and a replay, every time. The app could avoid the round trip only
-by sending `stepUp` before the ceremony, which would be the app claiming
-something that had not happened.
+For routes that still need the flag, the box remembers a genuine ceremony for
+a few minutes on that session, so a settings screen that writes several things
+in a row prompts once. The app does not earn that by sending `stepUp` before a
+ceremony; that would be claiming something that had not happened.
 
 The order the box refuses in is fixed, and the app depends on it: whole
 document, then role, then ceremony. A viewer who posts a whole document hears
