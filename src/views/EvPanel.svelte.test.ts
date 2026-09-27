@@ -905,16 +905,58 @@ describe('the charger behind its bubble', () => {
     expect(button('Boost from the house battery')).toBeDefined()
   })
 
-  it('does not offer a boost while a manual charge runs, and says why', async () => {
+  it.each([false, true])('keeps boost unavailable while paused, including an open draft: %s', async (openDraft) => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
-    await openedFor()
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command')
+    if (openDraft) {
+      button('Boost from the house battery')!.click()
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(button('Boost from the house battery')).toBeUndefined()
+    expect(button('Start boost')).toBeUndefined()
+    expect(document.body.textContent).toContain('Resume charging before starting a boost.')
+    expect(sent.mock.calls.some(([op]) => op === OP_LOADPOINT_BOOST)).toBe(false)
 
     button('Charge now')!.click()
     await vi.advanceTimersByTimeAsync(1_000)
+    expect(button(openDraft ? 'Start boost' : 'Boost from the house battery')).toBeDefined()
+  })
 
-    expect(button('Boost from the house battery')).toBeUndefined()
-    expect(document.body.textContent).toContain('Available after returning to the plan')
+  it.each(['charge first', 'boost first'])('keeps Charge now and a battery boost together: %s', async (order) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command')
+
+    if (order === 'charge first') {
+      button('Charge now')!.click()
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    button('Boost from the house battery')!.click()
+    await vi.advanceTimersByTimeAsync(50)
+    button('Start boost')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent).toHaveBeenCalledWith(OP_LOADPOINT_BOOST, {
+      id: 'carport', min_battery_soc_pct: 30, duration_s: 3600,
+    })
+    if (order === 'boost first') {
+      button('Charge now')!.click()
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    expect(document.body.textContent).toContain('Charge now is active')
+    expect(document.body.textContent).toContain('Battery boost is on')
+    expect(button('Return to plan')).toBeDefined()
+    expect(button('Stop boost')).toBeDefined()
+
+    button('Stop boost')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(document.body.textContent).toContain('Charge now is active')
+    expect(document.body.textContent).not.toContain('Battery boost is on')
+    expect(button('Boost from the house battery')).toBeDefined()
   })
 
   it('explains where to connect a first charger instead of showing an empty panel', async () => {

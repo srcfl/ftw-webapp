@@ -745,12 +745,10 @@
         {#if site.canConfigure && lp.pluggedIn}
           <details class="extras">
             <summary>Home battery boost</summary>
-          <!-- The boost: a bounded lease the box caps at four hours. The
-               box refuses one while a hold runs or the charger is on spare
-               solar only, so the offer says so up front from what the box
-               served, instead of drawing a button that leads to a refusal. -->
           {#if !lp.boostActive}
-            {#if boostDraft?.lpId === lp.id}
+            {#if isPaused(lp)}
+              <p class="hint">Resume charging before starting a boost.</p>
+            {:else if boostDraft?.lpId === lp.id}
               <div class="editor">
                 <div class="row">
                   <span class="label">Battery boost</span>
@@ -803,9 +801,7 @@
             {:else}
               <div class="row">
                 <span class="label">Battery boost</span>
-                {#if lp.manualActive}
-                  <span class="hint">Available after returning to the plan.</span>
-                {:else if surplusFor(lp)}
+                {#if surplusFor(lp)}
                   <span class="hint">Not while the charger uses spare solar only.</span>
                 {:else}
                   <button class="quiet edit" onclick={() => beginBoost(lp)}>
