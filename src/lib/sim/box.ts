@@ -209,18 +209,6 @@ const MODE_CATALOG: ModeInfo[] = [
     tooltip: 'Forecast-driven \u2014 grid-charges during cheap hours, never exports.',
     tier: 'hidden',
   },
-  {
-    key: 'priority',
-    label: 'Priority',
-    tooltip: 'Fill the highest-priority battery first.',
-    tier: 'hidden',
-  },
-  {
-    key: 'weighted',
-    label: 'Weighted',
-    tooltip: 'Distribute dispatch across batteries by configured weights.',
-    tier: 'hidden',
-  },
 ]
 
 const MODE_KEYS = MODE_CATALOG.map((m) => m.key)

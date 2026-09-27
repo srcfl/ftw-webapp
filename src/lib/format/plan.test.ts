@@ -26,8 +26,6 @@ const FTW_MODES = [
   'charge',
   'planner_self',
   'planner_cheap',
-  'priority',
-  'weighted',
 ] as const
 
 const T0 = Date.UTC(2026, 6, 15, 12, 0, 0)
@@ -205,7 +203,7 @@ describe('mode wording comes from the box', () => {
     // divergence in the contract file fails a test.
     expect(FTW_MODES).toContain('planner_passive_arbitrage')
     expect(FTW_MODES).toContain('planner_arbitrage')
-    expect(FTW_MODES).toHaveLength(10)
+    expect(FTW_MODES).toHaveLength(8)
   })
 
   it('has words for every reason the box can send', () => {
