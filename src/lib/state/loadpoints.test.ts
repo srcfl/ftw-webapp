@@ -236,7 +236,7 @@ describe('the charger over the wire', () => {
     expect(lp.boostStopReason).toBe('cancelled')
   })
 
-  it('reports a hold ending a boost, and the box refusing a boost under a hold', async () => {
+  it('keeps a boost beside Charge now, and takes one asked for under it', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
     const { store } = await loadedStore()
@@ -244,20 +244,21 @@ describe('the charger over the wire', () => {
     await settled(store.boost(store.points[0]!, 30, 3600))
     expect(store.points[0]!.boostActive).toBe(true)
 
-    // A hold takes priority: the box withdraws the boost and keeps the why.
+    // Charge now sets what the car draws; the boost keeps letting the house
+    // battery cover it.
     await settled(store.chargeNow(store.points[0]!, 16))
     let lp = store.points[0]!
     expect(lp.manualActive).toBe(true)
-    expect(lp.boostActive).toBe(false)
-    expect(lp.boostStopReason).toBe('operator_hold')
+    expect(lp.boostActive).toBe(true)
 
-    // And a boost asked for under that hold is refused, in a sentence about
-    // the boost rather than about the charger being out of reach.
-    await settled(store.boost(lp, 30, 3600))
-    expect(store.command.kind).toBe('failed')
-    expect(store.command.kind === 'failed' && store.command.help).toMatch(/won't boost/)
+    await settled(store.stopBoost(lp))
     lp = store.points[0]!
     expect(lp.boostActive).toBe(false)
+
+    // A boost asked for while Charge now runs is taken.
+    await settled(store.boost(lp, 30, 3600))
+    lp = store.points[0]!
+    expect(lp.boostActive).toBe(true)
     expect(lp.manualActive).toBe(true)
   })
 

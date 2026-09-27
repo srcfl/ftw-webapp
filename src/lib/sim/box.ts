@@ -209,18 +209,6 @@ const MODE_CATALOG: ModeInfo[] = [
     tooltip: 'Forecast-driven \u2014 grid-charges during cheap hours, never exports.',
     tier: 'hidden',
   },
-  {
-    key: 'priority',
-    label: 'Priority',
-    tooltip: 'Fill the highest-priority battery first.',
-    tier: 'hidden',
-  },
-  {
-    key: 'weighted',
-    label: 'Weighted',
-    tooltip: 'Distribute dispatch across batteries by configured weights.',
-    tier: 'hidden',
-  },
 ]
 
 const MODE_KEYS = MODE_CATALOG.map((m) => m.key)
@@ -780,10 +768,9 @@ export class SimBox {
           })
           return
         }
+        // A hold sets what the car draws; a running boost keeps letting the
+        // house battery cover it, as the box does.
         this.#evHold = { powerW: Math.round(w) }
-        // The box's own tick withdraws a boost the moment an operator hold
-        // appears, and remembers why.
-        this.#stopBoost('operator_hold')
       }
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: this.#evHold?.powerW ?? 0,
@@ -830,7 +817,7 @@ export class SimBox {
           })
           return
         }
-        if (this.#evHold || this.#evSurplusOnly) {
+        if (this.#evSurplusOnly) {
           this.#cmdResult(cmd.cmdId, 'rejected', {
             code: 'E_UNAVAILABLE',
             args: { op: cmd.op },
