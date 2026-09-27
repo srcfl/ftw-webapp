@@ -768,10 +768,9 @@ export class SimBox {
           })
           return
         }
+        // A hold sets what the car draws; a running boost keeps letting the
+        // house battery cover it, as the box does.
         this.#evHold = { powerW: Math.round(w) }
-        // The box's own tick withdraws a boost the moment an operator hold
-        // appears, and remembers why.
-        this.#stopBoost('operator_hold')
       }
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: this.#evHold?.powerW ?? 0,
@@ -818,7 +817,7 @@ export class SimBox {
           })
           return
         }
-        if (this.#evHold || this.#evSurplusOnly) {
+        if (this.#evSurplusOnly) {
           this.#cmdResult(cmd.cmdId, 'rejected', {
             code: 'E_UNAVAILABLE',
             args: { op: cmd.op },
