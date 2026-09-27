@@ -803,9 +803,7 @@
             {:else}
               <div class="row">
                 <span class="label">Battery boost</span>
-                {#if lp.manualActive}
-                  <span class="hint">Available after returning to the plan.</span>
-                {:else if surplusFor(lp)}
+                {#if surplusFor(lp)}
                   <span class="hint">Not while the charger uses spare solar only.</span>
                 {:else}
                   <button class="quiet edit" onclick={() => beginBoost(lp)}>
