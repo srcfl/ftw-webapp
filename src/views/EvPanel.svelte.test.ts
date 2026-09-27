@@ -905,6 +905,27 @@ describe('the charger behind its bubble', () => {
     expect(button('Boost from the house battery')).toBeDefined()
   })
 
+  it.each([false, true])('keeps boost unavailable while paused, including an open draft: %s', async (openDraft) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(CHARGING_EVENING)
+    const { site } = await openedFor()
+    const sent = vi.spyOn(site, 'command')
+    if (openDraft) {
+      button('Boost from the house battery')!.click()
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    button('Pause charging')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(button('Boost from the house battery')).toBeUndefined()
+    expect(button('Start boost')).toBeUndefined()
+    expect(document.body.textContent).toContain('Resume charging before starting a boost.')
+    expect(sent.mock.calls.some(([op]) => op === OP_LOADPOINT_BOOST)).toBe(false)
+
+    button('Charge now')!.click()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(button(openDraft ? 'Start boost' : 'Boost from the house battery')).toBeDefined()
+  })
+
   it.each(['charge first', 'boost first'])('keeps Charge now and a battery boost together: %s', async (order) => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
