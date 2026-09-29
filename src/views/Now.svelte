@@ -7,6 +7,7 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
+  import ControlFeedback from "$lib/ui/ControlFeedback.svelte"
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
   import { onMount, untrack } from 'svelte'
@@ -353,6 +354,8 @@
       <p class="note" role="status">Device details are out of date.{live ? ' Showing live totals.' : ''}</p>
     {/if}
   </div>
+
+  <ControlFeedback value={status?.control_feedback} live={statusLive} />
 
   {#if Outlook}
     <Outlook {site} {status} {active} statusFresh={statusLive} {statusReceivedAt} />

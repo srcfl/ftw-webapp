@@ -10,6 +10,7 @@
   the box decides; the panel repaints from what the box then reports.
 -->
 <script lang="ts">
+  import ControlFeedback from "$lib/ui/ControlFeedback.svelte"
   import { untrack, onDestroy } from 'svelte'
   import { LoadpointsStore, type Control, type Outcome } from '$lib/state/loadpoints.svelte'
   import { askWhenLive } from '$lib/state/ask.svelte'
@@ -463,6 +464,7 @@
         : evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
+        <ControlFeedback value={lp.controlFeedback ? [lp.controlFeedback] : []} live={!stale} />
         {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
         {#if !stale && planStatus}<p class="hint">{planStatus}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
