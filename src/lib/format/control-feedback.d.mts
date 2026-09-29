@@ -1,8 +1,8 @@
 export interface ControlFeedback {
- site_evidence?: { other_change_w?: number|null; adjusted_site_change_w?: number|null; unexplained_change_w?: number|null; tolerance_w?: number; samples?: number; window_s?: number; max_skew_ms?: number; trace?: {at_ms:number;device_change_w:number;adjusted_site_change_w:number}[] };
+ site_evidence?: { other_change_w?: number|null; adjusted_site_change_w?: number|null; unexplained_change_w?: number|null; tolerance_w?: number; samples?: number; window_s?: number; max_skew_ms?: number|null; trace?: {at_ms:number;device_change_w:number;adjusted_site_change_w:number}[] };
  driver: string; kind?: string; mode?: string; state?: string; reason: string; severity?: string;
  site_meter?: string; site_before_w?: number | null; site_after_w?: number | null; site_before_at_ms?: number; site_after_at_ms?: number;
- verification_tier?: number | null; site_confirmation?: string; site_delta_w?: number | null; device_delta_w?: number | null;
+ verification_tier?: number | null; site_confirmation?: string; site_source_issue?: string; site_delta_w?: number | null; device_delta_w?: number | null;
  tolerance_w?: number | null; response?: string; requested_w?: number | null; sent_w?: number | null; readback_w?: number | null;
  actual_w?: number | null; requested_a?: number | null; offered_a?: number | null; device_limit_a?: number | null;
  device_reason?: string; observed_at_ms?: number; verified_at_ms?: number;
