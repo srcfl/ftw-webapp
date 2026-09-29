@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { feedbackRows, feedbackText, feedbackValues, feedbackProof, feedbackSite } from '$lib/format/control-feedback.mjs'
+  import { feedbackRows, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
   let { value, live = true }: { value: unknown; live?: boolean } = $props()
   const rows = $derived(feedbackRows(value))
 </script>
@@ -9,6 +9,7 @@
     <h2>Are you in control?</h2>
     {#each rows as row (`${row.driver}:${row.kind}`)}
       {@const text = feedbackText(row, live)}
+      {@const curve = feedbackCurve(row,live)}
       <article class:needs-attention={live && row.severity === 'warning'} class:not-current={!live}>
         <div class="device">{row.driver} · {row.kind ?? 'device'}</div>
         <h3>{text.title}</h3>
@@ -20,6 +21,14 @@
         <details>
           <summary>Request and measurements</summary>
           <dl>{#each feedbackValues(row, live) as [label, value]}<dt>{label}</dt><dd>{value}</dd>{/each}</dl>
+          {#if curve}
+            <svg viewBox="0 0 280 110" role="img" aria-label={curve.label}>
+              <polyline class="zero" points="10,55 270,55" />
+              <polyline class="device-line" points={curve.device} />
+              <polyline class="site-line" points={curve.site} />
+            </svg>
+            <p class="time">Device: solid · Adjusted site: dashed · ±{curve.scale} · {curve.duration}</p>
+          {/if}
           {#if live && row.site_meter && row.site_after_at_ms}<p class="time">Site meter: {row.site_meter} · {new Date(row.site_after_at_ms).toLocaleTimeString()}</p>{/if}
           {#if row.observed_at_ms}<p class="time">Last device reading: {new Date(row.observed_at_ms).toLocaleTimeString()}</p>{/if}
         </details>
@@ -45,4 +54,9 @@
   dl { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem 1rem; font-size: .85rem; }
   dt { color: var(--fg-dim); }
   dd { margin: 0; text-align: right; }
+  svg { width: 100%; max-height: 160px; }
+  polyline { fill: none; }
+  .zero { stroke: var(--line); stroke-width: 1; }
+  .device-line { stroke: var(--energy-storage); stroke-width: 3; }
+  .site-line { stroke: var(--energy-export); stroke-width: 2; stroke-dasharray: 5 4; }
 </style>

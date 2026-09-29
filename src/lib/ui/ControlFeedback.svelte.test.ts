@@ -22,3 +22,12 @@ it('renders device reasons as text',()=>{
  expect(document.querySelector('img')).toBeNull()
  expect(screen.getByText('Device reports: <img onerror=bad>')).toBeTruthy()
 })
+it('shows the measured comparison curve and removes it when status expires',async()=>{
+ const value=[{driver:'Battery',reason:'power_observed',verification_tier:2,site_evidence:{samples:3,window_s:10,unexplained_change_w:10,trace:[0,1,2].map(i=>({at_ms:1000+i*5000,device_change_w:i*500,adjusted_site_change_w:i*500+10}))}}]
+ const view=render(ControlFeedback,{value})
+ expect(screen.getByRole('img',{name:/Measured changes over 10 seconds/})).toBeTruthy()
+ expect(screen.getByText('Unexplained change')).toBeTruthy()
+ await view.rerender({value,live:false})
+ expect(screen.queryByRole('img')).toBeNull()
+ expect(screen.queryByText(/Tier 2/)).toBeNull()
+})
