@@ -1,6 +1,6 @@
-// Vendored from srcfl/ftw web/components/ftw-energy-flow.js at 754f0475.
-// Do not edit here — change it upstream and re-copy. The app and the
-// box's own dashboard render this exact file; that is the point.
+// Vendored from srcfl/ftw web/components/ftw-energy-flow.js at a12ef32e6f21575151a440fb6c87d71010b810b5.
+// Do not edit here; change the box source, then copy it here.
+//
 // <ftw-energy-flow> — hero diagram for /next.
 //
 // Planet/sun layout. The HOUSE sits at the center (the sun), and every
@@ -62,11 +62,10 @@ import { FtwElement, ftwDebugDelay } from "./ftw-element.js";
 // idle/balanced" threshold (in watts, magnitude). Used by:
 //   - this component (beam activation, sub-label "idle / charging /
 //     generating", aggregated-bubble greyscale, self-powered %)
-//   - web/app.js per-planet object construction (mirrors via
-//     window.FTW_FLOW_IDLE_W set below — non-module script, can't
-//     import; falls back to the same literal if this module hasn't
-//     loaded yet)
-//
+//   - energy-flow-readings.js (and the phone app's copy of that mapping)
+//     via window.FTW_FLOW_IDLE_W. Classic app.js cannot import; it falls
+//     back to the same literal if this module has not loaded yet.
+
 // Inclusive comparison everywhere: |kW| <= threshold ⇒ idle, strictly
 // > threshold ⇒ active. So at exactly 42 W the planet is idle AND the
 // beam is inactive — no mixed state at the boundary.
@@ -505,6 +504,13 @@ class FtwEnergyFlow extends FtwElement {
     this._particles = [];
     this._bound = [];
     this._snapshot = null;
+    this._onVisibility = () => {
+      if (document.hidden) this._stopParticleLoop();
+      else this._startParticleLoop();
+    };
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener("visibilitychange", this._onVisibility);
+    }
     // Anchored once at construction so `t = now - tickStart` is on the
     // same timeline for the entire component lifetime. Resetting it
     // each afterRender would make restored bornAt values (from the
@@ -543,8 +549,11 @@ class FtwEnergyFlow extends FtwElement {
   }
 
   disconnectedCallback() {
-    if (this._rafId) cancelAnimationFrame(this._rafId);
-    this._rafId = null;
+    this._stopParticleLoop();
+    if (this._onVisibility && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this._onVisibility);
+      this._onVisibility = null;
+    }
     this._particles = [];
     if (this._resizeRaf) {
       cancelAnimationFrame(this._resizeRaf);
@@ -564,7 +573,10 @@ class FtwEnergyFlow extends FtwElement {
   // `planets` leaves the previous cluster intact (useful during
   // transient /api/status errors so the diagram doesn't blank out).
   setReadings(r) {
-    if (r.load != null)         this._readings.load    = r.load;
+    // `in` so an explicit null (stale meter, unknown house load) replaces
+    // a previous number. `!= null` would keep drawing the last 0 W as if
+    // the house were idle.
+    if ("load" in r)              this._readings.load    = r.load;
     if (Array.isArray(r.planets)) this._readings.planets = r.planets;
     // Optional today's-totals payload pushed through to the central
     // hub render. selfPoweredPctToday is the share of consumption
@@ -655,7 +667,8 @@ class FtwEnergyFlow extends FtwElement {
         socStale: !p.placeholder && !!p.socStale,
         socSource: p.placeholder ? null : p.socSource,
         radius: p._r,
-        clickable: p.clickable === false ? false : (!p.placeholder && !!p.role),
+        clickable: p.clickable === false ? false : (!!p.controlProof || !p.placeholder && !!p.role),
+        controlProof: p.controlProof,
         role: p.role || "",
         name: p.name || "",
         id: p.id,
@@ -697,6 +710,14 @@ class FtwEnergyFlow extends FtwElement {
     super.update();
   }
 
+  _syncLayerAccess() {
+    for (const layer of this.shadowRoot.querySelectorAll('.ef-layer')) {
+      const visible = layer.classList.contains(this._aggregated ? 'ef-layer-agg' : 'ef-layer-ind');
+      layer.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      for (const node of layer.querySelectorAll('.ef-clickable')) node.setAttribute('tabindex', visible ? '0' : '-1');
+    }
+  }
+
   // Called by FtwElement after each render() replaces the shadow DOM.
   // We cancel any in-flight rAF, bind the freshly-rendered <circle>
   // elements to the particle-param list `render()` just built, and
@@ -704,10 +725,7 @@ class FtwEnergyFlow extends FtwElement {
   // every particle — cheaper than SMIL when you have hundreds of them,
   // and gives us per-frame noise terms SMIL can't express.
   afterRender() {
-    if (this._rafId) {
-      cancelAnimationFrame(this._rafId);
-      this._rafId = null;
-    }
+    this._stopParticleLoop();
     // Aggregation toggle — flipping the aria-checked attribute and
     // the svg's data-agg triggers the CSS opacity transition between
     // layers. Intentionally NOT calling this.update() here: a full
@@ -720,6 +738,7 @@ class FtwEnergyFlow extends FtwElement {
         this._aggregated = !this._aggregated;
         const svgEl = this.shadowRoot.querySelector("svg");
         if (svgEl) svgEl.dataset.agg = this._aggregated ? "on" : "off";
+        this._syncLayerAccess();
         toggleBtn.setAttribute("aria-checked", this._aggregated ? "true" : "false");
         toggleBtn.setAttribute("title", this._aggregated
           ? "Split multi-device corners into individual bubbles"
@@ -732,6 +751,7 @@ class FtwEnergyFlow extends FtwElement {
     // `ftw-planet-click` so callers (app.js) can route per-role
     // (e.g. ev → open EV modal scoped to this driver).
     const svg = this.shadowRoot.querySelector('svg');
+    this._syncLayerAccess();
     if (svg) {
       const fire = (g) => {
         const role = g.getAttribute('data-role') || '';
@@ -753,9 +773,15 @@ class FtwEnergyFlow extends FtwElement {
     }
     // Static means "not now": a cached view must hold still, because a
     // moving particle is a claim that power is flowing at this moment.
-    if (this.hasAttribute("static")) return;
+    if (this.hasAttribute("static")) {
+      this._bound = [];
+      return;
+    }
     const nodes = this.shadowRoot.querySelectorAll('.ef-p');
-    if (!nodes.length || !this._particles.length) return;
+    if (!nodes.length || !this._particles.length) {
+      this._bound = [];
+      return;
+    }
     // Wire each DOM node to its param slot. `render()` assigned indices
     // via `data-i`; we trust those rather than node order in case the
     // browser reorders subtree attribute-only nodes in the future.
@@ -791,67 +817,87 @@ class FtwEnergyFlow extends FtwElement {
       this._snapshot = null;
     }
     this._bound = bound;
-    const tick = (now) => {
-      const t = (now - this._tickStart) / 1000;
-      for (let k = 0; k < bound.length; k++) {
-        const b = bound[k];
-        const p = b.p;
-        let age = t - p.bornAt;
-        if (age >= p.life || p.life === 0) {
-          rollLife(p, t);
-          // First-ever spawn: backdate bornAt uniformly across the
-          // pool's lifetime so particles are spread evenly instead of
-          // bursting together. p._warmUpIdx is in (0, 1), so this
-          // seeds the fountain with a steady state.
-          if (p._warmUp) {
-            p.bornAt = t - p._warmUpIdx * p.life;
-            p._warmUp = false;
-          }
-          age = t - p.bornAt;
+    this._startParticleLoop();
+  }
+
+  _stopParticleLoop() {
+    if (this._rafId) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+    }
+  }
+
+  _startParticleLoop() {
+    if (this._rafId || document.hidden || this.hasAttribute("static") || !this._bound || !this._bound.length) return;
+    this._rafId = requestAnimationFrame((now) => this._pumpParticles(now));
+  }
+
+  _pumpParticles(now) {
+    this._rafId = null;
+    if (document.hidden) return;
+    const bound = this._bound;
+    if (!bound || !bound.length) return;
+    const t = (now - this._tickStart) / 1000;
+    for (let k = 0; k < bound.length; k++) {
+      const b = bound[k];
+      const p = b.p;
+      let age = t - p.bornAt;
+      if (age >= p.life || p.life === 0) {
+        rollLife(p, t);
+        // First-ever spawn: backdate bornAt uniformly across the
+        // pool's lifetime so particles are spread evenly instead of
+        // bursting together. p._warmUpIdx is in (0, 1), so this
+        // seeds the fountain with a steady state.
+        if (p._warmUp) {
+          p.bornAt = t - p._warmUpIdx * p.life;
+          p._warmUp = false;
         }
-        // Along-path progress: linear travel from spawn toward target.
-        // No easing — real electrons don't decelerate.
-        const along = p.vx * age;              // along-vector component
-        const alongY = p.vy * age;
-        // Perpendicular offset: damped harmonic oscillator. This is
-        // the "gravity circling the beam" effect — a spring pulls the
-        // particle toward the beam centerline with angular frequency
-        // omega, while γ damps amplitude over time so particles
-        // spiral IN as they approach the target.
-        //   perp(t) = A * e^(−γt) * cos(ωt + φ)
-        const envelope = Math.exp(-p.damp * age);
-        const wave = Math.cos(p.omega * age + p.phase);
-        const perp = p.amp * envelope * wave;
-        const x = p.sx + along + p.perpX * perp;
-        const y = p.sy + alongY + p.perpY * perp;
-        // Opacity is fixed — set at render time, never touched here.
-        // Size variance (per-particle `radius`) replaces the old
-        // opacity pulse as the "texture" cue.
-        b.el.setAttribute('cx', x.toFixed(1));
-        b.el.setAttribute('cy', y.toFixed(1));
+        age = t - p.bornAt;
       }
-      this._rafId = requestAnimationFrame(tick);
-    };
-    this._rafId = requestAnimationFrame(tick);
+      // Along-path progress: linear travel from spawn toward target.
+      // No easing — real electrons don't decelerate.
+      const along = p.vx * age;              // along-vector component
+      const alongY = p.vy * age;
+      // Perpendicular offset: damped harmonic oscillator. This is
+      // the "gravity circling the beam" effect — a spring pulls the
+      // particle toward the beam centerline with angular frequency
+      // omega, while γ damps amplitude over time so particles
+      // spiral IN as they approach the target.
+      //   perp(t) = A * e^(−γt) * cos(ωt + φ)
+      const envelope = Math.exp(-p.damp * age);
+      const wave = Math.cos(p.omega * age + p.phase);
+      const perp = p.amp * envelope * wave;
+      const x = p.sx + along + p.perpX * perp;
+      const y = p.sy + alongY + p.perpY * perp;
+      // Opacity is fixed — set at render time, never touched here.
+      // Size variance (per-particle `radius`) replaces the old
+      // opacity pulse as the "texture" cue.
+      b.el.setAttribute('cx', x.toFixed(1));
+      b.el.setAttribute('cy', y.toFixed(1));
+    }
+    this._rafId = requestAnimationFrame((ts) => this._pumpParticles(ts));
   }
 
   render() {
     const { load } = this._readings;
+    const loadKnown = load != null && Number.isFinite(Number(load));
 
     // Self-powered % for the visible site demand — house load plus any
     // active EV charger. When EV is excluded, a 9 kW car charge can make a
     // PV+battery-covered house display 0 % simply because grid import exceeds
     // the house-only load. The energy-flow diagram shows the EV as part of the
     // live balance, so the denominator should match what is on screen.
+    // Unknown load (stale meter) is not 0 % — that would claim the house
+    // is fully self-powered while we cannot see it.
     let selfPoweredPct = null;
-    {
+    if (loadKnown) {
       let gridImport = 0;
       for (const p of (this._readings.planets || [])) {
-        if (p.role === "grid" && p.toHub) gridImport += Math.max(0, p.kw || 0);
+        if (p.role === "grid" && !p.placeholder && p.toHub) gridImport += Math.max(0, p.kw || 0);
       }
       let evDemandKw = 0;
       for (const p of (this._readings.planets || [])) {
-        if (p.role === "ev") evDemandKw += Math.max(0, p.kw || 0);
+        if (p.role === "ev" && !p.placeholder) evDemandKw += Math.max(0, p.kw || 0);
       }
       const consumptionKw = (Math.abs(load) || 0) + evDemandKw;
       if (!isIdleKw(consumptionKw)) {
@@ -1120,7 +1166,7 @@ class FtwEnergyFlow extends FtwElement {
           <span class="ef-toggle-track"></span>
         </button>
       ` : ""}
-      <svg class="${this._svgClass()}" data-agg="${aggAttr}" viewBox="${P.vbX} 0 ${P.vbW} ${P.H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <svg class="${this._svgClass()}" data-agg="${aggAttr}" viewBox="${P.vbX} 0 ${P.vbW} ${P.H}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Energy flow">
         <defs>
           <radialGradient id="ef-hub" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stop-color="oklch(0.85 0.18 var(--accent-hue))" stop-opacity="0.55"/>
@@ -1153,7 +1199,7 @@ class FtwEnergyFlow extends FtwElement {
              can open the house's own live reading — the click handler
              reads data-role and fires ftw-planet-click with role "load". -->
         <g class="ef-hub ef-clickable" data-role="load" data-name="" data-id=""
-           tabindex="0" role="button" aria-label="House load, live">
+           tabindex="0" role="button" aria-label="${loadKnown ? "House load, live" : "House load, no data"}">
           <circle cx="${CX}" cy="${P.cy}" r="${P.hubR}"
                   fill="var(--hero-house-fill)"
                   stroke="var(--hero-house-stroke)" stroke-width="1.5"/>
@@ -1169,7 +1215,7 @@ class FtwEnergyFlow extends FtwElement {
           </g>
           <text x="${CX}" y="${P.hubValueY}" text-anchor="middle"
                 fill="var(--hero-load-text)" class="sv-hub-value">
-            ${fmtKw(load)}
+            ${loadKnown ? fmtKw(load) : "—"}
           </text>
           ${selfPoweredPct !== null ? `
           <text x="${CX}" y="${P.hubSelfNowY}" text-anchor="middle"
@@ -1422,7 +1468,7 @@ function renderCircleNode({ pos, title, nameLabel, value, sub, color, soc,
                             clickable = false, role = "", name = "", id = "",
                             aggregated = false,
                             dailyKwh = null, dailyKwhParts = null,
-                            compact = false }) {
+                            compact = false, controlProof = null }) {
   const r = radius;
   const { x, y } = pos;
   // Daily totals line — empty string when no payload was passed (back-
@@ -1436,7 +1482,7 @@ function renderCircleNode({ pos, title, nameLabel, value, sub, color, soc,
   // derived from the visible title/name so the announcement names
   // what activating this node will open.
   const nodeLabel = [title, nameLabel].filter(Boolean).join(" ");
-  const ariaLabel = nodeLabel ? `Open ${nodeLabel}` : "Open node";
+  const ariaLabel = controlProof ? `${nodeLabel}: ${controlProof.detail}. View measurements` : nodeLabel ? `Open ${nodeLabel}` : "Open node";
   const groupAttrs = clickable
     ? ` class="ef-node ef-clickable" data-role="${escapeXml(role)}" data-name="${escapeXml(name)}" data-id="${escapeXml(id)}" tabindex="0" role="button" aria-label="${escapeXml(ariaLabel)}"`
     : ` class="ef-node"`;
@@ -1563,6 +1609,7 @@ function renderCircleNode({ pos, title, nameLabel, value, sub, color, soc,
               fill="none" stroke="${color}" stroke-width="1"
               stroke-dasharray="2 4"/>
       <g class="ef-icon" transform="translate(${x} ${y}) scale(${iconScale})">${iconSvg}</g>
+      ${controlProof ? renderProofBadge(controlProof, x, y, r) : ''}
       ${titleSvg}
       <text x="${x}" y="${y + valueY}" text-anchor="middle" fill="${color}" class="sv-node-value">
         ${value}
@@ -1577,6 +1624,26 @@ function renderCircleNode({ pos, title, nameLabel, value, sub, color, soc,
       </text>
       ${socText}
     </g>`;
+}
+
+// Evidence has its own label and colour; power-flow colour keeps its meaning.
+function renderProofBadge(proof, x, y, r) {
+  const colors = {confirmed:'var(--green-e)', measured:'var(--cyan)', waiting:'var(--amber)', alarm:'var(--red-e)', unknown:'var(--fg-muted)'};
+  const color = colors[proof.tone] || colors.unknown;
+  const width = Math.min(r * 1.7, Math.max(r * .82, proof.label.length * r * .12));
+  const height = r * .33, top = y - r * .99;
+  return `<g class="ef-control-proof" style="color:${color}">
+    <rect x="${x-width/2}" y="${top}" width="${width}" height="${height}" rx="${height/2}" fill="var(--hero-box-fill)" stroke="currentColor"/>
+    <text x="${x}" y="${top+height*.7}" text-anchor="middle" fill="currentColor" font-size="${r*.21}" font-weight="700">${escapeXml(proof.label)}</text>
+  </g>`;
+}
+function combinedProof(group) {
+  const proofs = group.map(p => p.controlProof).filter(Boolean);
+  if (!proofs.length) return null;
+  const alarms = proofs.filter(p => p.tone === 'alarm').length;
+  if (alarms) return {tone:'alarm', label:`⚠ ${alarms} alarm${alarms === 1 ? '' : 's'}`, detail:`${alarms} device${alarms === 1 ? '' : 's'} need attention`};
+  if (proofs.length === group.length && proofs.every(p => p.label === proofs[0].label && p.tone === proofs[0].tone)) return proofs[0];
+  return {tone:'unknown', label:'Mixed tiers', detail:'Devices have different control evidence'};
 }
 
 // ---------- primitives ----------
@@ -1688,6 +1755,8 @@ function aggregateGroups(groups) {
       socSource,
       name: `${group.length}×`,
       aggregated: true,
+      controlProof: combinedProof(group),
+      placeholder: group.some(p => p.placeholder),
       dailyKwh,
       dailyKwhParts,
     }];

@@ -18,3 +18,8 @@ export function feedbackSite(row: ControlFeedback, live?: boolean): string;
 export function feedbackCurve(row: ControlFeedback, live?: boolean): {device:string;site:string;label:string;scale:string;duration:string}|null;
 
 export function feedbackStatus(row: ControlFeedback, live?: boolean): {label:string;tone:string};
+
+export interface ControlProof { label:string; detail:string; tone:string }
+export interface ProofPlanetScope { role?:string; name?:string; id?:string }
+export function feedbackForPlanet(value:unknown, planet?:ProofPlanetScope): ControlFeedback[];
+export function withControlProof<T>(planets:T[], value:unknown, live?:boolean): (T & {controlProof?:ControlProof})[];

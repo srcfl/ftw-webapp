@@ -1,6 +1,6 @@
 <script lang="ts">
   import { feedbackRows, feedbackStatus, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
-  let { value, live = true }: { value: unknown; live?: boolean } = $props()
+  let { value, live = true, expanded = false }: { value: unknown; live?: boolean; expanded?: boolean } = $props()
   const rows = $derived(feedbackRows(value))
 </script>
 
@@ -24,7 +24,7 @@
         <p class="action">{text.action}</p>
         <div class="proof" data-tier={live ? row.verification_tier : undefined}>{feedbackProof(row, live)}</div>
         <p class="action">{feedbackSite(row, live)}</p>
-        <details>
+        <details open={expanded}>
           <summary>Request and measurements</summary>
           <dl>{#each feedbackValues(row, live) as [label, value]}<dt>{label}</dt><dd>{value}</dd>{/each}</dl>
           {#if curve}

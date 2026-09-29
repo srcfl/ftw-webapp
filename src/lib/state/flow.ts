@@ -9,6 +9,7 @@
  * told is decided here, which is what makes this file worth testing.
  */
 
+import { withControlProof, type ControlProof } from '$lib/format/control-feedback.mjs'
 import { FID } from '$lib/format/explanation'
 import { FLOW_IDLE_W } from '$vendor/ftw/ftw-energy-flow.js'
 
@@ -19,6 +20,8 @@ export interface FlowDailyPart {
 }
 
 export interface FlowPlanet {
+  controlProof?: ControlProof
+  placeholder?: boolean
   id: string
   corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   title: string
@@ -323,7 +326,7 @@ export function fmtKwhShort(kwh: number): string {
  * why the box page looks finished and the frozen-field mapping does not:
  * the component already knows how to draw all of it.
  */
-export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
+export function flowReadingsFromStatus(status: SiteStatus, live = true): FlowReadings {
   const planets: FlowPlanet[] = []
   const today = status.energy?.today ?? {}
   const importKwh = (num(today.import_wh) ?? 0) / 1000
@@ -434,7 +437,7 @@ export function flowReadingsFromStatus(status: SiteStatus): FlowReadings {
 
   return {
     load: (num(status.load_w) ?? 0) / 1000,
-    planets,
+    planets: withControlProof(planets, status.control_feedback, live),
     selfPoweredPctToday,
   }
 }

@@ -7,7 +7,8 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
-  import ControlFeedback from "$lib/ui/ControlFeedback.svelte"
+  import ControlEvidencePanel from "$lib/ui/ControlEvidencePanel.svelte"
+  import {feedbackForPlanet, type ProofPlanetScope} from "$lib/format/control-feedback.mjs"
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
   import { onMount, untrack } from 'svelte'
@@ -123,7 +124,7 @@
     }).headline
   )
   const liveReadings = $derived(
-    status && (statusLive || !live) ? flowReadingsFromStatus(status) : flowReadings(flowFields)
+    status && (statusLive || !live) ? flowReadingsFromStatus(status, statusLive) : flowReadings(flowFields)
   )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
@@ -204,8 +205,16 @@
 
   /** The live-line sheet for one part of the house, or null. */
   let liveRole = $state<LiveRole | null>(null)
+  let proofScope = $state<ProofPlanetScope | null>(null)
+  const proofRows = $derived(feedbackForPlanet(status?.control_feedback, proofScope ?? {}))
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
+
+  function openPlanetControls(scope: ProofPlanetScope) {
+    proofScope = null
+    if (scope.role === 'ev') { selectedCharger = null; evOpen = true }
+    else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
+  }
 
   // Preserve a charger tap while the saved home reconnects. The panel shows
   // connection progress, then checks the capabilities the box reports.
@@ -213,13 +222,9 @@
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
-      const role = (e as CustomEvent<{ role?: string }>).detail?.role
-      if (role === 'ev') {
-        selectedCharger = null
-        evOpen = true
-      } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
-        liveRole = role as LiveRole
-      }
+      const scope = (e as CustomEvent<ProofPlanetScope>).detail ?? {}
+      if (feedbackForPlanet(untrack(() => status?.control_feedback), scope).length) proofScope = scope
+      else openPlanetControls(scope)
     }
     el.addEventListener('ftw-planet-click', onPlanet)
     return () => el.removeEventListener('ftw-planet-click', onPlanet)
@@ -355,7 +360,12 @@
     {/if}
   </div>
 
-  <ControlFeedback value={status?.control_feedback} live={statusLive} />
+  {#if proofScope}
+    <ControlEvidencePanel value={proofRows} live={statusLive}
+      onclose={() => (proofScope = null)}
+      oncontrols={() => openPlanetControls(proofScope ?? {})}
+      controlsLabel={proofScope.role === 'ev' ? 'Charger controls' : 'Live power'} />
+  {/if}
 
   {#if Outlook}
     <Outlook {site} {status} {active} statusFresh={statusLive} {statusReceivedAt} />
