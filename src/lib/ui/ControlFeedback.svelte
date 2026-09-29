@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { feedbackRows, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
+  import { feedbackRows, feedbackStatus, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
   let { value, live = true }: { value: unknown; live?: boolean } = $props()
   const rows = $derived(feedbackRows(value))
 </script>
@@ -7,10 +7,16 @@
 {#if rows.length}
   <section class="control-results" aria-label="Control results">
     <h2>Are you in control?</h2>
+    <ul class="control-status-list" aria-label="Control status by device">
+      {#each rows as row (`${row.driver}:${row.kind}`)}
+        {@const status = feedbackStatus(row,live)}
+        <li><span>{row.driver} · {row.kind ?? 'device'}</span><strong data-tone={status.tone}>{status.label}</strong></li>
+      {/each}
+    </ul>
     {#each rows as row (`${row.driver}:${row.kind}`)}
       {@const text = feedbackText(row, live)}
       {@const curve = feedbackCurve(row,live)}
-      <article class:needs-attention={live && row.severity === 'warning'} class:not-current={!live}>
+      <article class:needs-attention={live && row.severity === 'warning'} class:not-current={!live} class:control-alarm={live && row.verification_lost}>
         <div class="device">{row.driver} · {row.kind ?? 'device'}</div>
         <h3>{text.title}</h3>
         <p>{text.detail}</p>
@@ -59,4 +65,13 @@
   .zero { stroke: var(--line); stroke-width: 1; }
   .device-line { stroke: var(--energy-storage); stroke-width: 3; }
   .site-line { stroke: var(--energy-export); stroke-width: 2; stroke-dasharray: 5 4; }
+  .control-status-list { display: flex; flex-wrap: wrap; gap: .6rem; list-style: none; padding: 0; margin: 0 0 1rem; }
+  .control-status-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .65rem .8rem; border: 1px solid var(--line); border-radius: 8px; font-size: .85rem; }
+  .control-status-list strong { font-size: .8rem; }
+  [data-tone="confirmed"] { color: var(--energy-export); }
+  [data-tone="measured"] { color: var(--energy-storage); }
+  [data-tone="waiting"] { color: var(--energy-generation); }
+  [data-tone="unknown"] { color: var(--fg-dim); }
+  [data-tone="alarm"], .control-alarm h3 { color: var(--energy-import); }
+  article.control-alarm { border-inline-start: 4px solid var(--energy-import); }
 </style>
