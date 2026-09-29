@@ -483,6 +483,7 @@ export function carriesOverSession(contentType: string | undefined): boolean {
  * reads both back.
  */
 export const OP_SET_MODE = 'site.mode.set'
+export const OP_PLANNER_PREFS_SET = 'planner.prefs.set'
 export const OP_BATTERY_HOLD = 'battery.hold'
 export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
 export const OP_LOADPOINT_BOOST = 'loadpoint.boost'

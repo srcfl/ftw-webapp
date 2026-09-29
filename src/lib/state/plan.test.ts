@@ -49,11 +49,43 @@ describe('the mode the Plan store offers a way back from', () => {
     return { box, site, store }
   }
 
-  it('names the first primary mode as the plan to return to', async () => {
+  it('treats a planner mode as the plan, and hides planner keys from the manual list', async () => {
     const { store } = await connected()
-    expect(store.planHome?.key).toBe('planner_passive_arbitrage')
     expect(store.inManual).toBe(false)
+    expect(store.manualModes.every((m) => !m.key.startsWith('planner_'))).toBe(true)
+    expect(store.manualModes.some((m) => m.key === 'self_consumption')).toBe(true)
+    expect(store.manualModes.some((m) => m.key === 'planner_self')).toBe(false)
     store.destroy()
+  })
+
+  it('follows mapped_mode when handing the house back to the plan', async () => {
+    const { store, box, site } = await connected('self_consumption')
+    await store.setPrefs(1, 'allowed')
+    expect(box.mode, 'a prefs write must not leave a manual mode on its own').toBe('self_consumption')
+    expect(box.batteryExport).toBe('allowed')
+    const sent = vi.spyOn(site, 'command')
+    await store.usePlan()
+    expect(box.mode).toBe('planner_arbitrage')
+    expect(sent.mock.calls.some((c) => c[0] === 'site.mode.set' && c[1]?.mode === 'planner_arbitrage')).toBe(
+      true
+    )
+    expect(sent.mock.calls.some((c) => c[1]?.mode === 'planner_passive_arbitrage')).toBe(false)
+    store.destroy()
+    site.destroy()
+  })
+
+  it('uses the passive mode when the prefs read fails', async () => {
+    const { store, box, site } = await connected('self_consumption')
+    await store.setPrefs(1, 'allowed')
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(async (req) => {
+      if (req.path === '/api/planner/prefs') throw new Error('down')
+      return api(req)
+    })
+    await store.usePlan()
+    expect(box.mode).toBe('planner_passive_arbitrage')
+    store.destroy()
+    site.destroy()
   })
 
   it('treats Self (manual) as a manual fallback, not a plan', async () => {

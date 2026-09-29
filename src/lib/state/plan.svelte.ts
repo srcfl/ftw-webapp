@@ -7,10 +7,21 @@
  */
 
 import type { Plan, SiteMode, CmdResult, ModeInfo } from '$lib/protocol/messages'
-import { OP_SET_MODE } from '$lib/protocol/messages'
+import { OP_PLANNER_PREFS_SET, OP_SET_MODE } from '$lib/protocol/messages'
 import { CommandError } from '$lib/protocol/session'
 import { commandHelp } from '$lib/format/command'
 import { CAP_PLAN_DISPATCH, SCOPE_MODE_WRITE } from '$lib/protocol/contract'
+import {
+  PLANNER_FALLBACK_MODE,
+  clampSafetyK,
+  mappedPlannerMode,
+  prefsFromWire,
+  trustFromSafetyK,
+  type BatteryExport,
+  type PlannerPrefs,
+  type PlannerPrefsWire,
+} from '$lib/format/plan-prefs'
+import { callBox } from './box-api'
 import type { SiteStore } from './site.svelte'
 import { FID } from '$lib/format/explanation'
 
@@ -59,6 +70,12 @@ export class PlanStore {
   /** Set when the box could not answer. A sentence, never a code. */
   problem = $state<string | null>(null)
   command = $state<CommandState>({ kind: 'idle' })
+  /** Household planner prefs, as the last GET /api/planner/prefs answered. */
+  prefs = $state<PlannerPrefs | null>(null)
+  /** A prefs write is in flight. The slider stays put; the plan is being remade. */
+  prefsBusy = $state(false)
+  /** Why the last prefs write did not land. Null when there is nothing to say. */
+  prefsHelp = $state<string | null>(null)
 
   constructor(site: SiteStore) {
     this.#site = site
@@ -75,12 +92,15 @@ export class PlanStore {
     return this.#site.session.modes.filter((m) => m.tier !== 'hidden')
   }
 
-  get primaryModes(): ModeInfo[] {
-    return this.modes.filter((m) => m.tier === 'primary')
-  }
-
-  get advancedModes(): ModeInfo[] {
-    return this.modes.filter((m) => m.tier === 'advanced')
+  /**
+   * Manual fallbacks, and only those.
+   *
+   * Planner keys stay in the catalogue — Home Assistant still sets them —
+   * and they are not buttons. The Plan card's knobs are the household prefs.
+   * Hidden-tier modes stay hidden.
+   */
+  get manualModes(): ModeInfo[] {
+    return this.modes.filter((m) => !m.key.startsWith('planner_'))
   }
 
   /**
@@ -109,23 +129,18 @@ export class PlanStore {
   /**
    * True when the shown mode is a manual fallback, not a forecast plan.
    *
-   * Uses `shownMode` so a tap on "Use the plan" hides the manual banner at
-   * once, rather than waiting for the box to confirm.
+   * A planner key — including one this build has never rendered a button
+   * for — is the plan. Uses `shownMode` so a tap on "Use the plan" hides
+   * that button at once, rather than waiting for the box to confirm.
    */
   get inManual(): boolean {
     const mode = this.shownMode
-    return mode !== null && this.advancedModes.some((m) => m.key === mode)
+    return mode !== null && !mode.startsWith('planner_')
   }
 
-  /**
-   * The recommended plan to return to: the first primary mode, which is
-   * FTW's default (`planner_passive_arbitrage` today).
-   *
-   * The app does not invent a third strategy named "optimal". It offers the
-   * same first primary the box already put at the front of the catalogue.
-   */
-  get planHome(): ModeInfo | null {
-    return this.primaryModes[0] ?? null
+  /** A mode change or a prefs write is on the wire. One at a time. */
+  get controlsLocked(): boolean {
+    return this.command.kind === 'sending' || this.prefsBusy
   }
 
   /**
@@ -209,6 +224,7 @@ export class PlanStore {
     this.problem = null
     try {
       await this.#site.plan()
+      await this.#refreshPrefs()
     } catch (err) {
       // A plan the box could not send is not a broken app. What happens now
       // is that the app asks again on its own, so that is what it says — the
@@ -221,6 +237,87 @@ export class PlanStore {
   }
 
   /**
+   * Read household prefs. mapped_mode is whatever the box said.
+   */
+  async #refreshPrefs(): Promise<void> {
+    const wire = await callBox<PlannerPrefsWire>(this.#site, {
+      method: 'GET',
+      path: '/api/planner/prefs',
+    })
+    this.prefs = prefsFromWire(wire)
+  }
+
+  /**
+   * Store a safety factor and an export permission.
+   *
+   * The box maps the permission onto a planner mode. This method sends the
+   * two fields and then reads mapped_mode back; it never picks a mode from
+   * the permission itself.
+   */
+  async setPrefs(safetyK: number, batteryExport: BatteryExport): Promise<void> {
+    if (this.controlsLocked || !this.canControl) return
+    const prev = this.prefs
+    const k = clampSafetyK(safetyK)
+    this.prefsHelp = null
+    this.prefsBusy = true
+    this.prefs = {
+      forecastTrust: trustFromSafetyK(k),
+      batteryExport,
+      safetyK: k,
+      mappedMode: prev?.mappedMode ?? PLANNER_FALLBACK_MODE,
+    }
+
+    try {
+      const result: CmdResult = await this.#site.command(OP_PLANNER_PREFS_SET, {
+        safety_k: k,
+        battery_export: batteryExport,
+      })
+      if (result.state !== 'applied') {
+        this.prefs = prev
+        this.prefsHelp = commandHelp(result)
+        return
+      }
+      // The write landed. Read mapped_mode back. A failed read leaves the
+      // last mapped mode in place — it does not invent one from the
+      // permission that was just sent.
+      try {
+        await this.#refreshPrefs()
+      } catch {
+        /* the next load() asks again */
+      }
+      void this.#followPlan()
+    } catch (err) {
+      this.prefs = prev
+      this.prefsHelp = err instanceof CommandError ? err.help : "That didn't go through. Try again."
+    } finally {
+      this.prefsBusy = false
+    }
+  }
+
+  /**
+   * Hand a manually driven house back to the plan.
+   *
+   * Which planner mode that is comes from a fresh prefs read. A failed read,
+   * or a mapped_mode that is not a planner key, is the mode that never sells
+   * from the battery — never a hard-coded active arbitrage, and never
+   * whichever primary mode the catalogue listed first.
+   */
+  async usePlan(): Promise<void> {
+    let mode: SiteMode = PLANNER_FALLBACK_MODE
+    try {
+      const wire = await callBox<PlannerPrefsWire>(this.#site, {
+        method: 'GET',
+        path: '/api/planner/prefs',
+      })
+      this.prefs = prefsFromWire(wire)
+      mode = mappedPlannerMode(wire)
+    } catch {
+      mode = PLANNER_FALLBACK_MODE
+    }
+    await this.setMode(mode)
+  }
+
+  /**
    * Ask the box to run the site differently.
    *
    * Optimistic in the UI, never in the model: the toggle moves at once, and
@@ -229,7 +326,7 @@ export class PlanStore {
    */
   async setMode(mode: SiteMode): Promise<void> {
     // A second request would carry the in-flight request's control revision.
-    if (this.command.kind === 'sending' || mode === this.shownMode) return
+    if (this.controlsLocked || mode === this.shownMode) return
 
     this.#clearTimer()
     this.command = { kind: 'sending', mode }
