@@ -957,6 +957,11 @@ describe('switching how the home is run', () => {
     expect(self.textContent).toMatch(/in use/i)
     expect(choice('Passive arbitrage')).toBeUndefined()
     expect(choice('Active arbitrage')).toBeUndefined()
+    const stop = choice('Stop batteries')
+    expect(stop, 'idle is labelled Stop batteries').toBeTruthy()
+    expect(stop!.textContent).toMatch(/Hold every battery at 0 W/)
+    expect(choice('Idle')).toBeUndefined()
+    expect(document.body.textContent).not.toMatch(/Do nothing/)
 
     const back = document.querySelector('button.use-plan-btn') as HTMLButtonElement | null
     expect(back, 'Use the plan was not offered').toBeTruthy()

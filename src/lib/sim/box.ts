@@ -180,7 +180,13 @@ const MODE_CATALOG: ModeInfo[] = [
       'Full price arbitrage \u2014 charge cheap, discharge into expensive hours (battery may export to grid).',
     tier: 'primary',
   },
-  { key: 'idle', label: 'Idle', tooltip: 'Do nothing \u2014 no dispatch.', tier: 'advanced' },
+  {
+    key: 'idle',
+    label: 'Stop batteries',
+    tooltip:
+      "Hold every battery at 0 W for as long as this mode is on, so none of them drifts back to the inverter's own behaviour. Fuse protection still applies: a battery discharges if the site is about to trip its main fuse. EV charging and PV curtailment carry on \u2014 stop those on their own controls.",
+    tier: 'advanced',
+  },
   {
     key: 'self_consumption',
     label: 'Self (manual)',
