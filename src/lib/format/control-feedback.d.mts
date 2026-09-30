@@ -4,7 +4,7 @@ export interface ControlFeedback {
  site_meter?: string; site_before_w?: number | null; site_after_w?: number | null; site_before_at_ms?: number; site_after_at_ms?: number;
  verification_lost?: boolean; verification_tier?: number | null; site_confirmation?: string; site_source_issue?: string; site_delta_w?: number | null; device_delta_w?: number | null;
  tolerance_w?: number | null; response?: string; requested_w?: number | null; sent_w?: number | null; readback_w?: number | null;
- actual_w?: number | null; requested_a?: number | null; offered_a?: number | null; device_limit_a?: number | null;
+ battery_soc?: number | null; charge_resume_soc?: number | null; actual_w?: number | null; requested_a?: number | null; offered_a?: number | null; device_limit_a?: number | null;
  device_reason?: string; observed_at_ms?: number; verified_at_ms?: number;
 }
 export function feedbackRows(value: unknown): ControlFeedback[];

@@ -47,3 +47,14 @@ test('embedded on-box evidence preserves the open disclosure and focus across up
   assert.match(summary.textContent!,/No live proof/);
  } finally {root.remove()}
 });
+
+test('full battery is a quiet pause, with the actual stop and charge level visible',()=>{
+ const row={driver:'battery',kind:'battery',reason:'battery_full',severity:'info',verification_tier:1,battery_soc:1,charge_resume_soc:.99,requested_w:5000,sent_w:0,actual_w:0};
+ assert.equal(feedbackStatus(row).tone,'measured');
+ assert.match(feedbackStatus(row).label,/Charging paused/);
+ assert.deepEqual(feedbackValues(row).find(v=>v[0]==='Battery charge'),['Battery charge','100.0%']);
+ assert.deepEqual(feedbackValues(row).find(v=>v[0]==='Sent to driver'),['Sent to driver','0 W']);
+ assert.equal(feedbackStatus({...row,verification_tier:0}).tone,'waiting');
+ assert.equal(feedbackStatus({...row,verification_lost:true}).tone,'alarm');
+ assert.equal(feedbackValues(row,false).find(v=>v[0]==='Battery charge')?.[1],'Not current');
+});

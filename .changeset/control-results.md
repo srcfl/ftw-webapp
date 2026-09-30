@@ -11,3 +11,5 @@ Keep the overview quiet with small evidence marks and no tier labels. Show norma
 Put a collapsed “Are we in control?” section below the device’s main view and charging controls. Open the chosen charger directly, and keep its evidence and failures in that panel.
 
 Keep measurement tiers separate from target fulfilment. Show independently confirmed partial power with its shortfall and unknown cause, and use an amber mark for shortfalls and known limits while retaining alarms for faults and wrong responses.
+
+Show the box's full-battery charging pause, current charge level and resume threshold without promoting the measurement tier or hiding faults.
