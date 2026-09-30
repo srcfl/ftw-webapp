@@ -7,7 +7,7 @@ it('shows device limits even while charging and keeps proof levels distinct',()=
  render(ControlFeedback,{value:[{driver:'Garage',kind:'ev',reason:'device_limit',severity:'warning',verification_tier:0,device_limit_a:8,requested_a:16,actual_w:5500,site_confirmation:'device_response_unconfirmed'}]})
  expect(screen.getByText('Charger limit',{selector:'h3'})).toBeTruthy()
  expect(screen.getByText('8.0 A')).toBeTruthy()
- expect(screen.getByText('Alarm · Tier 0')).toBeTruthy()
+ expect(screen.getByText('Needs attention · Tier 0')).toBeTruthy()
  expect(screen.queryByText(/Tier 2/)).toBeNull()
 })
 it('withdraws independent confirmation when status is stale',()=>{
@@ -42,7 +42,7 @@ it('shows independent overview tiers and a loss alarm without lowering another d
  expect(list.getByText('Tier 2 · Site confirmed')).toBeTruthy()
  expect(list.getByText('Alarm · Tier 0')).toBeTruthy()
  expect(screen.getByRole('heading',{name:'Alarm · Measured control lost'})).toBeTruthy()
- expect(screen.getByText('Included in background')).toBeTruthy()
+ expect(screen.getByText('Background, not required sources')).toBeTruthy()
  await view.rerender({value:[value[0],{...value[1],reason:'power_observed',severity:'info',verification_tier:1,verification_lost:false}]})
  expect(screen.queryByText('Alarm · Tier 0')).toBeNull()
  expect(list.getByText('Tier 1 · Device measured')).toBeTruthy()

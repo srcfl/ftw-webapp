@@ -21,7 +21,7 @@ test('each device has its own status and unknown background is not a veto',()=>{
  const row={driver:'battery',reason:'power_observed',verification_tier:2,site_confirmation:'confirmed',site_evidence:{unmeasured_flows:['offline-ev:ev']}};
  assert.equal(feedbackStatus(row).tone,'confirmed');
  assert.match(feedbackSite(row),/separate site meter/);
- assert.deepEqual(feedbackValues(row).find(v=>v[0]==='Included in background'),['Included in background','offline-ev:ev']);
+ assert.deepEqual(feedbackValues(row).find(v=>v[0]==='Background, not required sources'),['Background, not required sources','offline-ev:ev']);
  assert.equal(feedbackStatus({driver:'ev',reason:'waiting_response',verification_tier:0}).tone,'waiting');
  assert.equal(feedbackStatus({driver:'ev',reason:'telemetry_stale',verification_tier:0,verification_lost:true}).tone,'alarm');
  assert.equal(feedbackStatus(row,false).tone,'unknown');

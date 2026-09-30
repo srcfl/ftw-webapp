@@ -19,7 +19,7 @@ export function feedbackCurve(row: ControlFeedback, live?: boolean): {device:str
 
 export function feedbackStatus(row: ControlFeedback, live?: boolean): {label:string;tone:string};
 
-export interface ControlProof { label:string; detail:string; tone:string }
+export interface ControlProof { label:string; detail:string; tone:string; inactive?:boolean }
 export interface ProofPlanetScope { role?:string; name?:string; id?:string }
 export function feedbackForPlanet(value:unknown, planet?:ProofPlanetScope): ControlFeedback[];
 export function withControlProof<T>(planets:T[], value:unknown, live?:boolean): (T & {controlProof?:ControlProof})[];
