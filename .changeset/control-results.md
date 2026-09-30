@@ -9,3 +9,5 @@ Show the measured comparison curves, changes in other flows and any unexplained 
 Keep the overview quiet with small evidence marks and no tier labels. Show normal response waits without an alarm, hide marks for inactive commands and open the device panel on tap.
 
 Put a collapsed “Are we in control?” section below the device’s main view and charging controls. Open the chosen charger directly, and keep its evidence and failures in that panel.
+
+Keep measurement tiers separate from target fulfilment. Show independently confirmed partial power with its shortfall and unknown cause, and use an amber mark for shortfalls and known limits while retaining alarms for faults and wrong responses.

@@ -39,7 +39,7 @@ test('opens the device panel first, with collapsed evidence that stays current',
     evidence.open=true
     lost=true
     for(let i=0;i<150;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
-    expect(dialog.textContent).toContain('Alarm · Measured control lost')
+    expect(dialog.textContent).toContain('Alarm · Measurements lost')
     expect(evidence.open).toBe(true)
     window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))
     await vi.advanceTimersByTimeAsync(10)

@@ -7,7 +7,7 @@ it('shows device limits even while charging and keeps proof levels distinct',()=
  render(ControlFeedback,{value:[{driver:'Garage',kind:'ev',reason:'device_limit',severity:'warning',verification_tier:0,device_limit_a:8,requested_a:16,actual_w:5500,site_confirmation:'device_response_unconfirmed'}]})
  expect(screen.getByText('Charger limit',{selector:'h3'})).toBeTruthy()
  expect(screen.getByText('8.0 A')).toBeTruthy()
- expect(screen.getByText('Needs attention · Tier 0')).toBeTruthy()
+ expect(screen.getByText('Tier 0 · Charger limit')).toBeTruthy()
  expect(screen.queryByText(/Tier 2/)).toBeNull()
 })
 it('withdraws independent confirmation when status is stale',()=>{
@@ -41,7 +41,7 @@ it('shows independent overview tiers and a loss alarm without lowering another d
  const list=within(screen.getByRole('list',{name:'Control status by device'}))
  expect(list.getByText('Tier 2 · Site confirmed')).toBeTruthy()
  expect(list.getByText('Alarm · Tier 0')).toBeTruthy()
- expect(screen.getByRole('heading',{name:'Alarm · Measured control lost'})).toBeTruthy()
+ expect(screen.getByRole('heading',{name:'Alarm · Measurements lost'})).toBeTruthy()
  expect(screen.getByText('Background, not required sources')).toBeTruthy()
  await view.rerender({value:[value[0],{...value[1],reason:'power_observed',severity:'info',verification_tier:1,verification_lost:false}]})
  expect(screen.queryByText('Alarm · Tier 0')).toBeNull()
@@ -63,4 +63,26 @@ it('keeps embedded evidence folded below controls and preserves an open section 
  expect(document.querySelector('details')).toBe(disclosure);
  expect(disclosure.open).toBe(true);
  expect(disclosure.querySelector('summary')!.textContent).toContain('Alarm');
+});
+
+it('shows a site-confirmed shortfall, then recovery, without losing the evidence tier',async()=>{
+ const row={driver:'Sungrow',kind:'battery',reason:'power_below_target',severity:'warning',verification_tier:2,requested_w:-5000,sent_w:-5000,actual_w:-4400,site_confirmation:'confirmed'};
+ const view=render(ControlFeedback,{value:[row],embedded:true});
+ const disclosure=document.querySelector('details')!;
+ expect(disclosure.open).toBe(false);
+ expect(disclosure.querySelector('summary')!.textContent).toContain('Tier 2 · Site confirmed · Below target');
+ expect(disclosure.querySelector('summary strong')!.getAttribute('data-tone')).toBe('warning');
+ disclosure.open=true;
+ expect(screen.getByText('Power is below the target')).toBeTruthy();
+ expect(screen.getByText('600 W')).toBeTruthy();
+ expect(screen.getByText(/cause is not confirmed/)).toBeTruthy();
+ expect(screen.queryByText(/Measurements lost/)).toBeNull();
+ await view.rerender({value:[{...row,actual_w:-5000,reason:'power_observed',severity:'info'}],embedded:true});
+ expect(disclosure.open).toBe(true);
+ expect(disclosure.querySelector('summary')!.textContent).toContain('Tier 2 · Site confirmed');
+ expect(screen.queryByText('600 W')).toBeNull();
+ expect(screen.getByText('Device follows the command')).toBeTruthy();
+ await view.rerender({value:[row],embedded:true,live:false});
+ expect(disclosure.querySelector('summary')!.textContent).not.toContain('Tier 2');
+ expect(screen.queryByText('600 W')).toBeNull();
 });

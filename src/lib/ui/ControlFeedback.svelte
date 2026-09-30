@@ -83,5 +83,6 @@
   [data-tone="waiting"] { color: var(--energy-generation); }
   [data-tone="unknown"] { color: var(--fg-dim); }
   [data-tone="alarm"], .control-alarm h3 { color: var(--energy-import); }
+  [data-tone="warning"] { color: var(--energy-generation); }
   article.control-alarm { border-inline-start: 4px solid var(--energy-import); }
 </style>
