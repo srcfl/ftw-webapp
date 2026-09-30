@@ -49,9 +49,10 @@
     /** Close the sheet. The panel never decides that itself. */
     onclose: () => void
     loadpointId?: string | null
+    driverName?: string | null
   }
 
-  let { site, onclose, loadpointId = null }: Props = $props()
+  let { site, onclose, loadpointId = null, driverName = null }: Props = $props()
 
   const store = new LoadpointsStore(untrack(() => site))
   onDestroy(() => store.destroy())
@@ -458,13 +459,12 @@
     {#if store.loaded && !store.error && store.points.length === 0}
       <p class="note">{site.canConfigure ? 'Connect your first charger on your box: open Settings → Chargers, then choose Connect a charger.' : 'Ask an owner to connect the first charger on the box, under Settings → Chargers.'} Once connected and added there, it appears here too.</p>
     {/if}
-    {#each store.points.filter(lp => !loadpointId || lp.id === loadpointId) as lp (lp.id)}
+    {#each store.points.filter(lp => (!loadpointId || lp.id === loadpointId) && (!driverName || lp.driverName === driverName)) as lp (lp.id)}
       {@const planStatus = (lp.planPending || store.planPending) && justSavedGoal?.id === lp.id
         ? 'Goal saved. Updating the plan…'
         : evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
       <div class="charger">
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
-        <ControlFeedback value={lp.controlFeedback ? [lp.controlFeedback] : []} live={!stale} />
         {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
         {#if !stale && planStatus}<p class="hint">{planStatus}</p>{/if}
         {#if lp.charger?.updated_at_ms || lp.manual?.charger_updated_at_ms}
@@ -844,6 +844,7 @@
                list here would claim an idle week the app has not read. -->
           <p class="hint">Charging times aren't readable right now.</p>
         {/if}
+        <ControlFeedback value={lp.controlFeedback ? [lp.controlFeedback] : []} live={!stale} embedded />
       </div>
     {:else}
       {#if store.loaded && !store.error && store.points.length > 0}

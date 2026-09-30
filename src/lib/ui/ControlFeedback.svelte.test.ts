@@ -50,3 +50,17 @@ it('shows independent overview tiers and a loss alarm without lowering another d
  expect(screen.queryByText('Alarm · Tier 0')).toBeNull()
  expect(screen.queryByText('Tier 2 · Site confirmed')).toBeNull()
 })
+
+it('keeps embedded evidence folded below controls and preserves an open section on updates',async()=>{
+ const value=[{driver:'Sungrow',kind:'battery',reason:'power_observed',verification_tier:2}];
+ const view=render(ControlFeedback,{value,embedded:true});
+ const disclosure=document.querySelector('details')!;
+ expect(disclosure.open).toBe(false);
+ expect(disclosure.querySelector('summary')!.textContent).toContain('Are we in control?');
+ expect(disclosure.contains(screen.getByText('Device follows the command'))).toBe(true);
+ disclosure.open=true;
+ await view.rerender({value:[{...value[0],verification_tier:0,reason:'telemetry_stale',verification_lost:true}],embedded:true});
+ expect(document.querySelector('details')).toBe(disclosure);
+ expect(disclosure.open).toBe(true);
+ expect(disclosure.querySelector('summary')!.textContent).toContain('Alarm');
+});

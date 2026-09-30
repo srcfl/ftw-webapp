@@ -1,11 +1,16 @@
 <script lang="ts">
-  import { feedbackRows, feedbackStatus, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
-  let { value, live = true, expanded = false }: { value: unknown; live?: boolean; expanded?: boolean } = $props()
+  import { feedbackRows, feedbackStatus, feedbackSummary, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
+  let { value, live = true, expanded = false, embedded = false }: { value: unknown; live?: boolean; expanded?: boolean; embedded?: boolean } = $props()
   const rows = $derived(feedbackRows(value))
 </script>
 
 {#if rows.length}
   <section class="control-results" aria-label="Control results">
+    <svelte:element this={embedded ? 'details' : 'div'} class:control-evidence={embedded}>
+    {#if embedded}
+      {@const summary = feedbackSummary(value,live)}
+      <summary><span>Are we in control?</span><strong data-tone={summary.tone}>{summary.label}</strong></summary>
+    {:else}
     <h2>Are you in control?</h2>
     <ul class="control-status-list" aria-label="Control status by device">
       {#each rows as row (`${row.driver}:${row.kind}`)}
@@ -13,6 +18,7 @@
         <li><span>{row.driver} · {row.kind ?? 'device'}</span><strong data-tone={status.tone}>{status.label}</strong></li>
       {/each}
     </ul>
+    {/if}
     {#each rows as row (`${row.driver}:${row.kind}`)}
       {@const text = feedbackText(row, live)}
       {@const curve = feedbackCurve(row,live)}
@@ -40,10 +46,14 @@
         </details>
       </article>
     {/each}
+    </svelte:element>
   </section>
 {/if}
 
 <style>
+  .control-evidence { border-top: 1px solid var(--line); padding-top: .8rem; }
+  .control-evidence > summary { cursor: pointer; font-size: .85rem; }
+  .control-evidence > summary strong { display: block; margin: .3rem 0 0 1rem; font-size: .75rem; font-weight: 500; }
   .control-results { margin: 1rem 0; }
   h2 { font-size: 1rem; margin: 0 0 .7rem; }
   article { background: var(--surface-raised); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; margin: .6rem 0; overflow-wrap: anywhere; }

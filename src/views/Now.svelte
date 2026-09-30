@@ -7,7 +7,6 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
-  import ControlEvidencePanel from "$lib/ui/ControlEvidencePanel.svelte"
   import {feedbackForPlanet, type ProofPlanetScope} from "$lib/format/control-feedback.mjs"
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
@@ -170,6 +169,7 @@
   $effect(() => {
     if (active && requestedCharger) {
       selectedCharger = requestedCharger
+      selectedDriver = null
       evOpen = true
       requestedCharger = null
     }
@@ -177,9 +177,12 @@
   function closeEv() {
     evOpen = false
     selectedCharger = null
+    selectedDriver = null
+    proofScope = null
     if (location.hash.startsWith('#/now?charger=')) history.replaceState(null, '', location.pathname + location.search + '#/now')
   }
-  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null }> | null>(null)
+  let selectedDriver = $state<string | null>(null)
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null; driverName?: string | null }> | null>(null)
   $effect(() => {
     if (!evOpen || EvPanel) return
     void import('./EvPanel.svelte').then((m) => {
@@ -211,8 +214,8 @@
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
 
   function openPlanetControls(scope: ProofPlanetScope) {
-    proofScope = null
-    if (scope.role === 'ev') { selectedCharger = null; evOpen = true }
+    proofScope = scope
+    if (scope.role === 'ev') { selectedCharger = null; selectedDriver = scope.id?.startsWith('agg-') ? null : scope.name ?? null; evOpen = true }
     else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
   }
 
@@ -223,8 +226,7 @@
     if (!el) return
     const onPlanet = (e: Event) => {
       const scope = (e as CustomEvent<ProofPlanetScope>).detail ?? {}
-      if (feedbackForPlanet(untrack(() => status?.control_feedback), scope).length) proofScope = scope
-      else openPlanetControls(scope)
+      openPlanetControls(scope)
     }
     el.addEventListener('ftw-planet-click', onPlanet)
     return () => el.removeEventListener('ftw-planet-click', onPlanet)
@@ -360,23 +362,16 @@
     {/if}
   </div>
 
-  {#if proofScope}
-    <ControlEvidencePanel value={proofRows} live={statusLive}
-      onclose={() => (proofScope = null)}
-      oncontrols={() => openPlanetControls(proofScope ?? {})}
-      controlsLabel={proofScope.role === 'ev' ? 'Charger controls' : 'Live power'} />
-  {/if}
-
   {#if Outlook}
     <Outlook {site} {status} {active} statusFresh={statusLive} {statusReceivedAt} />
   {/if}
 
   {#if evOpen && EvPanel}
-    <EvPanel {site} loadpointId={selectedCharger} onclose={closeEv} />
+    <EvPanel {site} loadpointId={selectedCharger} driverName={selectedDriver} onclose={closeEv} />
   {/if}
 
   {#if liveRole}
-    <LivePanel {site} role={liveRole} fields={flowFields} onclose={() => (liveRole = null)} />
+    <LivePanel {site} role={liveRole} fields={flowFields} feedback={proofRows} feedbackLive={statusLive} onclose={() => { liveRole = null; proofScope = null }} />
   {/if}
 {/if}
 

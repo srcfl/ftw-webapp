@@ -12,7 +12,7 @@ export function feedbackText(row: ControlFeedback, live?: boolean): {title:strin
 export function feedbackPower(value: unknown, kind?: string): string;
 export function feedbackValues(row: ControlFeedback, live?: boolean): [string,string][];
 export function feedbackProof(row: ControlFeedback, live?: boolean): string;
-export function renderFeedback(root: HTMLElement | null, value: unknown, live?: boolean): void;
+export function renderFeedback(root: HTMLElement | null, value: unknown, live?: boolean, options?: {compact?:boolean;expanded?:boolean;embedded?:boolean}): void;
 
 export function feedbackSite(row: ControlFeedback, live?: boolean): string;
 export function feedbackCurve(row: ControlFeedback, live?: boolean): {device:string;site:string;label:string;scale:string;duration:string}|null;
@@ -23,3 +23,5 @@ export interface ControlProof { label:string; detail:string; tone:string; inacti
 export interface ProofPlanetScope { role?:string; name?:string; id?:string }
 export function feedbackForPlanet(value:unknown, planet?:ProofPlanetScope): ControlFeedback[];
 export function withControlProof<T>(planets:T[], value:unknown, live?:boolean): (T & {controlProof?:ControlProof})[];
+
+export function feedbackSummary(value:unknown, live?:boolean): {label:string;tone:string};

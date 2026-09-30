@@ -84,6 +84,7 @@ export interface WireManualStatus {
 
 export interface Loadpoint {
   controlFeedback?: ControlFeedback
+  driverName?: string
   id: string
   /** Whether a cable is in. False means the rest is about an empty bay. */
   pluggedIn: boolean
@@ -168,6 +169,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
   const boost = w.battery_boost
   return {
     id: typeof w.id === 'string' ? w.id : '',
+    ...(typeof w.driver_name === 'string' ? {driverName:w.driver_name} : {}),
     pluggedIn: w.plugged_in === true,
     powerW: num(w.current_power_w) ?? 0,
     socPct: w.plugged_in === false ? null : socFraction !== null && socFraction >= 0 && socFraction <= 1

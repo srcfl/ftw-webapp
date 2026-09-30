@@ -1,4 +1,4 @@
-// Vendored from srcfl/ftw web/components/ftw-energy-flow.js at 278740d0759674860224cb18979746a666d4050d.
+// Vendored from srcfl/ftw web/components/ftw-energy-flow.js at c4dc4b85f5e80ee19bf38c4aa4991e6fb0ee386b.
 // Do not edit here; change the box source, then copy it here.
 //
 // <ftw-energy-flow> — hero diagram for /next.
@@ -1482,7 +1482,7 @@ function renderCircleNode({ pos, title, nameLabel, value, sub, color, soc,
   // derived from the visible title/name so the announcement names
   // what activating this node will open.
   const nodeLabel = [title, nameLabel].filter(Boolean).join(" ");
-  const ariaLabel = controlProof ? `${nodeLabel}: ${controlProof.detail}. View measurements` : nodeLabel ? `Open ${nodeLabel}` : "Open node";
+  const ariaLabel = controlProof ? `${nodeLabel}: ${controlProof.detail}. Open device` : nodeLabel ? `Open ${nodeLabel}` : "Open node";
   const groupAttrs = clickable
     ? ` class="ef-node ef-clickable" data-role="${escapeXml(role)}" data-name="${escapeXml(name)}" data-id="${escapeXml(id)}" tabindex="0" role="button" aria-label="${escapeXml(ariaLabel)}"`
     : ` class="ef-node"`;

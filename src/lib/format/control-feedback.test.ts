@@ -26,3 +26,24 @@ test('each device has its own status and unknown background is not a veto',()=>{
  assert.equal(feedbackStatus({driver:'ev',reason:'telemetry_stale',verification_tier:0,verification_lost:true}).tone,'alarm');
  assert.equal(feedbackStatus(row,false).tone,'unknown');
 });
+
+test('embedded on-box evidence preserves the open disclosure and focus across updates',async()=>{
+ const {renderFeedback}=await import('./control-feedback.mjs');
+ const root=document.createElement('section');document.body.append(root);
+ const row={driver:'battery',kind:'battery',reason:'power_observed',verification_tier:2};
+ try {
+  renderFeedback(root,[row],true,{embedded:true});
+  const disclosure=root.querySelector('details')!;
+  const summary=disclosure.querySelector('summary')!;
+  assert.equal(disclosure.open,false);
+  assert.match(summary.textContent!,/Are we in control\?/);
+  disclosure.open=true;summary.tabIndex=0;summary.focus();
+  renderFeedback(root,[{...row,reason:'telemetry_stale',verification_lost:true,verification_tier:0}],true,{embedded:true});
+  assert.equal(root.querySelector('details'),disclosure);
+  assert.equal(disclosure.open,true);
+  assert.equal(document.activeElement,summary);
+  assert.match(summary.textContent!,/Alarm/);
+  renderFeedback(root,[row],false,{embedded:true});
+  assert.match(summary.textContent!,/No live proof/);
+ } finally {root.remove()}
+});
