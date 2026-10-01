@@ -9,7 +9,7 @@
  * told is decided here, which is what makes this file worth testing.
  */
 
-import { withControlProof, type ControlProof } from '$lib/format/control-feedback.mjs'
+import { withControlMarks, type ControlMark } from '$vendor/ftw/control-feedback.js'
 import { FID } from '$lib/format/explanation'
 import { FLOW_IDLE_W } from '$vendor/ftw/ftw-energy-flow.js'
 
@@ -20,7 +20,7 @@ export interface FlowDailyPart {
 }
 
 export interface FlowPlanet {
-  controlProof?: ControlProof
+  controlMark?: ControlMark
   placeholder?: boolean
   id: string
   corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
@@ -437,7 +437,7 @@ export function flowReadingsFromStatus(status: SiteStatus, live = true): FlowRea
 
   return {
     load: (num(status.load_w) ?? 0) / 1000,
-    planets: withControlProof(planets, status.control_feedback, live),
+    planets: withControlMarks(planets, status.control_feedback, live),
     selfPoweredPctToday,
   }
 }

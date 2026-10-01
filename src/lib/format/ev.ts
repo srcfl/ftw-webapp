@@ -11,7 +11,7 @@
  */
 
 import { formatPower } from './power'
-import { feedbackRows, feedbackText, type ControlFeedback } from './control-feedback.mjs'
+import { controlRows, type ControlFeedback } from '$vendor/ftw/control-feedback.js'
 
 /** The box's own field names for one charger, as `/api/loadpoints` serves them. */
 export interface WireLoadpoint {
@@ -190,7 +190,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     manualSaveError: w.manual_save_error === true,
     ...(w.manual ? { manual: w.manual } : {}),
     ...(w.charger ? { charger: w.charger } : {}),
-    ...(feedbackRows([w.control_feedback])[0] ? {controlFeedback: feedbackRows([w.control_feedback])[0]!} : {}),
+    ...(controlRows([w.control_feedback])[0] ? { controlFeedback: controlRows([w.control_feedback])[0]! } : {}),
     commandedW: num(w.commanded_w),
     commandedReason: typeof w.commanded_reason === 'string' ? w.commanded_reason : '',
     commandedKnown: w.commanded_known === true,
@@ -288,7 +288,6 @@ export function evStatusSentence(lp: Loadpoint, canControl = true): string {
 
   if (lp.charger && lp.charger.available !== true) return lp.charger.known ? 'Charger status is out of date. FTW cannot confirm whether the car is charging.' : 'Waiting for the charger’s first status report.'
   if (!lp.pluggedIn) return 'Not plugged in'
-  if (lp.controlFeedback?.severity === "warning") { const f = feedbackText(lp.controlFeedback); return `${f.detail} ${f.action}` }
   if (lp.manualActive) return manualStatusSentence(lp)
   if (lp.powerW >= 100) {
     const p = formatPower(lp.powerW)

@@ -138,6 +138,7 @@
       <h2>{spec.title}</h2>
       <button class="close" onclick={onclose} aria-label="Close">Close</button>
     </header>
+    <ControlFeedback value={feedback} live={feedbackLive} />
 
     {#if parts === null}
       <p class="note">No reading from your box yet.</p>
@@ -156,7 +157,6 @@
       </div>
       <p class="axis">last two minutes</p>
     {/if}
-    <ControlFeedback value={feedback} live={feedbackLive} embedded />
   </div>
 </div>
 

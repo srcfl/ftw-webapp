@@ -2,14 +2,6 @@
 "ftw-webapp": patch
 ---
 
-Show control limits and measured response in Now and the charging panel. Distinguish command acknowledgement, device power and independent site-meter confirmation. Keep missing, stale and uncertain evidence explicit.
+Answer "Are we in control?" first when you open the battery, solar or charging panel: Following FTW, Waiting, Limited, Not following, No contact or Not controlled, with one sentence and, when you can act, the next step. "How FTW knows" shows what FTW sent and whether the device accepted it, measured it and a separate grid meter confirmed it, with numbers and response curves for experts.
 
-Show the measured comparison curves, changes in other flows and any unexplained difference behind Core's verdict.
-
-Keep the overview quiet with small evidence marks and no tier labels. Show normal response waits without an alarm, hide marks for inactive commands and open the device panel on tap.
-
-Put a collapsed “Are we in control?” section below the device’s main view and charging controls. Open the chosen charger directly, and keep its evidence and failures in that panel.
-
-Keep measurement tiers separate from target fulfilment. Show independently confirmed partial power with its shortfall and unknown cause, and use an amber mark for shortfalls and known limits while retaining alarms for faults and wrong responses.
-
-Show the box's full-battery charging pause, current charge level and resume threshold without promoting the measurement tier or hiding faults.
+The overview stays quiet while FTW is in control and marks only devices that need a look (amber) or attention now (red); a combined bubble keeps the worst mark. The charging status line keeps power first. The words come from the box's own file, copied with a recorded digest so the two cannot drift apart unnoticed.

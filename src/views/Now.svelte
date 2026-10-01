@@ -7,7 +7,7 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
-  import {feedbackForPlanet, type ProofPlanetScope} from "$lib/format/control-feedback.mjs"
+  import { controlForPlanet, type ControlScope } from '$vendor/ftw/control-feedback.js'
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
   import { onMount, untrack } from 'svelte'
@@ -208,12 +208,12 @@
 
   /** The live-line sheet for one part of the house, or null. */
   let liveRole = $state<LiveRole | null>(null)
-  let proofScope = $state<ProofPlanetScope | null>(null)
-  const proofRows = $derived(feedbackForPlanet(status?.control_feedback, proofScope ?? {}))
+  let proofScope = $state<ControlScope | null>(null)
+  const proofRows = $derived(controlForPlanet(status?.control_feedback, proofScope ?? {}))
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
 
-  function openPlanetControls(scope: ProofPlanetScope) {
+  function openPlanetControls(scope: ControlScope) {
     proofScope = scope
     if (scope.role === 'ev') { selectedCharger = null; selectedDriver = scope.id?.startsWith('agg-') ? null : scope.name ?? null; evOpen = true }
     else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
@@ -225,7 +225,7 @@
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
-      const scope = (e as CustomEvent<ProofPlanetScope>).detail ?? {}
+      const scope = (e as CustomEvent<ControlScope>).detail ?? {}
       openPlanetControls(scope)
     }
     el.addEventListener('ftw-planet-click', onPlanet)

@@ -5,7 +5,7 @@ import {SiteStore} from '$lib/state/site.svelte'
 import {LoopbackCarrier} from '$lib/carrier/loopback'
 import {SimBox} from '$lib/sim/box'
 
-test('opens the device panel first, with collapsed evidence that stays current',async()=>{
+test('opens the device panel with the answer first and keeps an open receipt through an alarm',async()=>{
   vi.useFakeTimers()
   vi.setSystemTime(new Date(2026,6,15,12))
   const box=new SimBox({now:()=>Date.now()})
@@ -15,8 +15,10 @@ test('opens the device panel first, with collapsed evidence that stays current',
   vi.spyOn(site,'api').mockImplementation(req=>{
     if(req.path!=='/api/status') return api(req)
     const status={grid_w:1000,load_w:500,drivers:{sungrow:{status:'ok',bat_w:1000}},control_feedback:[
-      {driver:'sungrow',kind:'battery',reason:lost?'telemetry_stale':'power_observed',verification_tier:lost?0:2,verification_lost:lost,actual_w:lost?null:1000},
-      {driver:'easee',kind:'ev',reason:'telemetry_stale',verification_tier:0,verification_lost:true,actual_w:null},
+      lost
+        ? {driver:'sungrow',kind:'battery',mode:'planner_arbitrage',status:'no_contact',reason:'readings_lost',severity:'alarm',evidence:'accepted',readings_fresh:false,actual_w:null}
+        : {driver:'sungrow',kind:'battery',mode:'planner_arbitrage',status:'following',reason:'power_observed',severity:'info',evidence:'confirmed',readings_fresh:true,actual_w:1000,confirmed_at_ms:Date.now()},
+      {driver:'easee',kind:'ev',status:'no_contact',reason:'readings_lost',severity:'alarm',evidence:'accepted',readings_fresh:false,actual_w:null},
     ]}
     return Promise.resolve({status:200,headers:{},body:new TextEncoder().encode(JSON.stringify(status))})
   })
@@ -24,14 +26,15 @@ test('opens the device panel first, with collapsed evidence that stays current',
     site.connect(new LoopbackCarrier(box,{latencyMs:0}))
     const view=render(Now,{props:{site}})
     for(let i=0;i<200;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
-    expect(view.queryByText('Are you in control?')).toBeNull()
+    expect(view.queryByText('Are we in control?')).toBeNull()
     const flow=document.querySelector('ftw-energy-flow')!
     const button=flow.shadowRoot!.querySelector('.ef-layer[aria-hidden="false"] [data-role="battery"]')!
-    expect(button.getAttribute('aria-label')).toContain('Tier 2')
+    expect(button.getAttribute('aria-label')).not.toMatch(/tier/i)
     button.dispatchEvent(new MouseEvent('click',{bubbles:true}))
     await vi.advanceTimersByTimeAsync(10)
     const dialog=document.querySelector('[role="dialog"]')!
-    expect(dialog.textContent).toContain('sungrow · battery')
+    expect(dialog.textContent).toContain('Following FTW')
+    expect(dialog.textContent).toContain('Charging 1.0 kW as planned.')
     expect(dialog.textContent).not.toContain('easee')
     expect(dialog.getAttribute('aria-label')).toBe('Battery')
     const evidence=dialog.querySelector('details')!
@@ -39,7 +42,7 @@ test('opens the device panel first, with collapsed evidence that stays current',
     evidence.open=true
     lost=true
     for(let i=0;i<150;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
-    expect(dialog.textContent).toContain('Alarm · Measurements lost')
+    expect(dialog.textContent).toContain('Lost control')
     expect(evidence.open).toBe(true)
     window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))
     await vi.advanceTimersByTimeAsync(10)
@@ -53,7 +56,7 @@ test('an EV tap goes straight to charging controls even when status carries evid
  vi.useFakeTimers();vi.setSystemTime(new Date(Date.UTC(2026,6,15,18,30)));
  const box=new SimBox({now:()=>Date.now()});const site=new SiteStore('ev-proof-test');
  const api=site.api.bind(site);
- vi.spyOn(site,'api').mockImplementation(req=>req.path==='/api/status' ? Promise.resolve({status:200,headers:{},body:new TextEncoder().encode(JSON.stringify({drivers:{easee:{status:'ok',ev_w:7200}},control_feedback:[{driver:'easee',kind:'ev',reason:'power_observed',verification_tier:1}]}))}) : api(req));
+ vi.spyOn(site,'api').mockImplementation(req=>req.path==='/api/status' ? Promise.resolve({status:200,headers:{},body:new TextEncoder().encode(JSON.stringify({drivers:{easee:{status:'ok',ev_w:7200}},control_feedback:[{driver:'easee',kind:'ev',status:'following',reason:'power_observed',severity:'info',evidence:'measured',readings_fresh:true,actual_w:7200}]}))}) : api(req));
  try {
   site.connect(new LoopbackCarrier(box,{latencyMs:0}));render(Now,{props:{site}});
   for(let i=0;i<200;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}

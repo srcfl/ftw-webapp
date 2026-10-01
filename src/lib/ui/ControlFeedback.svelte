@@ -1,88 +1,126 @@
+<!--
+  "Are we in control?" for one device sheet. The box decides the status, its
+  severity and the evidence; this component only renders the words the box's
+  own dashboard uses. Keyed blocks keep an open "How FTW knows" open while
+  the status refreshes.
+-->
 <script lang="ts">
-  import { feedbackRows, feedbackStatus, feedbackSummary, feedbackText, feedbackValues, feedbackProof, feedbackSite, feedbackCurve } from '$lib/format/control-feedback.mjs'
-  let { value, live = true, expanded = false, embedded = false }: { value: unknown; live?: boolean; expanded?: boolean; embedded?: boolean } = $props()
-  const rows = $derived(feedbackRows(value))
+  import {
+    controlRows,
+    controlStatus,
+    controlReceipt,
+    controlNumbers,
+    controlCurve,
+  } from '$vendor/ftw/control-feedback.js'
+
+  let { value, live = true }: { value: unknown; live?: boolean } = $props()
+  const rows = $derived(controlRows(value))
+  const ICONS: Record<string, string> = { ok: '✓', neutral: '•', warning: '▲', alarm: '!', stale: '…' }
 </script>
 
 {#if rows.length}
-  <section class="control-results" aria-label="Control results">
-    <svelte:element this={embedded ? 'details' : 'div'} class:control-evidence={embedded}>
-    {#if embedded}
-      {@const summary = feedbackSummary(value,live)}
-      <summary><span>Are we in control?</span><strong data-tone={summary.tone}>{summary.label}</strong></summary>
-    {:else}
-    <h2>Are you in control?</h2>
-    <ul class="control-status-list" aria-label="Control status by device">
-      {#each rows as row (`${row.driver}:${row.kind}`)}
-        {@const status = feedbackStatus(row,live)}
-        <li><span>{row.driver} · {row.kind ?? 'device'}</span><strong data-tone={status.tone}>{status.label}</strong></li>
-      {/each}
-    </ul>
-    {/if}
+  <section class="control" aria-label="Are we in control?">
+    <p class="question">Are we in control?</p>
     {#each rows as row (`${row.driver}:${row.kind}`)}
-      {@const text = feedbackText(row, live)}
-      {@const curve = feedbackCurve(row,live)}
-      <article class:needs-attention={live && row.severity === 'warning'} class:not-current={!live} class:control-alarm={live && row.verification_lost}>
-        <div class="device">{row.driver} · {row.kind ?? 'device'}</div>
-        <h3>{text.title}</h3>
-        <p>{text.detail}</p>
-        {#if live && row.device_reason}<p>Device reports: {row.device_reason}</p>{/if}
-        <p class="action">{text.action}</p>
-        <div class="proof" data-tier={live ? row.verification_tier : undefined}>{feedbackProof(row, live)}</div>
-        <p class="action">{feedbackSite(row, live)}</p>
-        <details open={expanded}>
-          <summary>Request and measurements</summary>
-          <dl>{#each feedbackValues(row, live) as [label, value]}<dt>{label}</dt><dd>{value}</dd>{/each}</dl>
-          {#if curve}
-            <svg viewBox="0 0 280 110" role="img" aria-label={curve.label}>
-              <polyline class="zero" points="10,55 270,55" />
-              <polyline class="device-line" points={curve.device} />
-              <polyline class="site-line" points={curve.site} />
-            </svg>
-            <p class="time">Device: solid · Adjusted site: dashed · ±{curve.scale} · {curve.duration}</p>
+      {@const status = controlStatus(row, live)}
+      {@const numbers = controlNumbers(row, live)}
+      {@const curve = controlCurve(row, live)}
+      <div class="block" data-tone={status.tone}>
+        <h3><span class="icon" aria-hidden="true">{ICONS[status.tone] ?? ICONS.neutral}</span>{status.title}</h3>
+        <p class="text">{status.text}</p>
+        {#if status.proof}<p class="proof">{status.proof}</p>{/if}
+        {#if status.next}<p class="next">{status.next}</p>{/if}
+        <details>
+          <summary>How FTW knows</summary>
+          <ol>
+            {#each controlReceipt(row, live) as step (step.step)}
+              <li data-state={step.state}><span class="step">{step.step}</span><span>{step.value}</span></li>
+            {/each}
+          </ol>
+          {#if numbers.length || curve}
+            <details>
+              <summary>Numbers</summary>
+              <dl>
+                {#each numbers as [label, text] (label)}<dt>{label}</dt><dd>{text}</dd>{/each}
+              </dl>
+              {#if curve}
+                <svg viewBox="0 0 280 110" role="img" aria-label={curve.label}>
+                  <polyline class="zero" points="10,55 270,55" />
+                  <polyline class="device-line" points={curve.device} />
+                  <polyline class="site-line" points={curve.site} />
+                </svg>
+              {/if}
+            </details>
           {/if}
-          {#if live && row.site_meter && row.site_after_at_ms}<p class="time">Site meter: {row.site_meter} · {new Date(row.site_after_at_ms).toLocaleTimeString()}</p>{/if}
-          {#if row.observed_at_ms}<p class="time">Last device reading: {new Date(row.observed_at_ms).toLocaleTimeString()}</p>{/if}
         </details>
-      </article>
+      </div>
     {/each}
-    </svelte:element>
   </section>
 {/if}
 
 <style>
-  .control-evidence { border-top: 1px solid var(--line); padding-top: .8rem; }
-  .control-evidence > summary { cursor: pointer; font-size: .85rem; }
-  .control-evidence > summary strong { display: block; margin: .3rem 0 0 1rem; font-size: .75rem; font-weight: 500; }
-  .control-results { margin: 1rem 0; }
-  h2 { font-size: 1rem; margin: 0 0 .7rem; }
-  article { background: var(--surface-raised); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; margin: .6rem 0; overflow-wrap: anywhere; }
-  article.needs-attention { border-inline-start: 4px solid var(--fresh-stale); }
-  article.not-current { opacity: .7; }
-  .device,.action,.time { color: var(--fg-dim); }
-  .device { font-size: .8rem; }
-  h3 { font-size: 1rem; margin: .3rem 0 .6rem; }
-  p { font-size: .9rem; line-height: 1.5; margin: .4rem 0; }
-  .proof { font-size: .85rem; font-weight: 600; margin-top: .7rem; }
-  .proof[data-tier="2"] { color: var(--energy-export); }
-  .proof[data-tier="1"] { color: var(--energy-storage); }
-  summary { cursor: pointer; font-size: .85rem; padding-top: .5rem; }
-  dl { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem 1rem; font-size: .85rem; }
+  .control { margin: 0 0 var(--space-3, 12px); }
+  .question {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    margin: 0 0 8px;
+  }
+  .block {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 0 0 10px;
+    background: var(--surface-raised);
+  }
+  .block[data-tone='warning'] { border-color: var(--amber); }
+  .block[data-tone='alarm'] { border-color: var(--red-e); }
+  .block[data-tone='stale'] { opacity: 0.75; }
+  h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .icon {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    background: var(--line);
+    color: var(--fg-dim);
+  }
+  [data-tone='ok'] .icon { background: color-mix(in srgb, var(--green-e) 22%, transparent); color: var(--green-e); }
+  [data-tone='warning'] .icon { background: color-mix(in srgb, var(--amber) 22%, transparent); color: var(--amber); }
+  [data-tone='alarm'] .icon { background: var(--red-e); color: var(--on-accent); }
+  p { margin: 0; font-size: 0.92rem; line-height: 1.45; }
+  .proof, .next { margin-top: 4px; font-size: 0.85rem; color: var(--fg-dim); }
+  .next { color: var(--fg); }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-size: 0.82rem; color: var(--fg-dim); padding: 4px 0; }
+  ol { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+  li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 8px; align-items: baseline; font-size: 0.85rem; overflow-wrap: anywhere; }
+  .step { display: flex; align-items: center; gap: 6px; color: var(--fg-dim); }
+  .step::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--fg-muted); }
+  li[data-state='done'] .step::before { background: var(--green-e); border-color: var(--green-e); }
+  li[data-state='wait'] .step::before { border-style: dashed; }
+  li[data-state='fail'] .step::before { background: var(--red-e); border-color: var(--red-e); }
+  li[data-state='none'] { opacity: 0.65; }
+  dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 6px 0; font-size: 0.82rem; }
   dt { color: var(--fg-dim); }
-  dd { margin: 0; text-align: right; }
-  svg { width: 100%; max-height: 160px; }
+  dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  svg { width: 100%; max-height: 140px; }
   polyline { fill: none; }
   .zero { stroke: var(--line); stroke-width: 1; }
-  .device-line { stroke: var(--energy-storage); stroke-width: 3; }
-  .site-line { stroke: var(--energy-export); stroke-width: 2; stroke-dasharray: 5 4; }
-  .control-status-list { display: flex; flex-wrap: wrap; gap: .6rem; list-style: none; padding: 0; margin: 0 0 1rem; }
-  .control-status-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .65rem .8rem; border: 1px solid var(--line); border-radius: 8px; font-size: .85rem; }
-  .control-status-list strong { font-size: .8rem; }
-  [data-tone="confirmed"] { color: var(--energy-export); }
-  [data-tone="measured"] { color: var(--energy-storage); }
-  [data-tone="waiting"] { color: var(--energy-generation); }
-  [data-tone="unknown"] { color: var(--fg-dim); }
-  [data-tone="alarm"], .control-alarm h3 { color: var(--energy-import); }
-  [data-tone="warning"] { color: var(--energy-generation); }
-  article.control-alarm { border-inline-start: 4px solid var(--energy-import); }
+  .device-line { stroke: var(--cyan); stroke-width: 3; }
+  .site-line { stroke: var(--green-e); stroke-width: 2; stroke-dasharray: 5 4; }
 </style>

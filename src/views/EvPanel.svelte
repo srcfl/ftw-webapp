@@ -464,6 +464,7 @@
         ? 'Goal saved. Updating the plan…'
         : evPlanSentence({ ...lp, planPending: lp.planPending || store.planPending, planOutdated: lp.planOutdated || store.planOutdated }, now, site.canConfigure)}
       <div class="charger">
+        <ControlFeedback value={lp.controlFeedback ? [lp.controlFeedback] : []} live={!stale} />
         <p class="status" role="status" aria-live="polite">{stale ? 'Waiting for current charger status. The last reading is out of date.' : evStatusSentence(lp, site.canConfigure)}</p>
         {#if lp.manualSaveError}<p class="hint" role="status">{MANUAL_SAVE_ERROR_TEXT}</p>{/if}
         {#if !stale && planStatus}<p class="hint">{planStatus}</p>{/if}
@@ -844,7 +845,6 @@
                list here would claim an idle week the app has not read. -->
           <p class="hint">Charging times aren't readable right now.</p>
         {/if}
-        <ControlFeedback value={lp.controlFeedback ? [lp.controlFeedback] : []} live={!stale} embedded />
       </div>
     {:else}
       {#if store.loaded && !store.error && store.points.length > 0}

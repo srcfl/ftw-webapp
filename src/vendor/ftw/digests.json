@@ -1,8 +1,9 @@
 {
   "api-fetch.js": "ae8d2c3a8508d0b20c4afb599cf41f1cf5a5bba55deb6f496a530c233ea69934",
+  "control-feedback.js": "389b5f227b7d125fa4138cc9c803660bfcff58e5ba50a18a4384c58704317d4a",
   "ftw-bar-chart.js": "08b61533ed52b0031a39e723278c812b2b27356c1d574b65dfd5603992065d82",
   "ftw-element.js": "7241b586582187cef2d76d3ee11bbc596c4f428cea3a5c8c84227e113aa3c1a0",
-  "ftw-energy-flow.js": "16ac207d4be34cd5525454e6c2ac126c2d64501a5c3cef755a723720b0fafdda",
+  "ftw-energy-flow.js": "833251935de572cf7b23da8ed92b3e7409ccb8c25d6f2e7d98ac5f443d19b764",
   "ftw-price-chart.js": "29d32b1f309f58d8431a0a8c2e93bfb67d3b6ea0fc86965a57ddb54ca4e16537",
   "price-math.js": "bc6b104259f76d799c0a9d7f1d8a780d897cb7dc0d7a3e16a6572fb9c626d508",
   "price-strip.js": "413b2946c311e910c9a052a8407a3a403ed6caca0e210307c6f3e951896c2b9b",
