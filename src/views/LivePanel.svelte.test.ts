@@ -71,6 +71,10 @@ describe('a live line behind a bubble', () => {
   })
 
   it('opens a live line with only the stream — no box API needed', async () => {
+    // Resolve the parent's lazy chunks before timing the tap. A late import
+    // belongs to Now's startup, not to the panel being opened.
+    await import('$lib/state/now-status')
+    await import('$lib/state/now-ev-overlay')
     vi.useFakeTimers()
     vi.setSystemTime(NOON)
     const site = await streaming()

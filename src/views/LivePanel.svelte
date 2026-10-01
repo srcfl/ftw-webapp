@@ -10,6 +10,7 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte'
+  import ControlFeedback from '$lib/ui/ControlFeedback.svelte'
   import LiveChart from '$lib/ui/LiveChart.svelte'
   import { portal } from '$lib/ui/portal'
   import { formatPower } from '$lib/format/power'
@@ -23,6 +24,8 @@
   interface Props {
     site: SiteStore
     role: LiveRole
+    feedback?: unknown
+    feedbackLive?: boolean
     onclose: () => void
     /**
      * Readings to plot. The Now view may have put the car back on its own
@@ -31,7 +34,7 @@
     fields?: ReadonlyMap<number, number>
   }
 
-  let { site, role, onclose, fields }: Props = $props()
+  let { site, role, onclose, fields, feedback, feedbackLive = false }: Props = $props()
 
   // What each bubble is, in the terms this panel needs: the field to read,
   // the words for each direction, and whether the line may cross zero.
@@ -135,6 +138,7 @@
       <h2>{spec.title}</h2>
       <button class="close" onclick={onclose} aria-label="Close">Close</button>
     </header>
+    <ControlFeedback value={feedback} live={feedbackLive} />
 
     {#if parts === null}
       <p class="note">No reading from your box yet.</p>

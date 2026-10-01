@@ -7,6 +7,7 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
+  import { controlForPlanet, type ControlScope } from '$vendor/ftw/control-feedback.js'
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
   import { onMount, untrack } from 'svelte'
@@ -122,7 +123,7 @@
     }).headline
   )
   const liveReadings = $derived(
-    status && (statusLive || !live) ? flowReadingsFromStatus(status) : flowReadings(flowFields)
+    status && (statusLive || !live) ? flowReadingsFromStatus(status, statusLive) : flowReadings(flowFields)
   )
 
   let flow = $state<FtwEnergyFlowElement | null>(null)
@@ -168,6 +169,7 @@
   $effect(() => {
     if (active && requestedCharger) {
       selectedCharger = requestedCharger
+      selectedDriver = null
       evOpen = true
       requestedCharger = null
     }
@@ -175,9 +177,12 @@
   function closeEv() {
     evOpen = false
     selectedCharger = null
+    selectedDriver = null
+    proofScope = null
     if (location.hash.startsWith('#/now?charger=')) history.replaceState(null, '', location.pathname + location.search + '#/now')
   }
-  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null }> | null>(null)
+  let selectedDriver = $state<string | null>(null)
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null; driverName?: string | null }> | null>(null)
   $effect(() => {
     if (!evOpen || EvPanel) return
     void import('./EvPanel.svelte').then((m) => {
@@ -203,8 +208,16 @@
 
   /** The live-line sheet for one part of the house, or null. */
   let liveRole = $state<LiveRole | null>(null)
+  let proofScope = $state<ControlScope | null>(null)
+  const proofRows = $derived(controlForPlanet(status?.control_feedback, proofScope ?? {}))
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
+
+  function openPlanetControls(scope: ControlScope) {
+    proofScope = scope
+    if (scope.role === 'ev') { selectedCharger = null; selectedDriver = scope.id?.startsWith('agg-') ? null : scope.name ?? null; evOpen = true }
+    else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
+  }
 
   // Preserve a charger tap while the saved home reconnects. The panel shows
   // connection progress, then checks the capabilities the box reports.
@@ -212,13 +225,8 @@
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
-      const role = (e as CustomEvent<{ role?: string }>).detail?.role
-      if (role === 'ev') {
-        selectedCharger = null
-        evOpen = true
-      } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
-        liveRole = role as LiveRole
-      }
+      const scope = (e as CustomEvent<ControlScope>).detail ?? {}
+      openPlanetControls(scope)
     }
     el.addEventListener('ftw-planet-click', onPlanet)
     return () => el.removeEventListener('ftw-planet-click', onPlanet)
@@ -359,11 +367,11 @@
   {/if}
 
   {#if evOpen && EvPanel}
-    <EvPanel {site} loadpointId={selectedCharger} onclose={closeEv} />
+    <EvPanel {site} loadpointId={selectedCharger} driverName={selectedDriver} onclose={closeEv} />
   {/if}
 
   {#if liveRole}
-    <LivePanel {site} role={liveRole} fields={flowFields} onclose={() => (liveRole = null)} />
+    <LivePanel {site} role={liveRole} fields={flowFields} feedback={proofRows} feedbackLive={statusLive} onclose={() => { liveRole = null; proofScope = null }} />
   {/if}
 {/if}
 
