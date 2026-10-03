@@ -86,6 +86,13 @@ curl -s http://127.0.0.1:8787/fleet/stats
 The response says `reports, not unique boxes`. The public
 `https://relay.ftw.energy/fleet/stats` route returns 404.
 
+Project stats export is optional. Set both `RELAY_STATS_EXPORT_URL` and
+`RELAY_STATS_EXPORT_SECRET` in the deploy `.env` file to send aggregate counts
+to `stats.ftw.energy` every five minutes. The body has rooms, sockets, frame and
+byte counters, process uptime, and up to fourteen days of the daily fleet
+totals above. It has no handles, addresses, ids or routed frames. A failed
+export does not stop relay traffic.
+
 Two things worth an alert:
 
 - `/healthz` failing. The container restarts itself, but a loop means something

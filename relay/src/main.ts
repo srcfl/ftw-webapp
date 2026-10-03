@@ -7,6 +7,7 @@
  */
 
 import { RelayServer } from './server.ts'
+import { RelayStatsExporter } from './stats-export.ts'
 
 const relay = await RelayServer.start({
   port: Number(process.env['PORT'] ?? 8787),
@@ -29,8 +30,28 @@ const relay = await RelayServer.start({
 
 console.log(`relay listening on ${relay.url}`)
 
+const statsUrl = process.env['RELAY_STATS_EXPORT_URL'] ?? ''
+const statsSecret = process.env['RELAY_STATS_EXPORT_SECRET'] ?? ''
+let statsExporter: RelayStatsExporter | null = null
+if (statsUrl && statsSecret) {
+  try {
+    statsExporter = new RelayStatsExporter({
+      url: statsUrl,
+      secret: statsSecret,
+      snapshot: () => relay.aggregateStats(),
+      log: (line) => console.log(new Date().toISOString() + ' ' + line),
+    })
+    statsExporter.start()
+  } catch {
+    console.log(new Date().toISOString() + ' relay: stats export configuration rejected')
+  }
+} else if (statsUrl || statsSecret) {
+  console.log(new Date().toISOString() + ' relay: stats export configuration incomplete')
+}
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    statsExporter?.stop()
     void relay.stop().then(() => process.exit(0))
   })
 }
