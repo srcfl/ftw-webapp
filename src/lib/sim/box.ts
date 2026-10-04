@@ -40,6 +40,7 @@ import {
   ROLE_OWNER,
   API_CHUNK_BYTES,
   API_MAX_BYTES,
+  OP_PLANNER_PREFS_SET,
   OP_SET_MODE,
   OP_BATTERY_HOLD,
   OP_LOADPOINT_HOLD,
@@ -49,6 +50,7 @@ import {
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
+import { SAFETY_K_DEFAULT, clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
 import { SimApi, evPluggedIn } from './api'
 import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
@@ -178,7 +180,13 @@ const MODE_CATALOG: ModeInfo[] = [
       'Full price arbitrage \u2014 charge cheap, discharge into expensive hours (battery may export to grid).',
     tier: 'primary',
   },
-  { key: 'idle', label: 'Idle', tooltip: 'Do nothing \u2014 no dispatch.', tier: 'advanced' },
+  {
+    key: 'idle',
+    label: 'Stop batteries',
+    tooltip:
+      "Hold every battery at 0 W for as long as this mode is on, so none of them drifts back to the inverter's own behaviour. Fuse protection still applies: a battery discharges if the site is about to trip its main fuse. EV charging and PV curtailment carry on \u2014 stop those on their own controls.",
+    tier: 'advanced',
+  },
   {
     key: 'self_consumption',
     label: 'Self (manual)',
@@ -227,6 +235,7 @@ const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
  */
 const OP_SCOPES: Record<string, string> = {
   [OP_SET_MODE]: 'ftw.mode.write',
+  [OP_PLANNER_PREFS_SET]: 'ftw.mode.write',
   [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
@@ -343,6 +352,9 @@ export class SimBox {
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
   #mode: SiteMode = DEFAULT_MODE
+  /** Household planner prefs. The default matches Core; export starts unchecked. */
+  #safetyK = SAFETY_K_DEFAULT
+  #batteryExport: BatteryExport = 'unknown'
   #planRev = 1
   #role: Role
   #scopes: string[] | null
@@ -389,7 +401,33 @@ export class SimBox {
         surplusOnly: this.#evSurplusOnly,
       }),
       liveReading: () => this.#lastReading,
+      plannerPrefs: () => this.plannerPrefsBody(),
     })
+  }
+
+  /**
+   * GET /api/planner/prefs, in the box's shape.
+   *
+   * mapped_mode is this simulator's answer. Callers read it; they do not
+   * derive a mode from battery_export themselves.
+   */
+  plannerPrefsBody(): Record<string, unknown> {
+    const safetyK = clampSafetyK(this.#safetyK)
+    return {
+      forecast_trust: trustFromSafetyK(safetyK),
+      battery_export: this.#batteryExport,
+      safety_k: safetyK,
+      mapped_k: safetyK,
+      mapped_mode: this.#batteryExport === 'allowed' ? 'planner_arbitrage' : 'planner_passive_arbitrage',
+    }
+  }
+
+  get safetyK(): number {
+    return clampSafetyK(this.#safetyK)
+  }
+
+  get batteryExport(): BatteryExport {
+    return this.#batteryExport
   }
 
   /** What this session's enrolment is allowed to do. */
@@ -742,6 +780,52 @@ export class SimBox {
     if (cmd.op === OP_SET_MODE) {
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: MODE_KEYS.indexOf(this.#mode),
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // Household prefs. The mapped planner mode is decided here, the way
+    // ApplyPlannerPrefs does, and only applied when a planner mode is
+    // already driving. A manual house stays manual until "Use the plan".
+    if (cmd.op === OP_PLANNER_PREFS_SET) {
+      const k = cmd.args['safety_k']
+      const exp = cmd.args['battery_export']
+      if (k !== undefined && (typeof k !== 'number' || !Number.isFinite(k))) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'safety_k', value: k ?? null },
+        })
+        return
+      }
+      if (exp !== undefined && exp !== 'unknown' && exp !== 'not_allowed' && exp !== 'allowed') {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'battery_export', value: exp ?? null },
+        })
+        return
+      }
+      if (k === undefined && exp === undefined) {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
+        return
+      }
+      if (typeof k === 'number') this.#safetyK = clampSafetyK(k)
+      if (exp !== undefined) this.#batteryExport = exp as BatteryExport
+      const mapped = this.plannerPrefsBody()['mapped_mode']
+      if (
+        this.#mode.startsWith('planner_') &&
+        typeof mapped === 'string' &&
+        MODE_KEYS.includes(mapped) &&
+        mapped !== this.#mode
+      ) {
+        this.#mode = mapped
+      }
+      this.#planRev += 1
+      if (this.#subscribed) this.#sendSnapshot()
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#safetyK,
         src: 'core',
         uptimeMs: this.uptimeMs,
       })

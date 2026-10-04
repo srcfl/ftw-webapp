@@ -28,7 +28,7 @@
  */
 
 import { DAY_ANCHOR_PERMILLE, sample, stepSoc, type HouseConfig, type Reading } from './energy'
-import { OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/messages'
+import { OP_PLANNER_PREFS_SET, OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/messages'
 import { roleHasScope } from '$lib/protocol/contract'
 import { wireBytes } from '$lib/protocol/frame'
 import { buildEnrollmentUrl } from '$lib/identity/enrollment'
@@ -101,6 +101,8 @@ export interface RouteFacts {
 const ROUTES: Record<string, RouteFacts> = {
   // Reads the app makes, and one it never will.
   'GET /api/status': { tier: 'read' },
+  'GET /api/planner/prefs': { tier: 'read' },
+  'POST /api/planner/prefs': { tier: 'actuate', cmdOp: OP_PLANNER_PREFS_SET },
   'GET /api/energy/daily': { tier: 'read' },
   'GET /api/savings/daily': { tier: 'read' },
   'GET /api/app-link/devices': { tier: 'read' },
@@ -262,6 +264,8 @@ export interface SimApiOptions {
    * the same moment or the hero and the charger sheet disagree.
    */
   liveReading?: () => Reading | null
+  /** GET /api/planner/prefs, as the box currently holds it. */
+  plannerPrefs?: () => Record<string, unknown>
 }
 
 const DAY_MS = 86_400_000
@@ -342,9 +346,11 @@ export class SimApi {
   #testPushes = 0
   /** How many times this box was asked to restart, for a test to look at. */
   #restarts = 0
+  #plannerPrefs?: () => Record<string, unknown>
 
   constructor(opts: SimApiOptions) {
     this.#opts = opts
+    if (opts.plannerPrefs) this.#plannerPrefs = opts.plannerPrefs
     const now = opts.now()
     this.#devices = [
       {
@@ -508,6 +514,15 @@ export class SimApi {
     const route = matched.pattern
 
     if (route === 'GET /api/status') return this.#status()
+    if (route === 'GET /api/planner/prefs') {
+      return json(200, this.#plannerPrefs?.() ?? {
+        forecast_trust: 'balanced',
+        battery_export: 'unknown',
+        safety_k: 0.3,
+        mapped_k: 0.3,
+        mapped_mode: 'planner_passive_arbitrage',
+      })
+    }
     if (route === 'GET /api/energy/daily') return this.#energyDaily(req.query)
     if (route === 'GET /api/savings/daily') return this.#savingsDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()

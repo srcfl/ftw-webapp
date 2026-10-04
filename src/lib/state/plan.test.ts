@@ -49,11 +49,45 @@ describe('the mode the Plan store offers a way back from', () => {
     return { box, site, store }
   }
 
-  it('names the first primary mode as the plan to return to', async () => {
+  it('treats a planner mode as the plan, and hides planner keys from the manual list', async () => {
     const { store } = await connected()
-    expect(store.planHome?.key).toBe('planner_passive_arbitrage')
     expect(store.inManual).toBe(false)
+    expect(store.manualModes.every((m) => !m.key.startsWith('planner_'))).toBe(true)
+    expect(store.manualModes.some((m) => m.key === 'self_consumption')).toBe(true)
+    expect(store.manualModes.some((m) => m.key === 'planner_self')).toBe(false)
     store.destroy()
+  })
+
+  it('follows mapped_mode when handing the house back to the plan', async () => {
+    const { store, box, site } = await connected('self_consumption')
+    await store.load()
+    await store.setPrefs({ battery_export: 'allowed' })
+    expect(box.mode, 'a prefs write must not leave a manual mode on its own').toBe('self_consumption')
+    expect(box.batteryExport).toBe('allowed')
+    const sent = vi.spyOn(site, 'command')
+    await store.usePlan()
+    expect(box.mode).toBe('planner_arbitrage')
+    expect(sent.mock.calls.some((c) => c[0] === 'site.mode.set' && c[1]?.mode === 'planner_arbitrage')).toBe(
+      true
+    )
+    expect(sent.mock.calls.some((c) => c[1]?.mode === 'planner_passive_arbitrage')).toBe(false)
+    store.destroy()
+    site.destroy()
+  })
+
+  it('uses the passive mode when the prefs read fails', async () => {
+    const { store, box, site } = await connected('self_consumption')
+    await store.load()
+    await store.setPrefs({ battery_export: 'allowed' })
+    const api = site.api.bind(site)
+    vi.spyOn(site, 'api').mockImplementation(async (req) => {
+      if (req.path === '/api/planner/prefs') throw new Error('down')
+      return api(req)
+    })
+    await store.usePlan()
+    expect(box.mode).toBe('planner_passive_arbitrage')
+    store.destroy()
+    site.destroy()
   })
 
   it('treats Self (manual) as a manual fallback, not a plan', async () => {
@@ -86,6 +120,54 @@ describe('the mode the Plan store offers a way back from', () => {
     expect(store.command.kind).toBe('applied')
     expect(box.mode).toBe('idle')
     expect(store.shownMode).toBe('idle')
+    store.destroy()
+    site.destroy()
+  })
+})
+
+
+describe('planner preference changes from another client', () => {
+  it('ignores a preference read sent before this phone changed the margin', async () => {
+    const box = new SimBox({})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    await store.load()
+    const old = box.plannerPrefsBody()
+    let finish!: (value: Awaited<ReturnType<SiteStore['api']>>) => void
+    const pending = new Promise<Awaited<ReturnType<SiteStore['api']>>>((resolve) => { finish = resolve })
+    const api = site.api.bind(site)
+    let reading = false
+    vi.spyOn(site, 'api').mockImplementationOnce(async (request) => {
+      expect(request.path).toBe('/api/planner/prefs')
+      reading = true
+      return pending
+    }).mockImplementation(api)
+    const load = store.load()
+    await vi.waitFor(() => expect(reading).toBe(true))
+    await store.setPrefs({ safety_k: 0.15 })
+    finish({ status: 200, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify(old)) })
+    await load
+    expect(store.prefs!.safetyK).toBe(0.15)
+    store.destroy()
+    site.destroy()
+  })
+
+  it('keeps the box export permission when this phone changes style from an old read', async () => {
+    const box = new SimBox({})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    await store.load()
+    expect(store.prefs!.batteryExport).toBe('unknown')
+    await site.command('planner.prefs.set', { battery_export: 'allowed' })
+    const sent = vi.spyOn(site, 'command')
+    await store.setPrefs({ safety_k: 0.15 })
+    expect(sent.mock.calls[0]).toEqual(['planner.prefs.set', { safety_k: 0.15 }])
+    expect(box.batteryExport).toBe('allowed')
+    expect(box.safetyK).toBe(0.15)
     store.destroy()
     site.destroy()
   })

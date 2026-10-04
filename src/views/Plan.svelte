@@ -15,6 +15,16 @@
   import type { FtwPriceChartElement, FtwPriceChartWindow } from '$vendor/ftw/ftw-price-chart.js'
   import { activeCurrency, unitPerKwh } from '$vendor/ftw/price-units.js'
   import { modeLabel, modeHelp, planHeadline, slotAction, reasonText, formatPrice } from '$lib/format/plan'
+  import {
+    clampSafetyK,
+    exportSentence,
+    formatSafetyK,
+    PLAN_STYLES,
+    SAFETY_K_DEFAULT,
+    styleForK,
+    strategyHint,
+    type BatteryExport,
+  } from '$lib/format/plan-prefs'
   import { formatPower } from '$lib/format/power'
 
   interface Props {
@@ -89,22 +99,54 @@
 
   function choose(mode: SiteMode) {
     void plan.setMode(mode)
-    // The selected fallback already renders when the drawer is closed.
-    // Folding the extras keeps "Use the plan" on screen instead of
-    // scrolling it off under Idle / Peak / Charge.
-    if (plan.advancedModes.some((m) => m.key === mode)) showAdvanced = false
   }
 
-  // FTW's own split: forecast-driven strategies are the choice most people
-  // want, the manual fallbacks are a drawer. The current fallback stays on
-  // the page even when the drawer is closed — see selectedAdvanced — so a
-  // house already on Self (manual) never needs the extras opened to see
-  // what is running, or to get back to the plan.
-  let showAdvanced = $state(false)
+  // Manual fallbacks stay behind "Manual…". Open the drawer when the live
+  // mode lives there, so a house already on Self (manual) has that button
+  // on screen. Closing it sticks until the mode changes — a status repeat
+  // must not undo "Hide manual".
+  let showManual = $state(false)
+  let revealedMode: string | null = null
 
-  const selectedAdvanced = $derived(
-    plan.advancedModes.find((m) => m.key === plan.shownMode) ?? null
-  )
+  $effect(() => {
+    const mode = plan.shownMode
+    if (!mode || mode === revealedMode) return
+    revealedMode = mode
+    if (!mode.startsWith('planner_')) showManual = true
+  })
+
+  // The slider's position while a finger is on it. Released, it follows the
+  // box again. Moving it never changes battery export.
+  let sliderK = $state(SAFETY_K_DEFAULT)
+  let sliderDirty = $state(false)
+
+  $effect(() => {
+    const k = plan.prefs?.safetyK
+    if (sliderDirty || k === undefined) return
+    sliderK = k
+  })
+
+  const shownK = $derived(sliderDirty ? sliderK : (plan.prefs?.safetyK ?? sliderK))
+  const exportPermission = $derived<BatteryExport>(plan.prefs?.batteryExport ?? 'unknown')
+  const locked = $derived(!plan.canControl || plan.controlsLocked)
+  const prefsLocked = $derived(locked || plan.prefs === null)
+  const selectedStyle = $derived(styleForK(shownK))
+
+  function commitSlider() {
+    sliderDirty = true
+    void plan.setPrefs({ safety_k: shownK }).finally(() => {
+      sliderDirty = false
+    })
+  }
+
+  function setExport(next: BatteryExport) {
+    void plan.setPrefs({ battery_export: next })
+  }
+
+  function pickStyle(k: number) {
+    sliderK = k
+    commitSlider()
+  }
 
   // ---- Prices ------------------------------------------------------------
 
@@ -247,37 +289,104 @@
   {/if}
 </section>
 
-<section class="modes">
+<section class="modes" data-prefs={plan.prefs?.batteryExport}>
   <h2 class="label">How your home is run</h2>
 
-  <!-- The missing way back. Manual fallbacks live in a drawer so the
-       everyday choice stays two cards, and once someone is in one there
-       was nothing that said "the plan" in so many words — Passive
-       arbitrage does not read as "just optimal". This action names the
-       return without inventing a third strategy: it is the first primary
-       mode, the same one the box already puts first. -->
-  {#if plan.inManual && plan.planHome}
-    {@const home = plan.planHome}
-    <div class="use-plan">
-      <p class="use-plan-copy">The plan is not running the battery.</p>
-      {#if plan.canControl}
+  <!-- Household prefs, in the box's words. Passive and Active stay in the
+       catalogue for Home Assistant; the styles edit safety_k. -->
+  <div class="forecast">
+    <h3 class="label">Planning style</h3>
+    <div class="plan-styles" role="group" aria-label="Planning style">
+      {#each PLAN_STYLES as style (style.key)}
         <button
           type="button"
-          class="use-plan-btn"
-          disabled={plan.command.kind === 'sending'}
-          onclick={() => choose(home.key)}
-        >
-          {plan.command.kind === 'sending' && plan.command.mode === home.key
-            ? 'Sending…'
-            : 'Use the plan'}
-        </button>
-      {/if}
+          aria-pressed={plan.prefs !== null && selectedStyle.style.key === style.key}
+          disabled={prefsLocked}
+          onclick={() => pickStyle(style.k)}
+        >{style.name}</button>
+      {/each}
     </div>
+    <div class="forecast-labels" aria-hidden="true">
+      <span>Keeps more in the battery</span>
+      <span>Counts more on the forecast</span>
+    </div>
+    {#if plan.prefs}
+      <p class="help" aria-live="polite">{selectedStyle.style.text}</p>
+      {#if !selectedStyle.exact}
+        <p class="help">Fine-tuned forecast margin: {formatSafetyK(shownK)}.</p>
+      {/if}
+    {:else}
+      <p class="help">Reading your box's planning preferences…</p>
+    {/if}
+    <p class="help">Safety limits are the same in every style.</p>
+    <details class="fine-tune">
+      <summary>Fine-tune forecast margin</summary>
+      <label class="help" for="forecast-margin">Forecast margin: {formatSafetyK(shownK)}</label>
+      <input
+        id="forecast-margin"
+        type="range"
+        min="0"
+        max="2"
+        step="0.05"
+        value={shownK}
+        aria-valuetext={`Forecast margin ${formatSafetyK(shownK)}`}
+        disabled={prefsLocked}
+        oninput={(e) => {
+          sliderDirty = true
+          sliderK = clampSafetyK(Number(e.currentTarget.value))
+        }}
+        onchange={() => commitSlider()}
+      />
+      <p class="help">A higher margin keeps more in the battery when the forecast is uncertain.</p>
+    </details>
+  </div>
+
+  <div class="export">
+    {#if exportPermission === 'unknown'}
+      <div class="banner">
+        <p>FTW used to sell from the battery on high-price hours. Allow that to continue?</p>
+        <div class="banner-actions">
+          <button type="button" disabled={prefsLocked} onclick={() => setExport('allowed')}>Allow</button>
+          <button type="button" class="link" disabled={prefsLocked} onclick={() => setExport('not_allowed')}>
+            Keep off
+          </button>
+        </div>
+      </div>
+      <p class="help">Not checked — battery export stays off.</p>
+    {:else}
+      <label class="check">
+        <input
+          type="checkbox"
+          checked={exportPermission === 'allowed'}
+          disabled={prefsLocked}
+          onchange={(e) => setExport(e.currentTarget.checked ? 'allowed' : 'not_allowed')}
+        />
+        <span>Allow the battery to sell to the grid when the plan expects a worthwhile sale.</span>
+      </label>
+    {/if}
+    <p class="help">Solar can still export when this is off. Check your electricity contract.</p>
+  </div>
+
+  {#if plan.prefs}
+    <p class="sentence">{exportSentence(plan.plan?.slots ?? [], exportPermission, nowMs)}</p>
   {/if}
 
-  <!-- Pressed buttons rather than radios, the way History's range picker
-       solves the same exclusive choice: role=radio promises arrow-key moves
-       between the options, and these buttons never had them. -->
+  <!-- Shown only while a manual mode is driving. The mode it asks for is a
+       fresh mapped_mode from the box, read in usePlan(). -->
+  {#if plan.inManual && plan.canControl}
+    <button
+      type="button"
+      class="use-plan-btn"
+      title="Hand the battery back to the plan"
+      disabled={plan.controlsLocked}
+      onclick={() => plan.usePlan()}
+    >
+      {plan.command.kind === 'sending' && plan.command.mode.startsWith('planner_')
+        ? 'Sending…'
+        : 'Use the plan'}
+    </button>
+  {/if}
+
   {#snippet choice(info: ModeInfo)}
     {@const pressed = plan.shownMode === info.key}
     {@const sending = plan.command.kind === 'sending' && plan.command.mode === info.key}
@@ -285,7 +394,7 @@
       type="button"
       class="choice"
       aria-pressed={pressed}
-      disabled={!plan.canControl || plan.command.kind === 'sending'}
+      disabled={locked}
       onclick={() => choose(info.key)}
     >
       <span class="choice-label-row">
@@ -300,33 +409,30 @@
     </button>
   {/snippet}
 
-  <div class="choices" role="group" aria-label="How your home is run">
-    {#each plan.primaryModes as info (info.key)}
-      {@render choice(info)}
-    {/each}
-
-    {#if plan.advancedModes.length > 0}
-      {#if showAdvanced}
-        {#each plan.advancedModes as info (info.key)}
+  {#if plan.manualModes.length > 0}
+    <button type="button" class="more" onclick={() => (showManual = !showManual)}>
+      {showManual ? 'Hide manual' : 'Manual…'}
+    </button>
+    {#if showManual}
+      <div class="choices" role="group" aria-label="Manual modes">
+        {#each plan.manualModes as info (info.key)}
           {@render choice(info)}
         {/each}
-        <button type="button" class="more" onclick={() => (showAdvanced = false)}>
-          Fewer options
-        </button>
-      {:else}
-        {#if selectedAdvanced}
-          {@render choice(selectedAdvanced)}
-        {/if}
-        <button type="button" class="more" onclick={() => (showAdvanced = true)}>
-          More ways to run it
-        </button>
-      {/if}
+      </div>
     {/if}
-  </div>
+  {/if}
+
+  {#if strategyHint(plan.shownMode)}
+    <p class="hint">{strategyHint(plan.shownMode)}</p>
+  {/if}
 
   <!-- One line, in the freshness band's voice. Never a modal: changing a
        setting should not take the screen away from someone. -->
-  {#if plan.command.kind === 'sending'}
+  {#if plan.prefsBusy}
+    <p class="status">Replanning…</p>
+  {:else if plan.prefsHelp}
+    <p class="status warn">{plan.prefsHelp}</p>
+  {:else if plan.command.kind === 'sending'}
     <p class="status">Sending…</p>
   {:else if plan.command.kind === 'applied'}
     <p class="status good">Done.</p>
@@ -477,28 +583,134 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    margin-top: var(--space-3);
   }
 
-  .use-plan {
+  .forecast,
+  .export,
+  .banner {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: var(--space-2);
+  }
+
+  .forecast,
+  .export {
     margin-bottom: var(--space-3);
+  }
+
+  .plan-styles {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-1);
+  }
+
+  .plan-styles button {
+    min-height: 44px;
+    padding: var(--space-2) var(--space-1);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--fg-dim);
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .plan-styles button[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: var(--surface-elevated);
+    color: var(--fg);
+  }
+
+  .plan-styles button:disabled {
+    opacity: 0.5;
+  }
+
+  .fine-tune summary {
+    padding: var(--space-2) 0;
+    min-height: 44px;
+    color: var(--fg-dim);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .fine-tune label {
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+
+  .forecast input[type='range'] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .forecast input[type='range']:disabled {
+    opacity: 0.5;
+  }
+
+  .forecast-labels {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .help,
+  .sentence,
+  .hint {
+    font-size: 13px;
+    color: var(--fg-dim);
+    line-height: 1.4;
+  }
+
+  .banner {
     padding: var(--pad-card);
     background: var(--surface-raised);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
   }
 
-  .use-plan-copy {
-    font-size: 13px;
+  .banner-actions {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .banner-actions button {
+    min-height: 44px;
+    padding: 0 var(--space-4);
+    background: var(--accent);
+    color: var(--on-accent);
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+  }
+
+  .banner-actions .link,
+  .link {
+    background: transparent;
     color: var(--fg-dim);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .check {
+    display: flex;
+    gap: var(--space-2);
+    align-items: flex-start;
+    font-size: 13px;
     line-height: 1.4;
+  }
+
+  .check input {
+    margin-top: 0.2em;
+    accent-color: var(--accent);
   }
 
   .use-plan-btn {
     min-height: 44px;
+    margin-bottom: var(--space-3);
     padding: 0 var(--space-4);
     background: var(--accent);
     color: var(--on-accent);

@@ -23,6 +23,7 @@ export function commandHelp(result: CmdResult): string {
       return 'Your box is still starting. Give it a minute.'
     case 'E_UNAVAILABLE':
       if (result.error.args?.['op'] === 'loadpoint.surplus_only.set') return 'Solar rule not saved. Your previous choice is unchanged. Try again.'
+      if (result.error.args?.['op'] === 'planner.prefs.set') return "Your box couldn't save how the plan runs. Try again."
       return "Your box can't reach the charger right now. Try again shortly."
     default:
       return "That didn't go through. Try again."

@@ -299,7 +299,8 @@ is a different instruction than the one given, it is a `cmd`; if it is merely a
 late setting, it is a passthrough.*
 
 The refusal carries an `op` argument **only when a command for that route
-exists**. Today three do: `POST /api/mode` names `site.mode.set`,
+exists**. Today four do: `POST /api/mode` names `site.mode.set`,
+`POST /api/planner/prefs` names `planner.prefs.set`,
 `POST /api/loadpoints/{id}/soc` names `loadpoint.soc.set`, and
 `POST /api/loadpoints/{id}/target` names `loadpoint.surplus_only.set` — the
 one field of that route's body the session can set; the target and its
