@@ -58,8 +58,9 @@ const RULE_TYPES = [
  *
  * read      answers a question, changes nothing, and hands back nothing that
  *           could be replayed as authority. A shared viewer may ask for it.
- * configure changes a setting. Owner, with a step-up. A late execution is the
- *           same instruction, only later.
+ * configure changes a setting. Owner, and usually a step-up. A late execution
+ *           is the same instruction, only later. A route marked noStepUp skips
+ *           the ceremony.
  * actuate   moves energy, or takes control of what is moving it. Refused
  *           through the passthrough for everybody: an HTTP request carries no
  *           expiry, and a request with no expiry must not move energy.
@@ -84,6 +85,11 @@ export interface RouteFacts {
    * sender working from an older idea of it drops every field it never knew.
    */
   replacesAll?: boolean
+  /**
+   * Owner is enough; no fresh passkey ceremony. The charging schedule is
+   * the case: login already proved who is asking.
+   */
+  noStepUp?: boolean
 }
 
 /**
@@ -124,13 +130,13 @@ const ROUTES: Record<string, RouteFacts> = {
   // The charger. Reads are reads; everything that starts, stops or redirects
   // charging is actuation, priced exactly as the box prices it. The schedule
   // alone is configuration — a standing instruction about future days, with
-  // its own route since srcfl/ftw#869 — while the target route it once rode
-  // stays actuation, because target also carries one-shot fields that move
-  // energy now.
+  // its own route since srcfl/ftw#869 — and NoStepUp, because login already
+  // proved who is asking. The target route it once rode stays actuation,
+  // because target also carries one-shot fields that move energy now.
   'GET /api/loadpoints': { tier: 'read' },
   'POST /api/loadpoints/{id}/vehicle': { tier: 'configure' },
-  'PUT /api/loadpoints/{id}/schedule': { tier: 'configure' },
-  'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure' },
+  'PUT /api/loadpoints/{id}/schedule': { tier: 'configure', noStepUp: true },
+  'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure', noStepUp: true },
   'GET /api/mpc/plan': { tier: 'read' },
   'GET /api/loadpoints/{id}/manual_hold': { tier: 'read' },
   'GET /api/loadpoints/{id}/battery_boost': { tier: 'read' },
@@ -448,7 +454,7 @@ export class SimApi {
     // The box's own file server, which this session does not carry.
     if (!matched) return { code: 'E_UNKNOWN_OP', args: { t: 'api.req', field: 'path' } }
 
-    const { tier, cmdOp, replacesAll } = matched.facts
+    const { tier, cmdOp, replacesAll, noStepUp } = matched.facts
 
     switch (tier) {
       case 'read':
@@ -465,7 +471,7 @@ export class SimApi {
         if (req.role !== ROLE_OWNER) {
           return { code: 'E_SCOPE_DENIED', args: { needRole: ROLE_OWNER, role: req.role } }
         }
-        if (this.#opts.requireStepUp !== false && !req.stepUp) {
+        if (this.#opts.requireStepUp !== false && !req.stepUp && !noStepUp) {
           return { code: 'E_NEEDS_STEP_UP', args: { tier } }
         }
         break

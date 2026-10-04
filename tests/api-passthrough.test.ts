@@ -386,6 +386,38 @@ describe('configuration', () => {
     expect((decode(res.body) as { role: string }).role).toBe(ROLE_VIEWER)
   })
 
+  it('saves a charging schedule without a ceremony, and still refuses a viewer', async () => {
+    const body = new TextEncoder().encode(
+      JSON.stringify({ soc_pct: 80, time_of_day_min_utc: 360, recurring: true })
+    )
+
+    const box = new SimBox({ now: () => NOON, role: ROLE_OWNER })
+    const session = connect(box)
+    await settle()
+
+    const res = await session.api({
+      method: 'PUT',
+      path: '/api/loadpoints/carport/schedule',
+      body,
+    })
+    expect(res.status).toBe(200)
+
+    const cleared = await session.api({
+      method: 'DELETE',
+      path: '/api/loadpoints/carport/schedule',
+    })
+    expect(cleared.status).toBe(200)
+
+    const viewer = new SimBox({ now: () => NOON, role: ROLE_VIEWER })
+    const viewing = connect(viewer)
+    await settle()
+    await expect(
+      viewing.api({ method: 'PUT', path: '/api/loadpoints/carport/schedule', body })
+    ).rejects.toMatchObject({
+      detail: { code: 'E_SCOPE_DENIED', args: { needRole: ROLE_OWNER } },
+    })
+  })
+
   it('restarts the box as configuration, once a ceremony has happened', async () => {
     const box = new SimBox({ now: () => NOON, role: ROLE_OWNER })
     const session = connect(box)

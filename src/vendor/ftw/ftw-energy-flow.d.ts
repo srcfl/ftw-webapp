@@ -13,6 +13,7 @@ export interface FtwFlowDailyPart {
 }
 
 export interface FtwFlowPlanet {
+  controlMark?: { tone: 'warning' | 'alarm'; label: string }
   id: string
   corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   title: string

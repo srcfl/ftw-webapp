@@ -25,9 +25,11 @@ import { FID } from '$lib/format/explanation'
 import { wireBytes } from '$lib/protocol/frame'
 import { localInputToUtcMinutes, localClock } from '$lib/format/ev'
 
-// The ceremony, played by a hand. The sim's configure tier refuses without
-// a step-up exactly as the box does; what is under test is that one save
-// runs it once and the refusal prose reaches the screen when it fails.
+// The ceremony, played by a hand. Most configure writes still refuse
+// without a step-up; the charging schedule does not. Vehicle writes
+// still need one. The mock is here so a schedule save can prove it
+// never asked, and so a failed ceremony still has prose if a route
+// that needs one is refused.
 vi.mock('$lib/identity/stepup', () => ({
   stepUp: vi.fn(async () => 'done'),
   stepUpHelp: () => 'Your passkey did not answer. Nothing was changed.',
@@ -215,7 +217,7 @@ describe('the charger behind its bubble', () => {
     ).toBeGreaterThan(afterMount)
   })
 
-  it('saves a schedule in one PUT and one ceremony, and repaints from the box', async () => {
+  it('saves a schedule in one PUT without a ceremony, and repaints from the box', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
 
@@ -258,13 +260,12 @@ describe('the charger behind its bubble', () => {
     document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(1_000)
 
-    // One ceremony for the whole draft, not one per field.
-    expect(vi.mocked(stepUp).mock.calls.length).toBe(1)
+    expect(vi.mocked(stepUp).mock.calls.length, 'a ready-time save asked for Face ID').toBe(0)
 
     const saved = put.mock.calls.find(
-      (c) => c[0].method === 'PUT' && c[0].path.endsWith('/schedule') && c[0].stepUp
+      (c) => c[0].method === 'PUT' && c[0].path.endsWith('/schedule') && !c[0].stepUp
     )
-    expect(saved, 'no stepped-up PUT reached the box').toBeDefined()
+    expect(saved, 'no schedule PUT reached the box').toBeDefined()
     const bodyOnWire = JSON.parse(new TextDecoder().decode(saved![0].body!))
     expect(bodyOnWire.time_of_day_min_utc).toBe(localInputToUtcMinutes('08:00'))
     expect(bodyOnWire.days).toBe(0b0011111)
@@ -288,7 +289,7 @@ describe('the charger behind its bubble', () => {
     const serve = box.api.serve.bind(box.api)
     vi.spyOn(box.api, 'serve').mockImplementation(req => {
       const answer = serve(req)
-      if (req.method === 'PUT' && req.path.endsWith('/schedule') && req.stepUp && 'status' in answer && answer.status === 200) {
+      if (req.method === 'PUT' && req.path.endsWith('/schedule') && 'status' in answer && answer.status === 200) {
         pending = true
         writes++
       }
@@ -448,7 +449,7 @@ describe('the charger behind its bubble', () => {
     )
   })
 
-  it('says what happened when the ceremony fails, and changes nothing', async () => {
+  it('saves a schedule even if a passkey ceremony would fail', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(CHARGING_EVENING)
 
@@ -460,28 +461,24 @@ describe('the charger behind its bubble', () => {
     }
 
     const stepup = await import('$lib/identity/stepup')
-    vi.mocked(stepup.stepUp).mockResolvedValueOnce('unavailable')
+    vi.mocked(stepup.stepUp).mockClear()
 
     render(EvPanel, { props: { site, onclose: () => {} } })
     await vi.advanceTimersByTimeAsync(500)
-    const before = document.body.textContent
 
     ;[...document.querySelectorAll('button')]
       .find((b) => b.textContent?.trim() === 'Change goal')!
       .click()
     await vi.advanceTimersByTimeAsync(50)
-    document.querySelector('input[type="time"]')!.dispatchEvent(new Event('change', { bubbles: true }))
+    const time = document.querySelector('input[type="time"]') as HTMLInputElement
+    time.value = '09:00'
+    time.dispatchEvent(new Event('input', { bubbles: true }))
+    time.dispatchEvent(new Event('change', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(1_000)
 
-    expect(document.body.textContent).toContain('Nothing was changed')
-    // Cancel out and the schedule reads exactly as before the attempt.
-    ;[...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === 'Close goal settings')!
-      .click()
-    await vi.advanceTimersByTimeAsync(200)
-    expect(document.body.textContent).toContain(
-      before!.match(/Ready by [^·]+/)![0].trim()
-    )
+    expect(vi.mocked(stepup.stepUp).mock.calls.length).toBe(0)
+    expect(document.body.textContent).toContain('Schedule saved')
+    expect((document.querySelector('input[type="time"]') as HTMLInputElement).value).toBe('09:00')
   })
 
   it('removes a schedule and says the absence honestly', async () => {
@@ -519,7 +516,7 @@ describe('the charger behind its bubble', () => {
     const put = vi.spyOn(box.api, 'serve')
     use.click()
     await vi.advanceTimersByTimeAsync(1000)
-    const writes = put.mock.calls.filter(c => c[0].method === 'PUT' && c[0].path.endsWith('/schedule') && c[0].stepUp)
+    const writes = put.mock.calls.filter(c => c[0].method === 'PUT' && c[0].path.endsWith('/schedule'))
     expect(writes).toHaveLength(1)
     const selected = JSON.parse(new TextDecoder().decode(writes[0]![0].body!))
     expect(selected.soc).toBe(expectedSoc)
@@ -570,7 +567,7 @@ describe('the charger behind its bubble', () => {
     expect(document.body.textContent).toContain('Goal removed.')
     expect(document.body.textContent).not.toContain('Current charging status is unavailable.')
     expect(document.body.textContent).not.toContain('Goal saved')
-    expect(asked.mock.calls.filter(([req]) => req.method === 'DELETE' && req.stepUp)).toHaveLength(1)
+    expect(asked.mock.calls.filter(([req]) => req.method === 'DELETE' && req.path.endsWith('/schedule'))).toHaveLength(1)
   })
 
   it('charges now through the door, and the whole household says so', async () => {

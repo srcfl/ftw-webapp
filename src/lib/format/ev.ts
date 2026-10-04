@@ -11,9 +11,11 @@
  */
 
 import { formatPower } from './power'
+import { controlRows, type ControlFeedback } from '$vendor/ftw/control-feedback.js'
 
 /** The box's own field names for one charger, as `/api/loadpoints` serves them. */
 export interface WireLoadpoint {
+  control_feedback?: unknown
   id?: unknown
   driver_name?: unknown
   plugged_in?: unknown
@@ -81,6 +83,8 @@ export interface WireManualStatus {
 }
 
 export interface Loadpoint {
+  controlFeedback?: ControlFeedback
+  driverName?: string
   id: string
   /** Whether a cable is in. False means the rest is about an empty bay. */
   pluggedIn: boolean
@@ -165,6 +169,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
   const boost = w.battery_boost
   return {
     id: typeof w.id === 'string' ? w.id : '',
+    ...(typeof w.driver_name === 'string' ? {driverName:w.driver_name} : {}),
     pluggedIn: w.plugged_in === true,
     powerW: num(w.current_power_w) ?? 0,
     socPct: w.plugged_in === false ? null : socFraction !== null && socFraction >= 0 && socFraction <= 1
@@ -185,6 +190,7 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
     manualSaveError: w.manual_save_error === true,
     ...(w.manual ? { manual: w.manual } : {}),
     ...(w.charger ? { charger: w.charger } : {}),
+    ...(controlRows([w.control_feedback])[0] ? { controlFeedback: controlRows([w.control_feedback])[0]! } : {}),
     commandedW: num(w.commanded_w),
     commandedReason: typeof w.commanded_reason === 'string' ? w.commanded_reason : '',
     commandedKnown: w.commanded_known === true,
