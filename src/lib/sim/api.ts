@@ -518,8 +518,8 @@ export class SimApi {
       return json(200, this.#plannerPrefs?.() ?? {
         forecast_trust: 'balanced',
         battery_export: 'unknown',
-        safety_k: 1,
-        mapped_k: 1,
+        safety_k: 0.3,
+        mapped_k: 0.3,
         mapped_mode: 'planner_passive_arbitrage',
       })
     }

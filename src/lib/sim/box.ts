@@ -50,7 +50,7 @@ import {
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
-import { clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
+import { SAFETY_K_DEFAULT, clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
 import { SimApi, evPluggedIn } from './api'
 import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
@@ -352,8 +352,8 @@ export class SimBox {
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
   #mode: SiteMode = DEFAULT_MODE
-  /** Household planner prefs. k=1 and an unanswered export is what a box that used to sell starts from. */
-  #safetyK = 1
+  /** Household planner prefs. The default matches Core; export starts unchecked. */
+  #safetyK = SAFETY_K_DEFAULT
   #batteryExport: BatteryExport = 'unknown'
   #planRev = 1
   #role: Role
@@ -793,22 +793,26 @@ export class SimBox {
     if (cmd.op === OP_PLANNER_PREFS_SET) {
       const k = cmd.args['safety_k']
       const exp = cmd.args['battery_export']
-      if (typeof k !== 'number' || !Number.isFinite(k)) {
+      if (k !== undefined && (typeof k !== 'number' || !Number.isFinite(k))) {
         this.#cmdResult(cmd.cmdId, 'rejected', {
           code: 'E_UNKNOWN_OP',
           args: { op: cmd.op, arg: 'safety_k', value: k ?? null },
         })
         return
       }
-      if (exp !== 'unknown' && exp !== 'not_allowed' && exp !== 'allowed') {
+      if (exp !== undefined && exp !== 'unknown' && exp !== 'not_allowed' && exp !== 'allowed') {
         this.#cmdResult(cmd.cmdId, 'rejected', {
           code: 'E_UNKNOWN_OP',
           args: { op: cmd.op, arg: 'battery_export', value: exp ?? null },
         })
         return
       }
-      this.#safetyK = clampSafetyK(k)
-      this.#batteryExport = exp
+      if (k === undefined && exp === undefined) {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
+        return
+      }
+      if (typeof k === 'number') this.#safetyK = clampSafetyK(k)
+      if (exp !== undefined) this.#batteryExport = exp as BatteryExport
       const mapped = this.plannerPrefsBody()['mapped_mode']
       if (
         this.#mode.startsWith('planner_') &&

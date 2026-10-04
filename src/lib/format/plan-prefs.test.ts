@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   PLANNER_FALLBACK_MODE,
+  PLAN_STYLES,
+  SAFETY_K_DEFAULT,
+  styleForK,
   exportSentence,
-  hedgeLine,
   mappedPlannerMode,
   prefsFromWire,
   type SaleSlot,
@@ -36,11 +38,6 @@ describe('planner prefs from the box', () => {
     expect(prefsFromWire({ battery_export: 'allowed' }).mappedMode).toBe(PLANNER_FALLBACK_MODE)
   })
 
-  it('says what the forecast margin is, in the box’s words', () => {
-    expect(hedgeLine(0)).toBe('No forecast margin requested.')
-    expect(hedgeLine(1)).toMatch(/forecast margin varies by interval/)
-  })
-
   it('names a battery sale, a solar export, an allowed idle, and a block', () => {
     const start = Date.parse('2026-07-15T18:00:00')
     const hh = (ms: number) => {
@@ -59,5 +56,16 @@ describe('planner prefs from the box', () => {
     expect(exportSentence([slot(start, 200, 200)], 'unknown', start)).toBe(
       'Battery sale blocked: permission is off or not checked.'
     )
+  })
+})
+
+
+describe('planning styles', () => {
+  it('matches the box default and preserves a fine-tuned margin', () => {
+    expect(SAFETY_K_DEFAULT).toBe(0.3)
+    expect(prefsFromWire({ forecast_trust: 'balanced' }).safetyK).toBe(0.3)
+    expect(prefsFromWire({ safety_k: 0.85 }).safetyK).toBe(0.85)
+    expect(styleForK(0.85)).toEqual({ style: PLAN_STYLES[0], exact: false })
+    expect(styleForK(0.3)).toEqual({ style: PLAN_STYLES[2], exact: true })
   })
 })

@@ -1,13 +1,42 @@
 /* Household planner prefs, in the box's own words.
  *
- * safety_k is the slider. forecast_trust is the enum an older box still
- * answers with. mapped_mode is the box's mapping of battery_export onto a
+ * Planning styles and fine-tuning edit safety_k. forecast_trust is the enum
+ * an older box still answers with. mapped_mode is the box's mapping of battery_export onto a
  * planner mode — this file never derives one from the other.
  */
 
 export const SAFETY_K_MIN = 0
 export const SAFETY_K_MAX = 2
 export const SAFETY_K_STEP = 0.05
+export const SAFETY_K_DEFAULT = 0.3
+
+/** Same names, values and help as Core's web/plan-prefs.js. */
+export const PLAN_STYLES = [
+  { key: 'very_careful', name: 'Very careful', k: 1,
+    text: 'Plans for a poor day: much less sun and more use than forecast. Keeps the most in the battery.' },
+  { key: 'careful', name: 'Careful', k: 0.6,
+    text: 'Plans for less sun and more use than forecast.' },
+  { key: 'balanced', name: 'Balanced', k: 0.3,
+    text: 'Plans for a little less sun and a little more use than forecast. A good start for most homes.' },
+  { key: 'bold', name: 'Bold', k: 0.15,
+    text: 'Plans close to the forecast.' },
+  { key: 'very_bold', name: 'Very bold', k: 0,
+    text: 'Plans on the forecast as it is. Earns the most when it is right and costs more when it is wrong.' },
+] as const
+
+export function styleForK(k: number) {
+  const n = clampSafetyK(k)
+  let style: (typeof PLAN_STYLES)[number] = PLAN_STYLES[0]
+  for (const candidate of PLAN_STYLES) {
+    if (Math.abs(candidate.k - n) < Math.abs(style.k - n)) style = candidate
+  }
+  return { style, exact: Math.abs(style.k - n) < 0.001 }
+}
+
+export interface PlannerPrefsChange {
+  safety_k?: number
+  battery_export?: BatteryExport
+}
 
 /** What "Use the plan" sends when the prefs read fails or names nothing usable. */
 export const PLANNER_FALLBACK_MODE = 'planner_passive_arbitrage'
@@ -34,7 +63,7 @@ export interface PlannerPrefs {
 const SALE_W = 100
 
 export function clampSafetyK(v: number): number {
-  if (!Number.isFinite(v)) return 1
+  if (!Number.isFinite(v)) return SAFETY_K_DEFAULT
   if (v < SAFETY_K_MIN) return SAFETY_K_MIN
   if (v > SAFETY_K_MAX) return SAFETY_K_MAX
   return v
@@ -55,7 +84,7 @@ export function trustFromSafetyK(k: number): ForecastTrust {
 function safetyKFromTrust(trust: ForecastTrust): number {
   if (trust === 'cautious') return 2
   if (trust === 'bold') return 0
-  return 1
+  return SAFETY_K_DEFAULT
 }
 
 function asTrust(v: unknown): ForecastTrust {
@@ -110,11 +139,6 @@ export function strategyHint(mode: string | null | undefined): string {
   return MANUAL_HINT[mode] ?? ''
 }
 
-export function hedgeLine(k: number): string {
-  return clampSafetyK(k) === 0
-    ? 'No forecast margin requested.'
-    : 'The forecast margin varies by interval. This box has not supplied separate forecast and planning values.'
-}
 
 export interface SaleSlot {
   startMs: number

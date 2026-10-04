@@ -17,8 +17,8 @@ import {
   mappedPlannerMode,
   prefsFromWire,
   trustFromSafetyK,
-  type BatteryExport,
   type PlannerPrefs,
+  type PlannerPrefsChange,
   type PlannerPrefsWire,
 } from '$lib/format/plan-prefs'
 import { callBox } from './box-api'
@@ -39,6 +39,7 @@ const SETTLE_MS = 4_000
 export class PlanStore {
   #site: SiteStore
   #timer: ReturnType<typeof setTimeout> | null = null
+  #prefsVersion = 0
   /**
    * Which `setMode` call is current. A tap while another is in flight must
    * not let the earlier result paint over the later one.
@@ -72,7 +73,7 @@ export class PlanStore {
   command = $state<CommandState>({ kind: 'idle' })
   /** Household planner prefs, as the last GET /api/planner/prefs answered. */
   prefs = $state<PlannerPrefs | null>(null)
-  /** A prefs write is in flight. The slider stays put; the plan is being remade. */
+  /** A preference write is in flight. */
   prefsBusy = $state(false)
   /** Why the last prefs write did not land. Null when there is nothing to say. */
   prefsHelp = $state<string | null>(null)
@@ -240,24 +241,24 @@ export class PlanStore {
    * Read household prefs. mapped_mode is whatever the box said.
    */
   async #refreshPrefs(): Promise<void> {
+    const version = ++this.#prefsVersion
     const wire = await callBox<PlannerPrefsWire>(this.#site, {
       method: 'GET',
       path: '/api/planner/prefs',
     })
-    this.prefs = prefsFromWire(wire)
+    if (version === this.#prefsVersion) this.prefs = prefsFromWire(wire)
   }
 
   /**
-   * Store a safety factor and an export permission.
-   *
-   * The box maps the permission onto a planner mode. This method sends the
-   * two fields and then reads mapped_mode back; it never picks a mode from
-   * the permission itself.
+   * Send only the changed preference. Core keeps the other value, including
+   * changes another client made after this phone's last read.
    */
-  async setPrefs(safetyK: number, batteryExport: BatteryExport): Promise<void> {
-    if (this.controlsLocked || !this.canControl) return
+  async setPrefs(change: PlannerPrefsChange): Promise<void> {
+    if (this.controlsLocked || !this.canControl || !this.prefs) return
     const prev = this.prefs
-    const k = clampSafetyK(safetyK)
+    const k = clampSafetyK(change.safety_k ?? prev.safetyK)
+    const batteryExport = change.battery_export ?? prev.batteryExport
+    this.#prefsVersion += 1
     this.prefsHelp = null
     this.prefsBusy = true
     this.prefs = {
@@ -268,10 +269,8 @@ export class PlanStore {
     }
 
     try {
-      const result: CmdResult = await this.#site.command(OP_PLANNER_PREFS_SET, {
-        safety_k: k,
-        battery_export: batteryExport,
-      })
+      const args = change.safety_k === undefined ? { ...change } : { ...change, safety_k: k }
+      const result: CmdResult = await this.#site.command(OP_PLANNER_PREFS_SET, args)
       if (result.state !== 'applied') {
         this.prefs = prev
         this.prefsHelp = commandHelp(result)

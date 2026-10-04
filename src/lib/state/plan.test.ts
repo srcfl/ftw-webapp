@@ -60,7 +60,8 @@ describe('the mode the Plan store offers a way back from', () => {
 
   it('follows mapped_mode when handing the house back to the plan', async () => {
     const { store, box, site } = await connected('self_consumption')
-    await store.setPrefs(1, 'allowed')
+    await store.load()
+    await store.setPrefs({ battery_export: 'allowed' })
     expect(box.mode, 'a prefs write must not leave a manual mode on its own').toBe('self_consumption')
     expect(box.batteryExport).toBe('allowed')
     const sent = vi.spyOn(site, 'command')
@@ -76,7 +77,8 @@ describe('the mode the Plan store offers a way back from', () => {
 
   it('uses the passive mode when the prefs read fails', async () => {
     const { store, box, site } = await connected('self_consumption')
-    await store.setPrefs(1, 'allowed')
+    await store.load()
+    await store.setPrefs({ battery_export: 'allowed' })
     const api = site.api.bind(site)
     vi.spyOn(site, 'api').mockImplementation(async (req) => {
       if (req.path === '/api/planner/prefs') throw new Error('down')
@@ -118,6 +120,54 @@ describe('the mode the Plan store offers a way back from', () => {
     expect(store.command.kind).toBe('applied')
     expect(box.mode).toBe('idle')
     expect(store.shownMode).toBe('idle')
+    store.destroy()
+    site.destroy()
+  })
+})
+
+
+describe('planner preference changes from another client', () => {
+  it('ignores a preference read sent before this phone changed the margin', async () => {
+    const box = new SimBox({})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    await store.load()
+    const old = box.plannerPrefsBody()
+    let finish!: (value: Awaited<ReturnType<SiteStore['api']>>) => void
+    const pending = new Promise<Awaited<ReturnType<SiteStore['api']>>>((resolve) => { finish = resolve })
+    const api = site.api.bind(site)
+    let reading = false
+    vi.spyOn(site, 'api').mockImplementationOnce(async (request) => {
+      expect(request.path).toBe('/api/planner/prefs')
+      reading = true
+      return pending
+    }).mockImplementation(api)
+    const load = store.load()
+    await vi.waitFor(() => expect(reading).toBe(true))
+    await store.setPrefs({ safety_k: 0.15 })
+    finish({ status: 200, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify(old)) })
+    await load
+    expect(store.prefs!.safetyK).toBe(0.15)
+    store.destroy()
+    site.destroy()
+  })
+
+  it('keeps the box export permission when this phone changes style from an old read', async () => {
+    const box = new SimBox({})
+    const site = new SiteStore('test')
+    const store = new PlanStore(site)
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    await store.load()
+    expect(store.prefs!.batteryExport).toBe('unknown')
+    await site.command('planner.prefs.set', { battery_export: 'allowed' })
+    const sent = vi.spyOn(site, 'command')
+    await store.setPrefs({ safety_k: 0.15 })
+    expect(sent.mock.calls[0]).toEqual(['planner.prefs.set', { safety_k: 0.15 }])
+    expect(box.batteryExport).toBe('allowed')
+    expect(box.safetyK).toBe(0.15)
     store.destroy()
     site.destroy()
   })

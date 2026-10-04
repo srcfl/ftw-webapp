@@ -19,9 +19,10 @@
     clampSafetyK,
     exportSentence,
     formatSafetyK,
-    hedgeLine,
+    PLAN_STYLES,
+    SAFETY_K_DEFAULT,
+    styleForK,
     strategyHint,
-    trustFromSafetyK,
     type BatteryExport,
   } from '$lib/format/plan-prefs'
   import { formatPower } from '$lib/format/power'
@@ -116,7 +117,7 @@
 
   // The slider's position while a finger is on it. Released, it follows the
   // box again. Moving it never changes battery export.
-  let sliderK = $state(1)
+  let sliderK = $state(SAFETY_K_DEFAULT)
   let sliderDirty = $state(false)
 
   $effect(() => {
@@ -128,16 +129,23 @@
   const shownK = $derived(sliderDirty ? sliderK : (plan.prefs?.safetyK ?? sliderK))
   const exportPermission = $derived<BatteryExport>(plan.prefs?.batteryExport ?? 'unknown')
   const locked = $derived(!plan.canControl || plan.controlsLocked)
+  const prefsLocked = $derived(locked || plan.prefs === null)
+  const selectedStyle = $derived(styleForK(shownK))
 
   function commitSlider() {
     sliderDirty = true
-    void plan.setPrefs(shownK, exportPermission).finally(() => {
+    void plan.setPrefs({ safety_k: shownK }).finally(() => {
       sliderDirty = false
     })
   }
 
   function setExport(next: BatteryExport) {
-    void plan.setPrefs(shownK, next)
+    void plan.setPrefs({ battery_export: next })
+  }
+
+  function pickStyle(k: number) {
+    sliderK = k
+    commitSlider()
   }
 
   // ---- Prices ------------------------------------------------------------
@@ -285,38 +293,52 @@
   <h2 class="label">How your home is run</h2>
 
   <!-- Household prefs, in the box's words. Passive and Active stay in the
-       catalogue for Home Assistant; they are not buttons here. -->
+       catalogue for Home Assistant; the styles edit safety_k. -->
   <div class="forecast">
-    <span class="label">Follow the forecast</span>
-    <input
-      type="range"
-      min="0"
-      max="2"
-      step="0.05"
-      value={shownK}
-      aria-valuemin={0}
-      aria-valuemax={2}
-      aria-valuenow={shownK}
-      aria-valuetext={`k ${formatSafetyK(shownK)}, ${trustFromSafetyK(shownK)}`}
-      aria-label="Share of the PV forecast uncertainty held in reserve"
-      disabled={locked}
-      oninput={(e) => {
-        sliderDirty = true
-        sliderK = clampSafetyK(Number(e.currentTarget.value))
-      }}
-      onchange={() => commitSlider()}
-    />
-    <div class="forecast-labels">
-      <span>Trust forecast</span>
-      <span class="k">k {formatSafetyK(shownK)}</span>
-      <span>Hold reserve</span>
+    <h3 class="label">Planning style</h3>
+    <div class="plan-styles" role="group" aria-label="Planning style">
+      {#each PLAN_STYLES as style (style.key)}
+        <button
+          type="button"
+          aria-pressed={plan.prefs !== null && selectedStyle.style.key === style.key}
+          disabled={prefsLocked}
+          onclick={() => pickStyle(style.k)}
+        >{style.name}</button>
+      {/each}
     </div>
-    <p class="hedge">{hedgeLine(shownK)}</p>
-    <p class="help">
-      Left follows the forecast fully — if it is right, that earns more. Right keeps more in the
-      battery in case the sun misses, closer to using the battery only for the house. Every notch
-      changes how much of each slot's own forecast error the plan holds back.
-    </p>
+    <div class="forecast-labels" aria-hidden="true">
+      <span>Keeps more in the battery</span>
+      <span>Counts more on the forecast</span>
+    </div>
+    {#if plan.prefs}
+      <p class="help" aria-live="polite">{selectedStyle.style.text}</p>
+      {#if !selectedStyle.exact}
+        <p class="help">Fine-tuned forecast margin: {formatSafetyK(shownK)}.</p>
+      {/if}
+    {:else}
+      <p class="help">Reading your box's planning preferences…</p>
+    {/if}
+    <p class="help">Safety limits are the same in every style.</p>
+    <details class="fine-tune">
+      <summary>Fine-tune forecast margin</summary>
+      <label class="help" for="forecast-margin">Forecast margin: {formatSafetyK(shownK)}</label>
+      <input
+        id="forecast-margin"
+        type="range"
+        min="0"
+        max="2"
+        step="0.05"
+        value={shownK}
+        aria-valuetext={`Forecast margin ${formatSafetyK(shownK)}`}
+        disabled={prefsLocked}
+        oninput={(e) => {
+          sliderDirty = true
+          sliderK = clampSafetyK(Number(e.currentTarget.value))
+        }}
+        onchange={() => commitSlider()}
+      />
+      <p class="help">A higher margin keeps more in the battery when the forecast is uncertain.</p>
+    </details>
   </div>
 
   <div class="export">
@@ -324,8 +346,8 @@
       <div class="banner">
         <p>FTW used to sell from the battery on high-price hours. Allow that to continue?</p>
         <div class="banner-actions">
-          <button type="button" disabled={locked} onclick={() => setExport('allowed')}>Allow</button>
-          <button type="button" class="link" disabled={locked} onclick={() => setExport('not_allowed')}>
+          <button type="button" disabled={prefsLocked} onclick={() => setExport('allowed')}>Allow</button>
+          <button type="button" class="link" disabled={prefsLocked} onclick={() => setExport('not_allowed')}>
             Keep off
           </button>
         </div>
@@ -336,7 +358,7 @@
         <input
           type="checkbox"
           checked={exportPermission === 'allowed'}
-          disabled={locked}
+          disabled={prefsLocked}
           onchange={(e) => setExport(e.currentTarget.checked ? 'allowed' : 'not_allowed')}
         />
         <span>Allow the battery to sell to the grid when the plan expects a worthwhile sale.</span>
@@ -345,9 +367,9 @@
     <p class="help">Solar can still export when this is off. Check your electricity contract.</p>
   </div>
 
-  <p class="sentence">
-    {exportSentence(plan.plan?.slots ?? [], exportPermission, nowMs)}
-  </p>
+  {#if plan.prefs}
+    <p class="sentence">{exportSentence(plan.plan?.slots ?? [], exportPermission, nowMs)}</p>
+  {/if}
 
   <!-- Shown only while a manual mode is driving. The mode it asks for is a
        fresh mapped_mode from the box, read in usePlan(). -->
@@ -578,6 +600,46 @@
     margin-bottom: var(--space-3);
   }
 
+  .plan-styles {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-1);
+  }
+
+  .plan-styles button {
+    min-height: 44px;
+    padding: var(--space-2) var(--space-1);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--fg-dim);
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .plan-styles button[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: var(--surface-elevated);
+    color: var(--fg);
+  }
+
+  .plan-styles button:disabled {
+    opacity: 0.5;
+  }
+
+  .fine-tune summary {
+    padding: var(--space-2) 0;
+    min-height: 44px;
+    color: var(--fg-dim);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .fine-tune label {
+    display: block;
+    margin-bottom: var(--space-2);
+  }
+
   .forecast input[type='range'] {
     width: 100%;
     accent-color: var(--accent);
@@ -595,12 +657,6 @@
     color: var(--fg-dim);
   }
 
-  .k {
-    font-family: var(--mono);
-    color: var(--fg);
-  }
-
-  .hedge,
   .help,
   .sentence,
   .hint {

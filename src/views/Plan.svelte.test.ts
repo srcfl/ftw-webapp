@@ -935,17 +935,31 @@ describe('switching how the home is run', () => {
     return { box, site }
   }
 
-  it('offers the forecast slider instead of Passive and Active buttons', async () => {
+  it('offers the box planning styles instead of Passive and Active buttons', async () => {
     await mount()
 
-    expect(document.body.textContent).toMatch(/Follow the forecast/)
-    expect(document.body.textContent).toMatch(/Trust forecast/)
-    expect(document.body.textContent).toMatch(/Hold reserve/)
+    expect(document.body.textContent).toMatch(/Planning style/)
+    expect(document.body.textContent).toMatch(/Keeps more in the battery/)
+    expect(document.body.textContent).toMatch(/Counts more on the forecast/)
+    const styles = [...document.querySelectorAll('.plan-styles button')]
+    expect(styles.map((button) => button.textContent)).toEqual([
+      'Very careful', 'Careful', 'Balanced', 'Bold', 'Very bold',
+    ])
+    expect(styles[2]!.getAttribute('aria-pressed')).toBe('true')
     expect(document.body.textContent).toMatch(/FTW used to sell from the battery/)
     expect(choice('Passive arbitrage')).toBeUndefined()
     expect(choice('Active arbitrage')).toBeUndefined()
     expect(choice('Planner (self)'), 'a hidden planner mode was rendered').toBeUndefined()
     expect(document.body.textContent).not.toMatch(/use the plan/i)
+  })
+
+  it('saves a style without changing battery export', async () => {
+    const { box } = await mount()
+    const bold = [...document.querySelectorAll('.plan-styles button')].find((b) => b.textContent === 'Bold') as HTMLButtonElement
+    bold.click()
+    await vi.waitFor(() => expect(box.safetyK).toBe(0.15))
+    expect(box.batteryExport).toBe('unknown')
+    await vi.waitFor(() => expect(bold.getAttribute('aria-pressed')).toBe('true'))
   })
 
   it('keeps manual modes behind Manual…, and offers a way back', async () => {
