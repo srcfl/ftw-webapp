@@ -188,8 +188,10 @@ describe('the notifications section', () => {
     render(Notifications, { props: { site } })
     await vi.advanceTimersByTimeAsync(500)
     const boxes = [...document.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
-    expect(boxes.length).toBe(6)
-    expect(boxes.every(b => !b.checked)).toBe(true)
+    // Six opt-in kinds, then the two FTW Cloud notices the box seeds on.
+    expect(boxes.length).toBe(8)
+    expect(boxes.slice(0, 6).every(b => !b.checked)).toBe(true)
+    expect(boxes.slice(6).every(b => b.checked)).toBe(true)
     boxes[0]!.click()
     await vi.advanceTimersByTimeAsync(1)
     expect(text()).toContain('Saving…')
