@@ -39,14 +39,14 @@ function logBlocks(text: string): string[] {
 }
 
 describe('the proxy in front of the relay', () => {
-  const [global, site, ...rest] = logBlocks(caddyfile)
+  const blocks = logBlocks(caddyfile)
+  const global = blocks[0] ?? ''
+  const site = blocks[1] ?? ''
 
   it('has exactly two log blocks: the global one and the site access log', () => {
     // Without the global block the default logger goes back to stderr,
-    // where Docker keeps it.
-    expect(global, 'the global log block went missing').toBeDefined()
-    expect(site, 'the site access log went missing').toBeDefined()
-    expect(rest, 'a new log block needs its own rule here').toEqual([])
+    // where Docker keeps it. A third block needs its own rule here.
+    expect(blocks.length, 'expected the global log and the site access log, and nothing else').toBe(2)
   })
 
   it("discards Caddy's own diagnostics", () => {
