@@ -1,7 +1,10 @@
 # The blind relay
 
 Carries encrypted frames between an FTW box and the browsers allowed to see it.
-It is the only remote path between the two, and it cannot read a watt.
+It is the only remote path that carries commands, and it cannot read a watt.
+FTW Cloud, which a box owner may turn on for the iPhone app, is a separate
+service that can read what the owner enabled. It never touches the relay
+([ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md)).
 
 ```
 box ──ws──▶ ┌────────────┐ ◀──ws── phone

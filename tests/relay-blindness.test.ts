@@ -3,7 +3,8 @@
 /* The proof.
  *
  * docs/architecture.md makes one claim about the cloud that is architecture
- * rather than policy: "Sourceful's services cannot decrypt your energy data."
+ * rather than policy: "Sourceful's relay and escrow cannot decrypt your energy
+ * data." This file proves the relay half of it.
  * This file is what that sentence is worth. It runs a real box against a real
  * app across a real relay, collects everything the relay touched — every byte
  * routed, every line logged, everything held in memory — and fails if anything
