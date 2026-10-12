@@ -325,7 +325,7 @@ export class SimApi {
    */
   #schedule: Record<string, unknown> | null = {
     soc: 0.84,
-    time_of_day_min_utc: 360,
+    time_of_day_min: 420,
     recurring: true,
   }
 
@@ -756,7 +756,9 @@ export class SimApi {
                 }
               : { state: 'inactive', active: false },
           surplus_only: door.surplusOnly,
-          schedule: this.#schedule ?? { soc: 0, time_of_day_min_utc: 0, recurring: false },
+          schedule: this.#schedule
+            ? { ...this.#schedule, time_of_day_min_utc: this.#utcMinute(this.#schedule['time_of_day_min'] as number) }
+            : { soc: 0, time_of_day_min_utc: 0, recurring: false },
         },
       ],
     })
@@ -784,9 +786,14 @@ export class SimApi {
     if (typeof parsed !== 'object') return json(400, { error: 'invalid schedule' })
 
     const s = parsed as Record<string, unknown>
-    const min = s['time_of_day_min_utc']
+    const min = s['time_of_day_min_utc'] ?? 0
     if (typeof min !== 'number' || min < 0 || min >= 1440) {
       return json(400, { error: 'time_of_day_min_utc must be 0..1439' })
+    }
+    // The household clock wins; an older client sends only the UTC minute.
+    const clock = s['time_of_day_min'] ?? this.#clock(min)
+    if (typeof clock !== 'number' || clock < 0 || clock >= 1440) {
+      return json(400, { error: 'time_of_day_min must be 0..1439' })
     }
     const days = s['days']
     if (days !== undefined && (typeof days !== 'number' || days < 0 || days > 127)) {
@@ -794,9 +801,25 @@ export class SimApi {
     }
     const soc = typeof s['soc'] === 'number' ? s['soc'] : typeof s['soc_pct'] === 'number' ? s['soc_pct'] / 100 : 0
     if (soc < 0 || soc > 1) return json(400, { error: 'soc must be between 0 and 1' })
-    const { soc_pct: _legacy, ...fields } = s
-    this.#schedule = { ...fields, soc }
+    const { soc_pct: _legacy, time_of_day_min_utc: _utc, ...fields } = s
+    this.#schedule = { ...fields, soc, time_of_day_min: clock }
     return json(200, { ok: true })
+  }
+
+  /**
+   * The household clock and its UTC minute today, as the box converts
+   * them. The sim's house keeps this browser's zone.
+   */
+  #clock(minUtc: number): number {
+    const d = new Date(this.#opts.now())
+    d.setUTCHours(Math.floor(minUtc / 60), minUtc % 60, 0, 0)
+    return d.getHours() * 60 + d.getMinutes()
+  }
+
+  #utcMinute(clock: number): number {
+    const d = new Date(this.#opts.now())
+    d.setHours(Math.floor(clock / 60), clock % 60, 0, 0)
+    return d.getUTCHours() * 60 + d.getUTCMinutes()
   }
 
   #clearSchedule(id: string): ApiAnswer {

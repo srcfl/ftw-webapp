@@ -63,6 +63,7 @@ export interface WireLoadpoint {
   schedule?: {
     soc?: unknown
     soc_pct?: unknown
+    time_of_day_min?: unknown
     time_of_day_min_utc?: unknown
     surplus_unlock_bat_soc?: unknown
     recurring?: unknown
@@ -137,6 +138,11 @@ export interface Loadpoint {
   boostStopReason: string | null
   schedule: {
     socPct: number | null
+    /**
+     * The ready time on the household clock: minutes after midnight in
+     * the box's zone. Null from a box that sends only the UTC minute.
+     */
+    timeOfDayMin: number | null
     timeOfDayMinUtc: number
     surplusUnlockPct?: number
     recurring: boolean
@@ -164,6 +170,7 @@ const pct = (v: unknown): number | null => {
 export function toLoadpoint(w: WireLoadpoint): Loadpoint {
   const sched = w.schedule
   const schedMin = sched ? num(sched.time_of_day_min_utc) : null
+  const schedClock = sched ? num(sched.time_of_day_min) : null
   const schedPct = pct(sched?.soc) ?? num(sched?.soc_pct)
   const socFraction = num(w.current_soc)
   const boost = w.battery_boost
@@ -214,12 +221,33 @@ export function toLoadpoint(w: WireLoadpoint): Loadpoint {
         ? null
         : {
             socPct: schedPct,
+            timeOfDayMin: schedClock !== null && schedClock >= 0 && schedClock < 1440 ? schedClock : null,
             timeOfDayMinUtc: schedMin,
             recurring: sched!.recurring === true,
             surplusUnlockPct: typeof sched!.surplus_unlock_bat_soc === 'number' ? sched!.surplus_unlock_bat_soc * 100 : 0,
             days: (num(sched!.days) ?? 0) & 0x7f,
           },
   }
+}
+
+type Schedule = NonNullable<Loadpoint['schedule']>
+
+/**
+ * The ready time on the kitchen clock. The household clock when the box
+ * sends it, so a phone abroad shows the time at home; an older box sends
+ * only the UTC minute, read in this phone's zone.
+ */
+export function readyClock(s: Schedule, at: Date = new Date()): string {
+  if (s.timeOfDayMin == null) return localClock(s.timeOfDayMinUtc, at)
+  // Printed in UTC, so no zone of the phone's can move it.
+  const d = new Date(Date.UTC(2000, 0, 1, Math.floor(s.timeOfDayMin / 60), s.timeOfDayMin % 60))
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
+}
+
+/** The same time for an <input type="time">: "HH:MM". */
+export function readyInput(s: Schedule, at: Date = new Date()): string {
+  if (s.timeOfDayMin == null) return utcMinutesToLocalInput(s.timeOfDayMinUtc, at)
+  return `${String(Math.floor(s.timeOfDayMin / 60)).padStart(2, '0')}:${String(s.timeOfDayMin % 60).padStart(2, '0')}`
 }
 
 /** Minutes-of-day in UTC, printed on the kitchen clock. */
@@ -236,23 +264,27 @@ export function utcMinutesToLocalInput(minUtc: number, at: Date = new Date()): s
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/**
- * A local "HH:MM" back to the wire's UTC minutes-of-day.
- *
- * Anchored on `at`, so it is exact for today's offset — the same rule the
- * box's own page uses when it saves. The stored minute is fixed; a DST
- * change shifts the local deadline an hour until re-saved, a known drift
- * the box documents where it computes the deadline.
- */
-export function localInputToUtcMinutes(hhmm: string, at: Date = new Date()): number | null {
+/** "HH:MM" as minutes after midnight, the wire's time_of_day_min. */
+export function inputMinutes(hhmm: string): number | null {
   const m = hhmm.match(/^(\d{1,2}):(\d{2})$/)
   if (!m) return null
   const h = Number(m[1])
   const min = Number(m[2])
-  // setHours would roll "25:99" into tomorrow rather than refuse it.
-  if (h > 23 || min > 59) return null
+  return h > 23 || min > 59 ? null : h * 60 + min
+}
+
+/**
+ * A local "HH:MM" as the UTC minute an older box reads.
+ *
+ * Anchored on `at`, so it is exact for today's offset in this phone's
+ * zone. A box that knows time_of_day_min ignores it and keeps the
+ * household clock, so a DST change does not move the ready time.
+ */
+export function localInputToUtcMinutes(hhmm: string, at: Date = new Date()): number | null {
+  const min = inputMinutes(hhmm)
+  if (min === null) return null
   const d = new Date(at)
-  d.setHours(h, min, 0, 0)
+  d.setHours(Math.floor(min / 60), min % 60, 0, 0)
   return d.getUTCHours() * 60 + d.getUTCMinutes()
 }
 
@@ -366,7 +398,7 @@ export function evPlanSentence(lp: Loadpoint, now = Date.now(), canControl = tru
 export function evScheduleSentence(lp: Loadpoint, at: Date = new Date()): string | null {
   const s = lp.schedule
   if (!s) return null
-  const when = localClock(s.timeOfDayMinUtc, at)
+  const when = readyClock(s, at)
   const cadence = s.recurring ? daysWord(s.days) : 'once'
   const target = s.socPct !== null ? `${Math.round(s.socPct)} % ` : ''
   return `${target}Ready by ${when} · ${cadence}`
