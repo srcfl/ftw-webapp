@@ -43,3 +43,10 @@
 # changes when the bytes do.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+# Apple reads this file to tie the native iPhone app to this domain. A passkey
+# made here then works in the app too, and a pairing code scanned with the
+# camera opens the app when it is installed. Apple only accepts it as JSON,
+# and the file has no extension, so the type is set here.
+/.well-known/apple-app-site-association
+  Content-Type: application/json
