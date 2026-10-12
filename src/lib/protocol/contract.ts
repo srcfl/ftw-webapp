@@ -19,6 +19,7 @@ export const SCOPES = [
   'ftw.plan.read',
   'ftw.health.read',
   'ftw.assets.read',
+  'ftw.events.read',
   'ftw.dispatch.write',
   'ftw.mode.write',
   'ftw.members.read',

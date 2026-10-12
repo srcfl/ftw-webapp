@@ -45,3 +45,12 @@ events:
     # has. The box encrypts it before it ever leaves home.
     title: Your box is out of reach
     body: "It stopped answering. Power cut, or the internet at home is down."
+  - kind: cloud.granted
+    # To every owner, when an owner turns FTW Cloud on. Sharing a readable
+    # copy of the house is a choice every owner should hear about.
+    title: FTW Cloud is on
+    body: "Your box now shares a copy of its readings with FTW Cloud. You can turn it off in the app or on the box."
+  - kind: cloud.revoked
+    # To every owner, when FTW Cloud is turned off at either door.
+    title: FTW Cloud is off
+    body: "Your box stopped sharing with FTW Cloud and asked it to delete its copy."

@@ -16,6 +16,8 @@ export const KINDS = [
   'driver.offline',
   'fuse.over_limit',
   'box.unreachable',
+  'cloud.granted',
+  'cloud.revoked',
 ] as const
 
 export type PushKind = (typeof KINDS)[number]
@@ -40,4 +42,6 @@ export const KIND_LABELS: Record<PushKind, string> = {
   'driver.offline': 'If a device goes quiet',
   'fuse.over_limit': 'If the house draws more than the fuse allows',
   'box.unreachable': 'If your box goes out of reach',
+  'cloud.granted': 'When FTW Cloud is turned on',
+  'cloud.revoked': 'When FTW Cloud is turned off',
 }
