@@ -24,7 +24,8 @@
     evPlanSentence,
     evScheduleSentence,
     evSessionSentence,
-    utcMinutesToLocalInput,
+    readyInput,
+    inputMinutes,
     localInputToUtcMinutes,
     chargeCurrent,
     wattsToAmps,
@@ -297,7 +298,7 @@
     const wireDays = lp.schedule?.days ?? 0
     draft = {
       lpId: lp.id,
-      time: lp.schedule ? utcMinutesToLocalInput(lp.schedule.timeOfDayMinUtc) : '07:00',
+      time: lp.schedule ? readyInput(lp.schedule) : '07:00',
       days: wireDays === 0 ? 0x7f : wireDays & 0x7f,
       socPct: Math.round(lp.schedule?.socPct ?? (lp.targetSocPct != null && lp.targetSocPct >= 10 ? lp.targetSocPct : 80)),
       recurring: lp.schedule?.recurring ?? false,
@@ -341,11 +342,11 @@
     if (!draft || saving) return
     const next = { ...draft }
     const revision = scheduleRevision
-    const minUtc = localInputToUtcMinutes(next.time)
+    const min = inputMinutes(next.time)
     pendingSchedule = false
     if (!Number.isFinite(next.surplusUnlockPct) || next.surplusUnlockPct < 0 || next.surplusUnlockPct > 100) { saveError = 'Choose a home battery level from 1 to 100 %.'; return }
-    if (minUtc === null || (next.recurring && next.days === 0) || !Number.isFinite(next.socPct) || next.socPct < 10 || next.socPct > 100) {
-      saveError = minUtc === null ? 'Choose a valid ready time.' : next.recurring && next.days === 0 ? 'Choose at least one day.' : 'Choose a charge target from 10 to 100 %.'
+    if (min === null || (next.recurring && next.days === 0) || !Number.isFinite(next.socPct) || next.socPct < 10 || next.socPct > 100) {
+      saveError = min === null ? 'Choose a valid ready time.' : next.recurring && next.days === 0 ? 'Choose at least one day.' : 'Choose a charge target from 10 to 100 %.'
       return
     }
     saving = true
@@ -356,7 +357,10 @@
         path: `/api/loadpoints/${encodeURIComponent(next.lpId)}/schedule`,
         body: {
           soc: next.socPct / 100,
-          time_of_day_min_utc: minUtc,
+          // The household clock. An older box reads only the UTC minute,
+          // worked out in this phone's zone.
+          time_of_day_min: min,
+          time_of_day_min_utc: localInputToUtcMinutes(next.time),
           recurring: next.recurring,
           days: !next.recurring || next.days === 0x7f ? 0 : next.days & 0x7f,
           surplus_unlock_bat_soc: next.surplusUnlockPct / 100,

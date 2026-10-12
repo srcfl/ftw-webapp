@@ -267,6 +267,8 @@ describe('the charger behind its bubble', () => {
     )
     expect(saved, 'no schedule PUT reached the box').toBeDefined()
     const bodyOnWire = JSON.parse(new TextDecoder().decode(saved![0].body!))
+    // The household clock, and the UTC minute an older box reads.
+    expect(bodyOnWire.time_of_day_min).toBe(8 * 60)
     expect(bodyOnWire.time_of_day_min_utc).toBe(localInputToUtcMinutes('08:00'))
     expect(bodyOnWire.days).toBe(0b0011111)
     expect(bodyOnWire.recurring).toBe(true)
@@ -520,6 +522,7 @@ describe('the charger behind its bubble', () => {
     expect(writes).toHaveLength(1)
     const selected = JSON.parse(new TextDecoder().decode(writes[0]![0].body!))
     expect(selected.soc).toBe(expectedSoc)
+    expect(selected.time_of_day_min).toBe(7 * 60)
     expect(selected.time_of_day_min_utc).toBe(localInputToUtcMinutes('07:00'))
     expect(document.body.textContent).toContain('Schedule saved')
   })

@@ -12,6 +12,9 @@ import {
   daysWord,
   localInputToUtcMinutes,
   utcMinutesToLocalInput,
+  inputMinutes,
+  readyClock,
+  readyInput,
   chargeCurrent,
   ampsToWatts,
   wattsToAmps,
@@ -125,6 +128,39 @@ describe('a charger described in words', () => {
       expect(utcMinutesToLocalInput(min!)).toBe(hhmm)
     }
     expect(localInputToUtcMinutes('25:99')).toBeNull()
+  })
+
+  it('shows the household clock when the box sends it, in any zone', () => {
+    // 07:00 at home is 05:00 UTC in Swedish summer. A phone abroad reads
+    // that UTC minute as another time; the household minute it keeps.
+    const lp = toLoadpoint({
+      ...WIRE,
+      schedule: { soc: 0.8, time_of_day_min: 420, time_of_day_min_utc: 300, recurring: true },
+    })
+    expect(lp.schedule?.timeOfDayMin).toBe(420)
+    expect(readyInput(lp.schedule!)).toBe('07:00')
+    expect(readyClock(lp.schedule!)).toMatch(/^07:00/)
+    expect(evScheduleSentence(lp)).toContain(`Ready by ${readyClock(lp.schedule!)}`)
+  })
+
+  it('reads the UTC minute in this zone from a box without the household clock', () => {
+    const lp = toLoadpoint(WIRE)
+    expect(lp.schedule?.timeOfDayMin).toBeNull()
+    expect(readyInput(lp.schedule!)).toBe(utcMinutesToLocalInput(360))
+    expect(readyClock(lp.schedule!)).toBe(localClock(360))
+  })
+
+  it('ignores a household minute out of range', () => {
+    const lp = toLoadpoint({ ...WIRE, schedule: { soc: 0.8, time_of_day_min: 1440, time_of_day_min_utc: 300 } })
+    expect(lp.schedule?.timeOfDayMin).toBeNull()
+  })
+
+  it('reads a time input as minutes after midnight', () => {
+    expect(inputMinutes('00:00')).toBe(0)
+    expect(inputMinutes('06:30')).toBe(390)
+    expect(inputMinutes('23:59')).toBe(1439)
+    expect(inputMinutes('24:00')).toBeNull()
+    expect(inputMinutes('7')).toBeNull()
   })
 
   it('holds every sentence to the no-minus rule', () => {
