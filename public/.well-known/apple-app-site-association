@@ -1,0 +1,15 @@
+{
+  "webcredentials": {
+    "apps": ["L66M368PZ6.energy.ftw.app"]
+  },
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["L66M368PZ6.energy.ftw.app"],
+        "components": [
+          { "/": "/p", "comment": "A pairing code scanned with the iPhone camera" }
+        ]
+      }
+    ]
+  }
+}
