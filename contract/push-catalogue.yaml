@@ -19,6 +19,12 @@ events:
   - kind: charging.session_complete
     title: Car charged
     body: "{kwh} kWh delivered — ready to go."
+  - kind: charging.goal_at_risk
+    # Only when the box knows the car's level, from the car or from someone
+    # who set it, and the plan cannot reach the goal by the ready time. An
+    # assumed level would make this a guess. Once per plug-in.
+    title: The car may not be ready
+    body: "It will not reach {target} % by {by} at this pace."
   - kind: charging.interrupted
     # Only after the hysteresis window the box applies: a charge that had
     # been running steadily and then stopped without finishing. A flapping

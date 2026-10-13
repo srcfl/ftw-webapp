@@ -48,6 +48,7 @@ const RULE_TYPES = [
   'charging.connected',
   'charging.session_complete',
   'charging.interrupted',
+  'charging.goal_at_risk',
   'update.installed',
   'driver.offline',
   'fuse.over_limit',
