@@ -4,7 +4,7 @@ Your home's energy, from wherever you are.
 
 This is FTW's installable web client. It talks to the FTW box in your home,
 which is the authority on your
-energy system. Sourceful's cloud carries the traffic and cannot read it.
+energy system. Sourceful's relay carries the traffic and cannot read it.
 
 ## Product direction and contributions
 
@@ -50,12 +50,17 @@ cached projection of it, never the original.
 on screen in the first frame, timestamped honestly, while fresher data is
 fetched behind them. There is no spinner on a white background.
 
-**The cloud is blind.** It serves this bundle, relays encrypted frames and
-knows which opaque handle is online. It cannot read a watt, a device name or
-a command. This is enforced by the protocol, and a CI test dumps the relay's
-database and fails if anything recognisable is in it.
+**The relay is blind.** Sourceful serves this bundle, and its relay carries
+encrypted frames and knows which opaque handle is online. The relay cannot read
+a watt, a device name or a command. This is enforced by the protocol, and a CI
+test dumps the relay's database and fails if anything recognisable is in it.
 
-If a household asks, the cloud will also hold one sealed copy of its home, so a
+This app does not use FTW Cloud. FTW Cloud is a separate service for the
+iPhone app, proposed and not yet built. If a box owner turns it on, Sourceful
+can read what the owner enabled; it never sends control.
+[ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) records it, and the relay and escrow stay blind either way.
+
+If a household asks, the escrow will also hold one sealed copy of its home, so a
 new phone gets back in with a passkey instead of a trip to the box. Sourceful
 holds a sealed copy it cannot open, with an opaque id and nothing beside it —
 [`escrow/README.md`](escrow/README.md) is the claim, the file of fixed slots it

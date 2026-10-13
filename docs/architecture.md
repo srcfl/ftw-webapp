@@ -36,6 +36,11 @@ Sourceful's cloud serves this bundle and relays encrypted frames. On that path
 it knows that an opaque handle is online and roughly how much traffic passed.
 It cannot read a watt, a device name or a command.
 
+FTW Cloud is a separate service for the iPhone app, proposed in
+[srcfl/ftw ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) and not yet built. If a box owner turns it on, it
+holds a readable copy of what the owner enabled, and it never sends control.
+This app does not use it. The relay and escrow stay blind either way.
+
 A separate daily fleet-report endpoint is the stated exception. Unless the box
 owner opts out, it receives six coarse labels with no box id and reduces them
 to UTC-day counters on arrival. It keeps neither the report nor the source
@@ -209,9 +214,11 @@ home. The mitigations are an append-only build transparency log, a service
 worker that refuses a bundle whose hash is not in it, no third-party scripts
 and no analytics. They reduce the risk; they do not remove it.
 
-So the claim is **"Sourceful's services cannot decrypt your energy data"** —
-not "it is mathematically impossible for Sourceful to ever access anything".
-The second sentence is marketing. The first is true.
+So the claim is **"Sourceful's relay and escrow cannot decrypt your energy
+data"** — not "it is mathematically impossible for Sourceful to ever access
+anything". The second sentence is marketing. The first is true. It does not
+cover FTW Cloud, which can read what a box owner turns on;
+[ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) states that service's own claim.
 
 ### What is not yet true
 
