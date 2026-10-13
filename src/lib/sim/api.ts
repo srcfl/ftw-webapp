@@ -48,10 +48,17 @@ const RULE_TYPES = [
   'charging.connected',
   'charging.session_complete',
   'charging.interrupted',
+  'charging.goal_at_risk',
   'update.installed',
   'driver.offline',
   'fuse.over_limit',
+  'cloud.granted',
+  'cloud.revoked',
 ]
+
+/** The box seeds these on: each says the house started or stopped sending a
+ * readable copy to FTW Cloud, which every owner should hear unasked. */
+const ON_BY_DEFAULT = new Set(['cloud.granted', 'cloud.revoked'])
 
 /**
  * How much a route costs before it runs. Four, not three.
@@ -386,7 +393,8 @@ export class SimApi {
   }
 
   /**
-   * The default rule set, every kind disabled, exactly as the box seeds it.
+   * The default rule set exactly as the box seeds it: every kind disabled
+   * but the two FTW Cloud notices.
    * The thresholds exist so a partial PUT entry would visibly wipe them —
    * the trap the app's whole-entry rule guards against.
    */
@@ -395,7 +403,7 @@ export class SimApi {
       enabled: false,
       events: RULE_TYPES.map((type) => ({
         type,
-        enabled: false,
+        enabled: ON_BY_DEFAULT.has(type),
         threshold_s: 300,
         threshold_n: 0,
         priority: 3,

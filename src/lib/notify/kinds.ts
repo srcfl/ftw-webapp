@@ -11,11 +11,14 @@
 export const KINDS = [
   'charging.connected',
   'charging.session_complete',
+  'charging.goal_at_risk',
   'charging.interrupted',
   'update.installed',
   'driver.offline',
   'fuse.over_limit',
   'box.unreachable',
+  'cloud.granted',
+  'cloud.revoked',
 ] as const
 
 export type PushKind = (typeof KINDS)[number]
@@ -35,9 +38,12 @@ export const RULE_KINDS = KINDS.filter((k) => k !== 'box.unreachable')
 export const KIND_LABELS: Record<PushKind, string> = {
   'charging.connected': 'When the car is plugged in',
   'charging.session_complete': 'When the car finishes charging',
+  'charging.goal_at_risk': 'If the car may not be ready in time',
   'charging.interrupted': 'If charging stops before it is done',
   'update.installed': 'When your box updates itself',
   'driver.offline': 'If a device goes quiet',
   'fuse.over_limit': 'If the house draws more than the fuse allows',
   'box.unreachable': 'If your box goes out of reach',
+  'cloud.granted': 'When FTW Cloud is turned on',
+  'cloud.revoked': 'When FTW Cloud is turned off',
 }

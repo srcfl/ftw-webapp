@@ -19,6 +19,12 @@ events:
   - kind: charging.session_complete
     title: Car charged
     body: "{kwh} kWh delivered — ready to go."
+  - kind: charging.goal_at_risk
+    # Only when the box knows the car's level, from the car or from someone
+    # who set it, and the plan cannot reach the goal by the ready time. An
+    # assumed level would make this a guess. Once per plug-in.
+    title: The car may not be ready
+    body: "It will not reach {target} % by {by} at this pace."
   - kind: charging.interrupted
     # Only after the hysteresis window the box applies: a charge that had
     # been running steadily and then stopped without finishing. A flapping
@@ -45,3 +51,12 @@ events:
     # has. The box encrypts it before it ever leaves home.
     title: Your box is out of reach
     body: "It stopped answering. Power cut, or the internet at home is down."
+  - kind: cloud.granted
+    # To every owner, when an owner turns FTW Cloud on. Sharing a readable
+    # copy of the house is a choice every owner should hear about.
+    title: FTW Cloud is on
+    body: "Your box now shares a copy of its readings with FTW Cloud. You can turn it off in the app or on the box."
+  - kind: cloud.revoked
+    # To every owner, when FTW Cloud is turned off at either door.
+    title: FTW Cloud is off
+    body: "Your box stopped sharing with FTW Cloud and asked it to delete its copy."
