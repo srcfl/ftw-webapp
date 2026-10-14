@@ -59,6 +59,15 @@ describe('the proxy in front of the relay', () => {
     }
   })
 
+  it('writes no access log line for a watch exchange', () => {
+    // A line per request keeps a time, sizes and a duration even with the
+    // URI and addresses cut. On /x/ that is a line per command.
+    const source = caddyfile.replace(/^\s*#.*$/gm, '')
+    const matcher = /@(\w+)\s+path\s+\/x\/\*\s*$/m.exec(source)
+    expect(matcher, 'no matcher for /x/*').not.toBeNull()
+    expect(source).toMatch(new RegExp(`^\\s*log_skip\\s+@${matcher![1]}\\s*$`, 'm'))
+  })
+
   it('never writes a log to stdout or stderr, where Docker keeps it', () => {
     expect(caddyfile).not.toContain('output stdout')
     expect(caddyfile).not.toContain('output stderr')

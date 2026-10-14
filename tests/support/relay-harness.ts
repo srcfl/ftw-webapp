@@ -39,7 +39,7 @@ export class TestPeer {
   #ws: WebSocket
   #binary: ((bytes: Uint8Array) => void) | null = null
 
-  constructor(url: string, epoch: number, handle: string, role: 'box' | 'app') {
+  constructor(url: string, epoch: number, handle: string, role: 'box' | 'app' | 'exchange') {
     this.#ws = new WebSocket(`${url}/r/${epoch}/${handle}/${role}`)
     this.#ws.binaryType = 'arraybuffer'
     this.#ws.onmessage = (ev) => {

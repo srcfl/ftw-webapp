@@ -1,18 +1,19 @@
 # The blind relay
 
-Carries encrypted frames between an FTW box and the browsers allowed to see it.
-It is the only remote path that carries commands, and it cannot read a watt.
+Carries encrypted frames between an FTW box and the browsers and watches
+allowed to reach it. It is the only remote path that carries commands, and it
+cannot read a watt.
 FTW Cloud, which a box owner may turn on for the iPhone app, is a separate
 service that can read what the owner enabled. It never touches the relay
 ([ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md)).
 
 ```
-box ──ws──▶ ┌────────────┐ ◀──ws── phone
-            │   relay    │
-            │  no keys   │ ◀──ws── laptop
-            │ no traffic │
-            │   on disk  │
-            └────────────┘
+box ──ws: uplink────▶ ┌────────────┐ ◀──ws──── phone
+    ──ws: exchange──▶ │   relay    │
+                      │  no keys   │ ◀──ws──── laptop
+                      │ no traffic │
+                      │   on disk  │ ◀──https── watch
+                      └────────────┘
 ```
 
 ## Running it
@@ -22,7 +23,8 @@ npm run relay          # PORT=8787 HOST=0.0.0.0
 ```
 
 Network settings and two state-file paths come from the environment. There is
-no configuration file; every limit stays in `src/server.ts` beside the code.
+no configuration file; every limit stays in `src/server.ts` or `src/limits.ts`
+beside the code.
 
 ## What it does
 
@@ -35,6 +37,14 @@ stream a ciphertext belongs to without reading it, and reading it is the one
 thing it must not do. At 512 bytes a second on the telemetry lane, four streams
 cost two kilobytes a second. That is the right way to spend the bandwidth.
 
+A watch cannot hold a stream: watchOS gives an app HTTPS and nothing lower. So
+the box opens a second socket, the **exchange socket**, and a watch posts one
+sealed message at a time. The relay draws a random 16-byte id, sends the id and
+the body down that socket, and returns the answer that comes back behind the
+same id. An exchange never takes one of the four stream places, no stream sees
+one, and the exchange socket sees no stream frame.
+[docs/watch-exchange.md](../docs/watch-exchange.md) has the wire.
+
 ## What it cannot do, and how you can check
 
 Read `src/`. The small files are meant to be read: routing and
@@ -46,12 +56,13 @@ man's switch in `deadman.ts`.
 |---|---|
 | No keys, no decryption | Nothing in this directory imports a cipher |
 | No parsing of payloads | The only property read off a routed message is `.length` |
+| On the exchange socket, only its own id | `#onAnswer()` reads the first 16 bytes, the id the relay drew, and returns the rest unchanged |
 | No compression | `perMessageDeflate: false` — a compressed frame's size depends on its content |
 | No padding, no trimming | `send()` forwards the received buffer unchanged |
 | No handle derivation | Needs a secret that never comes near here; see `src/lib/carrier/rendezvous.ts` |
-| No storage of routed traffic | Rooms are a `Map` and are deleted with their last socket |
+| No storage of routed traffic | Rooms are a `Map` and are deleted with their last socket. An open exchange leaves its room's map when its answer goes or its timer fires |
 | Bounded stored state | `deadman.json` holds sealed dead-man rows; `fleet-stats.json` holds daily counters for 90 days. Neither holds routed traffic |
-| No record of who was here | `log` is given counts and statuses; `inspect()` is everything held, and holds counts |
+| No record of who was here | `log` is given counts and statuses, and nothing about exchanges; `inspect()` is everything held, and holds counts. Caddy writes no access log line for `/x/` |
 
 **The dead man's switch is the one thing the relay holds**, because it is the
 one notification the box cannot push about itself: that it is gone. A box
@@ -90,8 +101,9 @@ from a real box. The daily count is an operating estimate, not a billing or
 security measure.
 
 `tests/relay-blindness.test.ts` runs a real box against a real app across this
-server, collects every routed byte, every logged line and everything in memory,
-and fails if a message type, a device name or a watt reading is anywhere in it.
+server, and a stand-in box and watch through the exchange. It collects every
+routed byte, every logged line and everything in memory, and fails if a message
+type, an op name, a device name or a watt reading is anywhere in it.
 It first checks that the same detector catches the unsealed frames, because a
 detector that catches nothing proves nothing. The dead man tests hold the new
 claims the same way: the persisted file is byte-audited against the five
@@ -147,7 +159,8 @@ keeping the list, and it is paid on purpose.
 ## Wire
 
 ```
-ws://host/r/<epoch>/<handle>/<box|app>
+ws://host/r/<epoch>/<handle>/<box|app|exchange>
+POST https://host/x/<epoch>/<handle>
 ```
 
 Binary messages are routed. Text from a peer is a protocol error and closes the
@@ -161,7 +174,7 @@ interpret. Text from the relay is one of two words:
 
 | Close code | Meaning |
 |---|---|
-| 4400 | Bad join, text on a binary channel, or an oversize message |
+| 4400 | Bad join, text on a binary channel, an oversize message, or an exchange answer of the wrong size |
 | 4409 | Wrong epoch; the reason carries the right one |
 | 4410 | The epoch turned over; the reason carries the new one |
 | 4429 | Rate limited, room occupied, or the process is at its ceiling |
@@ -169,6 +182,33 @@ interpret. Text from the relay is one of two words:
 A single timer drives the heartbeat, the reaping of dead sockets and the
 rotation check, so nothing the relay emits has a cadence that traffic can
 influence.
+
+### The exchange
+
+The box joins with role `exchange`, one per room; the first holds it, as with
+the uplink. Each message from the relay is `id(16) ‖ body`, and each answer
+from the box is `id(16) ‖ reply`. The relay drops an answer whose id it is not
+waiting for, and says no word on this socket: no `ready`, no `gone`.
+
+A watch posts `content-type: application/octet-stream` and gets a status back.
+No CORS header is ever sent, so a web page cannot read an answer.
+
+| Status | Meaning |
+|---|---|
+| 200 | The box replied; the body is its reply, unchanged |
+| 400 | The path, the content type or the body size is not one the route takes |
+| 404 | No box on this handle now |
+| 405 | Not a POST |
+| 409 | Wrong epoch; the body carries the right one |
+| 429 | Rate limited |
+| 501 | A box is here but opened no exchange socket: it needs an update |
+| 504 | The box did not reply within 10 s, or its exchange socket closed |
+
+The limits, in `src/limits.ts`, keep no list: 30 requests a minute per address;
+2 open and 30 a minute per room; 1 024 open in the process; a body of exactly
+608 or 536 bytes in and at most 4 KiB back. During the five minutes a rotation
+is spread over, `/x/` also takes the previous epoch, so a watch whose box has
+not moved yet can find it.
 
 ## What it still knows
 
@@ -181,6 +221,24 @@ Honesty about the residue, in the spirit of `docs/architecture.md`:
   saying anything about the house.
 - The six coarse fleet labels during one daily HTTP request. It stores their
   daily totals, not the request or the address that sent it.
+
+While a watch's request is open, it also knows what
+[docs/watch-exchange.md](../docs/watch-exchange.md#what-the-relay-must-never-learn)
+lists:
+
+- That someone with this hour's handle sent a request at a given time from a
+  given address. [architecture.md](../docs/architecture.md#what-is-not-yet-true)
+  names the same channel for app-to-box frames, which leave only on a person's
+  action.
+- Whether a request opens a session, from its size. The order already told it
+  that.
+- How long the box took. A refusal answers in milliseconds; an applied command
+  waits for the charger. ADR 0009 measures whether that gap shows through
+  network jitter, and adds a fixed floor only if it does.
+- That this handle had an HTTPS client this hour.
+
+It writes none of these down. No log line names a handle, an address, a size
+or a time, and Caddy writes no line for `/x/`.
 
 ## Not here yet
 
