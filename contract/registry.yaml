@@ -50,6 +50,29 @@ frozen_fields:
   10: { name: ev_w, kind: power, unit: W }
 
 # ---------------------------------------------------------------------------
+# Field ids after the frozen set. They travel like the frozen ids, in lane
+# 0's delta and in FTW Cloud's live body, under the same rules: integers,
+# sent only while the box has the reading, and an id never changes meaning.
+# They are depth for a node's own view, not the core view, so an app draws
+# Now without them and a box may stop sending one. Lane 0 drops the highest
+# id first when a delta does not fit its bucket, so these give way first.
+#
+# The grid's phase currents come from the site meter in tenths of an ampere,
+# signed by the site convention: positive while the phase draws from the
+# grid. A meter that gives magnitudes and no power per phase sends positive
+# values both ways, so a positive current alone does not prove import. The
+# box sends only the phases the site has, each while the meter is online and
+# reports it, and their freshness is the grid meter's. grid_fuse_da is the
+# main fuse per phase from the box's config, sent with the phases as their
+# scale.
+# ---------------------------------------------------------------------------
+extra_fields:
+  11: { name: grid_l1_da, kind: current, unit: dA }
+  12: { name: grid_l2_da, kind: current, unit: dA }
+  13: { name: grid_l3_da, kind: current, unit: dA }
+  14: { name: grid_fuse_da, kind: current, unit: dA }
+
+# ---------------------------------------------------------------------------
 # Capabilities. A set of names, not version numbers. Absent means the box does
 # not have it; the UI hides the feature and never crashes.
 # ---------------------------------------------------------------------------

@@ -283,6 +283,36 @@ describe('frozen field ids', () => {
     const table = Object.entries(FID).map(([name, id]) => `${id}: ${name.toLowerCase()}`)
     expect(table.sort()).toEqual(declared.sort())
   })
+
+  /**
+   * extra_fields share the frozen set's id space on the wire: a delta and
+   * FTW Cloud's live body key both by id alone. An id or a name in both
+   * blocks would be two meanings for one number. They also sit above the
+   * frozen set, because lane 0 drops the highest id first when a delta does
+   * not fit, and the core view must be the last thing to go.
+   */
+  it('leave the extra fields above the frozen set, with ids and names of their own', () => {
+    const entries = (name: string) =>
+      block(name).map((line) => {
+        const m = /^ {2}(\d+): \{ name: ([a-z0-9_]+),/.exec(line)
+        expect(m, `unreadable ${name} line: ${line}`).not.toBeNull()
+        return { id: Number(m![1]), name: m![2]! }
+      })
+    const frozen = entries('frozen_fields')
+    const extra = entries('extra_fields')
+    expect(extra.length, 'no extra fields were found to check').toBeGreaterThan(0)
+
+    const highestFrozen = Math.max(...frozen.map((f) => f.id))
+    const ids = new Set(frozen.map((f) => f.id))
+    const names = new Set(frozen.map((f) => f.name))
+    for (const f of extra) {
+      expect(f.id, `${f.name} sits among the frozen ids`).toBeGreaterThan(highestFrozen)
+      expect(ids.has(f.id), `field id ${f.id} is declared twice`).toBe(false)
+      expect(names.has(f.name), `field name ${f.name} is declared twice`).toBe(false)
+      ids.add(f.id)
+      names.add(f.name)
+    }
+  })
 })
 
 describe('capabilities the app gates on', () => {

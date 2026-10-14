@@ -126,6 +126,12 @@ battery power, battery state of charge, load power, and their source ids. Any
 app, however old, can draw the core view. Freezing them now is free; doing it
 later is not.
 
+Ids after the frozen set live in the registry's `extra_fields`: depth for a
+node's own view, such as the grid's phase currents and the main fuse. They
+travel in the same `delta` and follow the same rules, but an app draws the
+core view without them and a box may stop sending one. A delta that does not
+fit drops the highest id first, so they give way before the core view.
+
 ## Freshness
 
 Every reading points at a **source**, not at its own timestamp:
