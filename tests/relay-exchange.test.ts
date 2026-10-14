@@ -580,8 +580,10 @@ describe('the epoch', () => {
   it('takes the previous epoch during the spread, closes the socket with its room, then refuses it', async () => {
     const spreadMs = 60_000
     let clock = EPOCH_MS * 480_000 + 60_000
+    // Each beat checks the clock. Not much faster: the relay and the peers
+    // share this process, and a stall longer than a beat gets a socket reaped.
     const relay = await RelayServer.start({
-      heartbeatMs: 50,
+      heartbeatMs: 500,
       now: () => clock,
       rotateSpreadMs: spreadMs,
       exchangeAttemptLimit: 1000,

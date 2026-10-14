@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { RelayServer } from '../relay/src/server.ts'
+import { EXCHANGE_ID_BYTES } from '../relay/src/protocol.ts'
 import { rendezvousHandle, currentEpoch } from '$lib/carrier/rendezvous'
 import { encode as cborEncode } from 'cbor2'
 import { encodeFrame } from '$lib/protocol/frame'
@@ -387,8 +388,11 @@ const EXCHANGE_STRINGS = [
 describe('the relay cannot read a watch exchange', () => {
   it('dumps everything it saw and gives nothing away', async () => {
     const logs: string[] = []
+    // The relay and both peers share this process, so a stall longer than
+    // one beat leaves a pong unread and the relay reaps the socket, and the
+    // exchange on it. A second's beat rides out a busy machine.
     const relay = await RelayServer.start({
-      heartbeatMs: 40,
+      heartbeatMs: 1000,
       exchangeAttemptLimit: 1000,
       log: (line) => logs.push(line),
     })
@@ -436,11 +440,23 @@ describe('the relay cannot read a watch exchange', () => {
       const read = await watch.ask({ t: 'now' })
       expect(read.envelopes[0]).toEqual({ t: 'now', b: HOUSE_NOW })
 
-      await new Promise((r) => setTimeout(r, 120))
+      await waitFor(() => logs.length > 0, 'a log line')
       const inspection = relay.inspect()
+
+      // Each sealed message once. The box got the watch's bytes behind the
+      // relay's id, and the watch got the box's answer as it was sent, so
+      // the two sides hold the same ciphertext. Counting both copies would
+      // count every chance match in random bytes twice, and a short word
+      // needs only two to count as a leak.
+      const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
+      const crossed = new Set(watches.flatMap((w) => w.wire.map(hex)))
+      const atTheBox = boxes.flatMap((b) => [...b.seen, ...b.answered])
+      for (const message of atTheBox) {
+        expect(crossed.has(hex(message.subarray(EXCHANGE_ID_BYTES))), 'bytes only the box saw').toBe(true)
+      }
       const dump = concat([
         ...watches.flatMap((w) => w.wire),
-        ...boxes.flatMap((b) => [...b.seen, ...b.answered]),
+        ...boxes.flatMap((b) => b.seen.map((m) => m.subarray(0, EXCHANGE_ID_BYTES))),
         new TextEncoder().encode(logs.join('\n')),
         new TextEncoder().encode(JSON.stringify(inspection)),
       ])
