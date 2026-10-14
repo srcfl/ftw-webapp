@@ -80,6 +80,10 @@ capabilities:
   # only and offers no FTW Cloud. It says nothing about whether the owner
   # turned FTW Cloud on; the box's grant decides that.
   - cloud.link
+  # The box can take a watch: it opens the relay's exchange socket and mints
+  # watch codes. Absent means the phone offers no Add watch. The wire is
+  # docs/watch-exchange.md in srcfl/ftw-webapp.
+  - cmd.exchange
 
 # ---------------------------------------------------------------------------
 # Scopes. One object axis, two verb axes: <object>.<read|write>.
@@ -104,6 +108,13 @@ roles:
   viewer:
     label: Viewer
     scopes: [ftw.live.read]
+  # A watch that an owner phone added. That phone is its parent, and each check
+  # keeps only the scopes below that the parent holds at that moment, so a
+  # watch never does more than its phone can do now. Read and charge: no site
+  # mode, no members, no history and no passthrough.
+  watch:
+    label: Watch
+    scopes: [ftw.live.read, ftw.plan.read, ftw.events.read, ftw.dispatch.write]
 
 # ---------------------------------------------------------------------------
 # FTW Cloud. What an owner can let the box share with FTW Cloud, and why.

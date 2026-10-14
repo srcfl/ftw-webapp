@@ -38,12 +38,14 @@ export type Scope = (typeof SCOPES)[number]
 export const ROLE_SCOPES: Record<string, readonly string[]> = {
   owner: SCOPES,
   viewer: ['ftw.live.read'],
+  watch: ['ftw.live.read', 'ftw.plan.read', 'ftw.events.read', 'ftw.dispatch.write'],
 }
 
 /** The label the registry gives each role. The app owns no other wording. */
 export const ROLE_LABELS: Record<string, string> = {
   owner: 'Owner',
   viewer: 'Viewer',
+  watch: 'Watch',
 }
 
 /** Whether a role carries a scope. An unknown role carries nothing. */
