@@ -98,3 +98,23 @@ export class AttemptCounter {
     return digest.readUInt32BE(0) % this.#counts.length
   }
 }
+
+/**
+ * The exchange's bounds, from docs/watch-exchange.md.
+ *
+ * None of them keeps a list either. The per-address count is an
+ * AttemptCounter of its own. The per-room allowance is a TokenBucket on the
+ * room, gone with the room. Open exchanges sit in a map keyed by the relay's
+ * own random id, and each leaves it when its answer goes or its timer fires.
+ */
+export const EXCHANGE = {
+  /** IK message 1 (608), or one transport message (536). Nothing else. */
+  requestBytes: [608, 536] as readonly number[],
+  /** The box's answer, after the id. */
+  maxReplyBytes: 4096,
+  attemptsPerMinute: 30,
+  openPerRoom: 2,
+  perRoomPerMinute: 30,
+  openPerProcess: 1024,
+  timeoutMs: 10_000,
+} as const

@@ -30,6 +30,14 @@ relay.ftw.energy {
 	@fleet_stats path /fleet/stats /fleet/stats/
 	respond @fleet_stats 404
 
+	# A watch's exchange is one request per command. With the URI and the
+	# addresses cut, the access log would still keep one line per request
+	# with its time, sizes and duration: a record of each command, which is
+	# what the escrow had to remove from its own proxy. So these requests
+	# write no access log line at all.
+	@exchange path /x/*
+	log_skip @exchange
+
 	# The relay reads this to rate-limit. Behind a terminator every client is
 	# one address, so without it the whole fleet shares a single limit and
 	# ordinary reconnection load is an outage. Caddy sets it; the relay only
