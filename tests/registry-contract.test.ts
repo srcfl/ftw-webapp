@@ -373,7 +373,7 @@ describe('hand-written shared names', () => {
     // The scan can only ban a shape it recognises, so the shape is pinned to
     // the registry first: a declared scope it cannot match is a scope the
     // scan has gone blind to.
-    const shape = /^ftw\.[a-z_]+\.(?:read|write)$/
+    const shape = /^ftw\.[a-z_]+\.(?:read|write|run|hold|request)$/
     const declared = new Set(registryScopes())
     for (const scope of declared) {
       expect(scope, 'a registry scope the bare-name scan cannot recognise').toMatch(shape)

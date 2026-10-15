@@ -574,6 +574,16 @@ const RETRYABLE: Record<string, boolean> = {
   // no role and no ceremony changes it.
   E_WHOLE_DOCUMENT: false,
   E_LOCAL_ONLY: false,
+  // Agents' refusals (docs/agents.md in srcfl/ftw). A rate limit clears once
+  // the grant's minute has room; every other one gets the same answer again.
+  E_GRANT_EXPIRED: false,
+  E_OP_NOT_GRANTED: false,
+  E_CAP_EXCEEDED: false,
+  E_RATE_LIMITED: true,
+  E_NEEDS_OWNER: false,
+  E_BAD_SIGNATURE: false,
+  E_NO_APPROVAL_KEY: false,
+  E_NOT_FOUND: false,
   // Not from the box. The session layer raises this one itself out of
   // api.end{truncated: true} — see contract/registry.yaml, client_errors.
   E_RESPONSE_TOO_LARGE: false,

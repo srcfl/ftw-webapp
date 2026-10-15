@@ -60,3 +60,14 @@ events:
     # To every owner, when FTW Cloud is turned off at either door.
     title: FTW Cloud is off
     body: "Your box stopped sharing with FTW Cloud and asked it to delete its copy."
+  - kind: agent.added
+    # To every owner, when an owner gives an assistant, Sourceful support or
+    # the release check access to the box. Access from outside the house is
+    # news every owner should hear, as with cloud.granted.
+    title: New access to your box
+    body: "You gave an assistant or Sourceful access. See who has access in the app."
+  - kind: agent.request
+    # To every owner, when an agent asks for a durable change. It waits for
+    # one of them to confirm it, and runs out after twelve hours.
+    title: Waiting for your answer
+    body: "An assistant asks to change a setting. Open FTW to confirm or decline."

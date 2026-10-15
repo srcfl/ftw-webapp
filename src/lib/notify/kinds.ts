@@ -19,6 +19,8 @@ export const KINDS = [
   'box.unreachable',
   'cloud.granted',
   'cloud.revoked',
+  'agent.added',
+  'agent.request',
 ] as const
 
 export type PushKind = (typeof KINDS)[number]
@@ -46,4 +48,6 @@ export const KIND_LABELS: Record<PushKind, string> = {
   'box.unreachable': 'If your box goes out of reach',
   'cloud.granted': 'When FTW Cloud is turned on',
   'cloud.revoked': 'When FTW Cloud is turned off',
+  'agent.added': 'When an assistant or Sourceful gets access',
+  'agent.request': 'When an assistant asks to change a setting',
 }
