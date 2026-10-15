@@ -1,6 +1,6 @@
 /* Building the carrier stack for a paired site.
  *
- *   Session  →  NoiseCarrier  →  RelayCarrier  →  the relay
+ *   Session  →  NoiseCarrier  →  RelayCarrier  →  the relay, or FTW Cloud
  *
  * Everything above the session sees state; everything below the Noise carrier
  * sees opaque bytes. This file is the one place the three are wired together,
@@ -19,15 +19,31 @@ import {
   isEnrolled,
 } from '$lib/identity/vault'
 import { db, type StoredSite } from '$lib/store/db'
-import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
+import { resolveCarrier, RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
 import { markLinkPhase } from '$lib/perf/link'
 
-/** Overridable only for development against a local relay. */
+/**
+ * The host this build dials first.
+ *
+ * `VITE_RELAY_URL` still overrides the relay, including when it is the
+ * fallback. `VITE_CARRIER=cloud` prefers `VITE_CLOUD_URL` or
+ * `wss://cloud.ftw.energy` and falls back to the relay when that host does
+ * not speak the relay protocol. Unset keeps the relay, which is the
+ * behaviour until the cloud path is deployed.
+ */
+const CARRIER = resolveCarrier({
+  carrier: import.meta.env['VITE_CARRIER'],
+  cloudUrl: import.meta.env['VITE_CLOUD_URL'],
+  relayUrl: import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL,
+})
+
+/** The relay origin, after `VITE_RELAY_URL`. Not necessarily the host we dial. */
 export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL
 
 export interface ConnectOptions {
   /** Injected by tests. Defaults to a real relay carrier. */
-  makeInner?: (opts: { url: string; secret: Uint8Array }) => Carrier
+  makeInner?: (opts: { url: string; fallbackUrl?: string; secret: Uint8Array }) => Carrier
+  /** Pins one host and disables the cloud fallback. Tests use this. */
   relayUrl?: string
 }
 
@@ -104,10 +120,13 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
   const device = await deviceKey(vault, wrapping)
   markLinkPhase('keys-ready')
 
-  const relayUrl = opts.relayUrl ?? RELAY_URL
+  // A caller that names a host wants that host. The cloud fallback belongs
+  // to the build's own choice, not to a test relay.
+  const relayUrl = opts.relayUrl ?? CARRIER.url
+  const fallbackUrl = opts.relayUrl ? undefined : CARRIER.fallbackUrl
   const inner = opts.makeInner
-    ? opts.makeInner({ url: relayUrl, secret })
-    : new RelayCarrier({ url: relayUrl, secret })
+    ? opts.makeInner({ url: relayUrl, ...(fallbackUrl ? { fallbackUrl } : {}), secret })
+    : new RelayCarrier({ url: relayUrl, ...(fallbackUrl ? { fallbackUrl } : {}), secret })
 
   return new NoiseCarrier({
     inner,

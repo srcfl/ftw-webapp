@@ -48,7 +48,7 @@ import {
   type ApiEnd,
   type Role,
   ROLE_OWNER,
-  API_MAX_BYTES,
+  apiReqFields,
   CMD_ACK_TIMEOUT_MS,
   CMD_CONFIRM_TIMEOUT_MS,
 } from './messages'
@@ -678,16 +678,16 @@ export class Session {
       // Sent before anything is registered: a payload the largest bucket
       // cannot carry throws out of the executor, rejecting the promise with
       // no entry and no timer left behind for the deadline to sweep up.
+      const fields = apiReqFields(req)
       this.#sendBulk({
         t: 'api.req',
         id,
         b: {
-          maxBytes: API_MAX_BYTES,
-          ...req,
+          ...fields,
           // The caller encoded this with a TextEncoder, and a typed array
           // from another realm is written as a list of numbers rather than a
           // byte string. See wireBytes.
-          ...(req.body ? { body: wireBytes(req.body) } : {}),
+          ...(fields.body ? { body: wireBytes(fields.body) } : {}),
         },
       })
 

@@ -452,6 +452,51 @@ export const API_CHUNK_BYTES = 12288
 export const API_MAX_BYTES = 8 * 1024 * 1024
 
 /**
+ * The `api.req` body, in the same field set the iPhone app sends.
+ *
+ * `maxBytes`, `method` and `path` always. `query` only when it has entries,
+ * with keys sorted so the CBOR map matches `APIRequest.cbor` in
+ * srcfl/ftw-app. `body` only when the caller supplied one. `stepUp` only
+ * when it is true — a false flag is the absence of a ceremony, which the
+ * box already treats as "not set".
+ */
+export function apiReqFields(req: ApiReq): {
+  maxBytes: number
+  method: ApiMethod
+  path: string
+  query?: Record<string, string>
+  body?: Uint8Array
+  stepUp?: true
+} {
+  const fields: {
+    maxBytes: number
+    method: ApiMethod
+    path: string
+    query?: Record<string, string>
+    body?: Uint8Array
+    stepUp?: true
+  } = {
+    maxBytes: req.maxBytes ?? API_MAX_BYTES,
+    method: req.method,
+    path: req.path,
+  }
+  const query = sortedQuery(req.query)
+  if (query) fields.query = query
+  if (req.body) fields.body = req.body
+  if (req.stepUp) fields.stepUp = true
+  return fields
+}
+
+function sortedQuery(query: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!query) return undefined
+  const keys = Object.keys(query).sort()
+  if (keys.length === 0) return undefined
+  const out: Record<string, string> = {}
+  for (const key of keys) out[key] = query[key]!
+  return out
+}
+
+/**
  * What the passthrough will carry: JSON and text, and nothing else.
  *
  * Refused by class rather than by a list of paths, so a route added next year

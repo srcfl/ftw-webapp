@@ -35,9 +35,63 @@ export const APP_ORIGIN = `https://${APP_HOST}`
 export const RP_ID = APP_HOST
 export const RP_NAME = 'FTW'
 
-/** The relay. One value, no setting — see CLAUDE.md. */
+/** The relay. The default remote path until FTW Cloud speaks these frames. */
 export const RELAY_HOST = 'relay.ftw.energy'
 export const RELAY_URL = `wss://${RELAY_HOST}`
+
+/**
+ * FTW Cloud, the host the iPhone app dials (`cloud.ftw.energy` in
+ * srcfl/ftw-app `Origin.swift` / `CloudEndpoint`).
+ *
+ * This app does not open the iPhone's readable session at
+ * `wss://cloud.ftw.energy/v1/app?home=`. A parallel port of the relay
+ * protocol onto that host keeps this app's frame format, so the switch is
+ * which origin the existing `/r/<epoch>/<handle>/app` join uses.
+ */
+export const CLOUD_HOST = 'cloud.ftw.energy'
+export const CLOUD_URL = `wss://${CLOUD_HOST}`
+
+export type CarrierName = 'relay' | 'cloud'
+
+export interface CarrierChoice {
+  /** Which host the build prefers. `relay` is the default. */
+  name: CarrierName
+  /** Origin to dial first, with no path. */
+  url: string
+  /**
+   * The relay, when `url` is the cloud host and the two differ.
+   *
+   * Used once, when that host never speaks the relay protocol. Absent means
+   * stay on `url`, which is today's behaviour.
+   */
+  fallbackUrl?: string
+}
+
+/**
+ * Which host carries reads and commands.
+ *
+ * `carrier` is `VITE_CARRIER`: `cloud` prefers {@link CLOUD_URL} and falls
+ * back to the relay; anything else, including unset, keeps the relay. That
+ * is the transition default — the cloud path is not deployed until the
+ * relay frames land on `cloud.ftw.energy`.
+ */
+export function resolveCarrier(env: {
+  carrier?: string
+  cloudUrl?: string
+  relayUrl?: string
+} = {}): CarrierChoice {
+  const relay = stripSlash(env.relayUrl?.trim() || RELAY_URL)
+  const cloud = stripSlash(env.cloudUrl?.trim() || CLOUD_URL)
+  const flag = (env.carrier ?? '').trim().toLowerCase()
+  if (flag === 'cloud' && cloud !== relay) {
+    return { name: 'cloud', url: cloud, fallbackUrl: relay }
+  }
+  return { name: 'relay', url: flag === 'cloud' ? cloud : relay }
+}
+
+function stripSlash(url: string): string {
+  return url.replace(/\/+$/, '')
+}
 
 /**
  * Development runs on localhost, where the RP ID must be the literal hostname.

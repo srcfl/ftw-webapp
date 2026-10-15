@@ -37,9 +37,13 @@ it knows that an opaque handle is online and roughly how much traffic passed.
 It cannot read a watt, a device name or a command.
 
 FTW Cloud is a separate service for the iPhone app, proposed in
-[srcfl/ftw ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) and not yet built. If a box owner turns it on, it
-holds a readable copy of what the owner enabled, and it never sends control.
-This app does not use it. The relay and escrow stay blind either way.
+[srcfl/ftw ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md). If a box owner turns it on, it
+holds a readable copy of what the owner enabled, and it never sends control
+through that session (`wss://cloud.ftw.energy/v1/app`). This app does not open
+that session. A build can set `VITE_CARRIER=cloud` to send the same sealed
+relay frames to `wss://cloud.ftw.energy` and fall back to `relay.ftw.energy`
+when that host does not speak them. The default build still dials the relay.
+The relay and escrow stay blind either way.
 
 A separate daily fleet-report endpoint is the stated exception. Unless the box
 owner opts out, it receives six coarse labels with no box id and reduces them
@@ -58,7 +62,7 @@ Behind a common session abstraction sit three carriers:
 
 | Carrier | Role | Status |
 |---|---|---|
-| Relay | Default, and the only remote path | v1 |
+| Relay frames | Default remote path (`relay.ftw.energy`). `VITE_CARRIER=cloud` prefers `cloud.ftw.energy` for the same frames and falls back to the relay | v1 |
 | Cache | Read-only view when nothing reaches the box | v1 |
 | WebRTC DataChannel | Opportunistic LAN shortcut | after measurement |
 
