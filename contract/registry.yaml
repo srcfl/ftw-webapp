@@ -103,6 +103,10 @@ capabilities:
   # only and offers no FTW Cloud. It says nothing about whether the owner
   # turned FTW Cloud on; the box's grant decides that.
   - cloud.link
+  # The box takes its app session through FTW Cloud, end to end, as `tun`
+  # (docs/protocol-cloud.md, Tunnel, in srcfl/ftw). Absent means a phone
+  # reaches the box through the relay, even when it knows the home id.
+  - cloud.tun
   # The box can take a watch: it opens the relay's exchange socket and mints
   # watch codes. Absent means the phone offers no Add watch. The wire is
   # docs/watch-exchange.md in srcfl/ftw-webapp.
@@ -274,7 +278,9 @@ client_errors:
 # the two into one enum cannot express "connected, but the inverter is quiet".
 # ---------------------------------------------------------------------------
 source_states: [live, lagging, stale, down, never]
-carrier_states: [webrtc, relay, cloud, cache, none]
+# tunnel is the box's own session carried by FTW Cloud, which cannot read it.
+# cloud is the box-signed copy FTW Cloud holds and can read.
+carrier_states: [webrtc, relay, tunnel, cloud, cache, none]
 
 # ---------------------------------------------------------------------------
 # History resolutions backed by what the box actually stores.
