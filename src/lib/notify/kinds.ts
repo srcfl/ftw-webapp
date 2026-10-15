@@ -21,6 +21,9 @@ export const KINDS = [
   'cloud.revoked',
   'agent.added',
   'agent.request',
+  'agent.expiring',
+  'approval.key.set',
+  'owner.added',
 ] as const
 
 export type PushKind = (typeof KINDS)[number]
@@ -50,4 +53,7 @@ export const KIND_LABELS: Record<PushKind, string> = {
   'cloud.revoked': 'When FTW Cloud is turned off',
   'agent.added': 'When an assistant or Sourceful gets access',
   'agent.request': 'When an assistant asks to change a setting',
+  'agent.expiring': "When an assistant's or Sourceful's access is about to end",
+  'approval.key.set': 'When a phone sets up the key that approves access',
+  'owner.added': 'When a phone is paired as an owner',
 }

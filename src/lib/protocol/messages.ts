@@ -584,6 +584,9 @@ const RETRYABLE: Record<string, boolean> = {
   E_BAD_SIGNATURE: false,
   E_NO_APPROVAL_KEY: false,
   E_NOT_FOUND: false,
+  // The approval's atMs is too far from the box's clock; the phone signs
+  // again with args.boxMs, so asking again can succeed.
+  E_CLOCK_SKEW: true,
   // Not from the box. The session layer raises this one itself out of
   // api.end{truncated: true} — see contract/registry.yaml, client_errors.
   E_RESPONSE_TOO_LARGE: false,
