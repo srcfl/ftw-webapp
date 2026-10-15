@@ -60,3 +60,29 @@ events:
     # To every owner, when FTW Cloud is turned off at either door.
     title: FTW Cloud is off
     body: "Your box stopped sharing with FTW Cloud and asked it to delete its copy."
+  - kind: agent.added
+    # To every owner, when an owner gives an assistant, Sourceful support or
+    # the release check access to the box. Access from outside the house is
+    # news every owner should hear, as with cloud.granted.
+    title: New access to your box
+    body: "You gave an assistant or Sourceful access. See who has access in the app."
+  - kind: agent.request
+    # To every owner, when an agent asks for a durable change. It waits for
+    # one of them to confirm it, and runs out after twelve hours.
+    title: Waiting for your answer
+    body: "An assistant asks to change a setting. Open FTW to confirm or decline."
+  - kind: agent.expiring
+    # To every owner, a day before an agent's grant runs out, so access that
+    # should go on is renewed and access that should end can be left to end.
+    title: Access ends tomorrow
+    body: "An assistant's or Sourceful's access to your box runs out in a day. Renew it in the app if it should go on."
+  - kind: approval.key.set
+    # To every owner, when a phone registers or replaces the key that
+    # approves access. A new key is a new way to let others in.
+    title: A phone can now approve access
+    body: "A phone set up the key it uses to approve access to your box. If that was not you, remove the phone in the app."
+  - kind: owner.added
+    # To every owner, when a phone pairs as an owner. An owner can do
+    # anything, including give others access.
+    title: A new owner
+    body: "A phone was paired as an owner of your box. If that was not you, remove it in the app."

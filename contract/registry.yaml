@@ -111,9 +111,16 @@ capabilities:
   # watch codes. Absent means the phone offers no Add watch. The wire is
   # docs/watch-exchange.md in srcfl/ftw-webapp.
   - cmd.exchange
+  # The box takes agents: assistants, Sourceful support and the release
+  # check, each an owner's grant with scopes, ops, caps and an expiry, and it
+  # answers the agent.* messages and approval.key.set (docs/agents.md in
+  # srcfl/ftw). Absent means the app offers no Access list.
+  - access.agents
 
 # ---------------------------------------------------------------------------
-# Scopes. One object axis, two verb axes: <object>.<read|write>.
+# Scopes. One object axis and a verb: <object>.<read|write|run|hold|request>.
+# read and write are a phone's. run changes nothing, hold acts for a capped
+# time and ends unless renewed, and request waits for an owner to confirm.
 # Roles are a UI projection over these, never a replacement for them.
 # ---------------------------------------------------------------------------
 scopes:
@@ -127,6 +134,13 @@ scopes:
   - { name: ftw.mode.write, desc: Change site operating mode }
   - { name: ftw.members.read, desc: See who has access }
   - { name: ftw.members.write, desc: Invite and revoke }
+  - { name: ftw.logs.read, desc: Log excerpts the box redacts }
+  - { name: ftw.config.read, desc: Configuration the box redacts }
+  - { name: ftw.diag.run, desc: Checks that change nothing }
+  - { name: ftw.dispatch.hold, desc: Hold energy assets for a capped time }
+  - { name: ftw.goals.request, desc: Ask an owner to change a durable goal }
+  # Reserved: no op asks for an update yet, and no role but owner carries it.
+  - { name: ftw.update.request, desc: Ask an owner to install a version }
 
 roles:
   owner:
@@ -142,6 +156,23 @@ roles:
   watch:
     label: Watch
     scopes: [ftw.live.read, ftw.plan.read, ftw.events.read, ftw.dispatch.write]
+  # Agents: grants an owner gives to something other than a paired device.
+  # A role here is the most a grant of that kind may carry. Each grant names
+  # a subset, and each check keeps only what the approving owner holds at
+  # that moment, as for a watch. An agent reaches the box only through FTW
+  # Cloud's tunnel. See docs/agents.md in srcfl/ftw.
+  #
+  # agent is a personal assistant. support is Sourceful for one ticket. release
+  # is the release check, which reads a health summary and nothing else.
+  agent:
+    label: Assistant
+    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.dispatch.hold, ftw.goals.request]
+  support:
+    label: Sourceful support
+    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.dispatch.hold, ftw.goals.request]
+  release:
+    label: Release check
+    scopes: [ftw.health.read]
 
 # ---------------------------------------------------------------------------
 # FTW Cloud. What an owner can let the box share with FTW Cloud, and why.
@@ -170,15 +201,23 @@ cloud_purposes: [serve, stats]
 # does not implement is answered with E_UNKNOWN_OP like any other stranger —
 # battery.hold is the app's vocabulary today and no shipping box acts on it
 # yet.
+#
+# agent is the scope that opens the op to an agent, and its verb says how.
+# ftw.dispatch.hold runs now as a cmd, within the grant's caps, and must end
+# by itself. ftw.goals.request never runs as a cmd: it waits as an
+# agent.request until an owner confirms it. An op without agent is never
+# open to an agent. battery.hold and loadpoint.boost have none until the box
+# can bound them: battery.hold has no handler yet, and a boost has no power
+# of its own to hold to maxW. agent_args below says what an agent may send.
 # ---------------------------------------------------------------------------
 ops:
-  - { name: site.mode.set, scope: ftw.mode.write, desc: Change the site operating mode }
-  - { name: planner.prefs.set, scope: ftw.mode.write, desc: Set household planner preferences }
+  - { name: site.mode.set, scope: ftw.mode.write, agent: ftw.goals.request, desc: Change the site operating mode }
+  - { name: planner.prefs.set, scope: ftw.mode.write, agent: ftw.goals.request, desc: Set household planner preferences }
   - { name: battery.hold, scope: ftw.dispatch.write, desc: Hold the battery at a fixed setpoint }
-  - { name: loadpoint.hold, scope: ftw.dispatch.write, desc: Charge the car now at a fixed current }
+  - { name: loadpoint.hold, scope: ftw.dispatch.write, agent: ftw.dispatch.hold, desc: Charge the car now at a fixed current }
   - { name: loadpoint.boost, scope: ftw.dispatch.write, desc: Boost the car from the house battery }
-  - { name: loadpoint.soc.set, scope: ftw.dispatch.write, desc: Correct the car's current charge level }
-  - { name: loadpoint.surplus_only.set, scope: ftw.dispatch.write, desc: Charge the car from surplus PV only }
+  - { name: loadpoint.soc.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Correct the car's current charge level }
+  - { name: loadpoint.surplus_only.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Charge the car from surplus PV only }
 
 # ---------------------------------------------------------------------------
 # Dispatch modes.
@@ -240,6 +279,25 @@ errors:
   # or doing it needs somebody standing at the box. Not a permission the owner
   # is missing, so neither a role nor a ceremony changes the answer.
   - { code: E_LOCAL_ONLY, retryable: false, desc: Route is served only on the box's own page }
+  # Agents' refusals (docs/agents.md in srcfl/ftw). Each is a different
+  # sentence to an owner reading the audit log or an assistant reading its
+  # answer, so none reuses a code above.
+  #
+  # E_RATE_LIMITED is retryable because the same command goes through once
+  # the grant's minute has room. E_CAP_EXCEEDED is not: the box refuses an
+  # argument past a cap rather than clipping it, and the same argument gets
+  # the same answer.
+  - { code: E_GRANT_EXPIRED, retryable: false, desc: Access ran out at its expiry }
+  - { code: E_OP_NOT_GRANTED, retryable: false, desc: The grant does not list this operation }
+  - { code: E_CAP_EXCEEDED, retryable: false, desc: An argument or a count is past its cap }
+  - { code: E_RATE_LIMITED, retryable: true, desc: Too many commands for the grant's rate }
+  - { code: E_NEEDS_OWNER, retryable: false, desc: A durable change waits for an owner as agent.request }
+  - { code: E_BAD_SIGNATURE, retryable: false, desc: The approval signature is missing or does not verify }
+  - { code: E_NO_APPROVAL_KEY, retryable: false, desc: This phone has no approval key on the box }
+  - { code: E_NOT_FOUND, retryable: false, desc: Nothing by that id or name }
+  # An approval whose atMs is too far from the box's wall clock. args.boxMs
+  # is the box's clock, so the phone can sign again with the right time.
+  - { code: E_CLOCK_SKEW, retryable: true, desc: The approval's time is too far from the box's }
 
 # ---------------------------------------------------------------------------
 # Error codes the client raises for itself.
@@ -288,3 +346,56 @@ carrier_states: [webrtc, relay, tunnel, cloud, cache, none]
 resolutions:
   '5m': { tile_span_ms: 43200000, retention_days: 30, source: energy_ledger }
   '1h': { tile_span_ms: 604800000, retention_days: 730, source: hourly_rollup }
+
+# ---------------------------------------------------------------------------
+# What an agent may put in each op it can name (docs/agents.md in srcfl/ftw,
+# Operations). The box refuses any other key, a value of another kind and one
+# outside its range, in a cmd and in an agent.request, as it arrives. label is
+# the words the app shows an owner for the value. cap names the grant's cap
+# that bounds it as well. kind says how to read the value:
+#   loadpoint  the opaque charger id the agent read from loadpoints.get
+#   mode       a key in modes
+#   enum       one of values
+#   number, power, duration   a number in unit
+#   ratio      a fraction from 0 to 1
+#   bool       true or false
+# ---------------------------------------------------------------------------
+agent_args:
+  site.mode.set:
+    - { name: mode, kind: mode, required: true, label: Operating mode }
+  planner.prefs.set:
+    - { name: safety_k, kind: number, min: 0, max: 2, label: How cautious the plan is }
+    - { name: battery_export, kind: enum, values: [unknown, not_allowed, allowed], label: Whether the battery may sell to the grid }
+  loadpoint.hold:
+    - { name: id, kind: loadpoint, required: true, label: Charger }
+    - { name: power_w, kind: power, unit: W, min: 0, cap: maxW, label: Charging power }
+    - { name: hold_s, kind: duration, unit: s, min: 1, cap: holdS, label: For how long }
+    - { name: phase_mode, kind: enum, values: [auto, 1p, 3p], label: Phases }
+    - { name: clear, kind: bool, label: Stop the agent's own hold }
+  loadpoint.soc.set:
+    - { name: id, kind: loadpoint, required: true, label: Charger }
+    - { name: soc, kind: ratio, required: true, min: 0, max: 1, label: The car's charge level }
+  loadpoint.surplus_only.set:
+    - { name: id, kind: loadpoint, required: true, label: Charger }
+    - { name: surplus_only, kind: bool, required: true, label: Charge from solar only }
+
+# ---------------------------------------------------------------------------
+# Reads an agent may send, and the scope each needs (docs/agents.md in
+# srcfl/ftw, Reads). Their answers name nothing: sources, chargers and cars
+# go by opaque ids the box cuts with a key of its own. An agent has no sub;
+# live.get is its view of now. A phone may send these too, under the same
+# scope.
+# ---------------------------------------------------------------------------
+reads:
+  - { msg: live.get, scope: ftw.live.read, desc: Readings and freshness now }
+  - { msg: loadpoints.get, scope: ftw.live.read, desc: Each charger and the car on it }
+  - { msg: cars.get, scope: ftw.live.read, desc: Each car's level and goal }
+  - { msg: plan.get, scope: ftw.plan.read, desc: The plan and its reasons }
+  - { msg: price.get, scope: ftw.plan.read, desc: Electricity prices }
+  - { msg: hist.query, scope: ftw.history.read, desc: Stored history }
+  - { msg: health.get, scope: ftw.health.read, desc: The health summary }
+  - { msg: drivers.get, scope: ftw.health.read, desc: Each driver's state }
+  - { msg: events.get, scope: ftw.events.read, desc: Recent events }
+  - { msg: logs.get, scope: ftw.logs.read, desc: A log excerpt the box redacts }
+  - { msg: config.get, scope: ftw.config.read, desc: A configuration section the box redacts }
+  - { msg: diag.run, scope: ftw.diag.run, desc: A check that changes nothing }
