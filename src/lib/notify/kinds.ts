@@ -24,6 +24,7 @@ export const KINDS = [
   'agent.expiring',
   'approval.key.set',
   'owner.added',
+  'car.which',
 ] as const
 
 export type PushKind = (typeof KINDS)[number]
@@ -56,4 +57,5 @@ export const KIND_LABELS: Record<PushKind, string> = {
   'agent.expiring': "When an assistant's or Sourceful's access is about to end",
   'approval.key.set': 'When a phone sets up the key that approves access',
   'owner.added': 'When a phone is paired as an owner',
+  'car.which': 'When the box asks which car is plugged in',
 }

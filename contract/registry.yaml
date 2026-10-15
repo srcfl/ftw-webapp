@@ -116,6 +116,11 @@ capabilities:
   # answers the agent.* messages and approval.key.set (docs/agents.md in
   # srcfl/ftw). Absent means the app offers no Access list.
   - access.agents
+  # The box keeps cars apart from chargers: each car has its own level, goal
+  # and sources, and a charger names the car on it (docs/cars.md in
+  # srcfl/ftw). The box answers the car ops and session.car.set. Absent
+  # means the charger is the car, as before, and the app draws no car list.
+  - der.car
 
 # ---------------------------------------------------------------------------
 # Scopes. One object axis and a verb: <object>.<read|write|run|hold|request>.
@@ -141,6 +146,8 @@ scopes:
   - { name: ftw.goals.request, desc: Ask an owner to change a durable goal }
   # Reserved: no op asks for an update yet, and no role but owner carries it.
   - { name: ftw.update.request, desc: Ask an owner to install a version }
+  - { name: ftw.cars.read, desc: See the owner's cars with their VINs and identifiers and sources }
+  - { name: ftw.cars.write, desc: Keep the owner's list of cars }
 
 roles:
   owner:
@@ -218,6 +225,19 @@ ops:
   - { name: loadpoint.boost, scope: ftw.dispatch.write, desc: Boost the car from the house battery }
   - { name: loadpoint.soc.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Correct the car's current charge level }
   - { name: loadpoint.surplus_only.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Charge the car from surplus PV only }
+  # Cars (docs/cars.md in srcfl/ftw). A car's goal and level are a phone's
+  # to set, like a charger's today, and a watch makes the one tap. The list
+  # of cars is the owner's alone: ftw.cars.write is in no role but owner.
+  # An agent may ask for a car's goal or level as for a charger's.
+  # The loadpoint ops above stay for one release and act on the car the
+  # charger names. Arguments follow the box's convention: snake_case, id for
+  # what the op acts on, a level as a fraction from 0 to 1.
+  - { name: car.goal.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Set how and when a car charges }
+  - { name: car.soc.set, scope: ftw.dispatch.write, agent: ftw.goals.request, desc: Set a car's level by hand }
+  - { name: session.car.set, scope: ftw.dispatch.write, desc: Say which car is on a charger }
+  - { name: car.add, scope: ftw.cars.write, desc: Add a car to the owner's list }
+  - { name: car.update, scope: ftw.cars.write, desc: Change what the box knows about a car }
+  - { name: car.remove, scope: ftw.cars.write, desc: Remove a car from the owner's list }
 
 # ---------------------------------------------------------------------------
 # Dispatch modes.
@@ -298,6 +318,10 @@ errors:
   # An approval whose atMs is too far from the box's wall clock. args.boxMs
   # is the box's clock, so the phone can sign again with the right time.
   - { code: E_CLOCK_SKEW, retryable: true, desc: The approval's time is too far from the box's }
+  # Cars' refusals (docs/cars.md in srcfl/ftw). An unknown car or charger is
+  # E_NOT_FOUND above. E_DUPLICATE is not E_CONFLICT: asking again with the
+  # same VIN or identifier gets the same answer.
+  - { code: E_DUPLICATE, retryable: false, desc: Another car already has that VIN or identifier }
 
 # ---------------------------------------------------------------------------
 # Error codes the client raises for itself.
@@ -354,6 +378,7 @@ resolutions:
 # the words the app shows an owner for the value. cap names the grant's cap
 # that bounds it as well. kind says how to read the value:
 #   loadpoint  the opaque charger id the agent read from loadpoints.get
+#   car        the opaque car id the agent read from cars.get
 #   mode       a key in modes
 #   enum       one of values
 #   number, power, duration   a number in unit
@@ -378,6 +403,22 @@ agent_args:
   loadpoint.surplus_only.set:
     - { name: id, kind: loadpoint, required: true, label: Charger }
     - { name: surplus_only, kind: bool, required: true, label: Charge from solar only }
+  # A car's own ops name the car by id, or the car on a charger by
+  # charger_id, which is how a visitor's session takes a goal or a level.
+  # target, ready_by_min, days and finish_at_limit together replace the goal.
+  car.goal.set:
+    - { name: id, kind: car, label: Car }
+    - { name: charger_id, kind: loadpoint, label: Charger }
+    - { name: target, kind: ratio, min: 0, max: 1, label: The level to reach }
+    - { name: ready_by_min, kind: number, min: 0, max: 1439, label: Ready by, in minutes after midnight }
+    - { name: days, kind: number, min: 0, max: 127, label: Weekdays }
+    - { name: finish_at_limit, kind: bool, label: Charge on to the car's own limit }
+    - { name: clear, kind: bool, label: Remove the goal }
+    - { name: surplus_only, kind: bool, label: Charge from solar only }
+  car.soc.set:
+    - { name: id, kind: car, label: Car }
+    - { name: charger_id, kind: loadpoint, label: Charger }
+    - { name: soc, kind: ratio, required: true, min: 0, max: 1, label: The car's charge level }
 
 # ---------------------------------------------------------------------------
 # Reads an agent may send, and the scope each needs (docs/agents.md in
@@ -399,3 +440,67 @@ reads:
   - { msg: logs.get, scope: ftw.logs.read, desc: A log excerpt the box redacts }
   - { msg: config.get, scope: ftw.config.read, desc: A configuration section the box redacts }
   - { msg: diag.run, scope: ftw.diag.run, desc: A check that changes nothing }
+
+# ---------------------------------------------------------------------------
+# Cars. A car belongs to its owner, not to the home, and visits chargers. The
+# box keeps the cars of its owners, so local operation needs no cloud. Until
+# owners are principals of their own, every phone with the owner role shares
+# one list. A charging session is one car on one charger from plug-in to
+# unplug. docs/cars.md in srcfl/ftw is the wire and the rules.
+#
+# car_fields are a car's names on the wire. A name with a dot is a field of
+# the object before the dot. kind is the value's type and unit what a number
+# counts. The box's HTTP routes spell each name in snake_case; the ops'
+# arguments are in docs/cars.md. Ages count from when the box sent them,
+# never from its wall clock. FTW Cloud's car class carries the level and the
+# goal and nothing that names the car.
+# ---------------------------------------------------------------------------
+car_fields:
+  - { name: id, kind: text, unit: null, desc: 128 bits as 32 lowercase hex digits that the owner's app mints and every box keeps }
+  - { name: boxMinted, kind: bool, unit: null, desc: The box minted the id when it made the car from its old settings }
+  - { name: ownerId, kind: text, unit: null, desc: Reserved for the owner the car belongs to. Empty until owners are principals }
+  - { name: name, kind: text, unit: null, desc: The owner's name for the car }
+  - { name: make, kind: text, unit: null, desc: The maker when a source or the owner gave one }
+  - { name: vin, kind: text, unit: null, desc: The vehicle identification number that binds a source to the car }
+  - { name: capacityWh, kind: energy, unit: Wh, desc: Usable battery capacity }
+  - { name: maxW, kind: power, unit: W, desc: The most the car's own charger takes. 0 when unknown }
+  - { name: phases, kind: count, unit: null, desc: The phases the car's own charger uses. 0 when unknown }
+  - { name: socPermille, kind: ratio, unit: permille, desc: The level. The car's own number while socEstimate is false. Absent when the box has none }
+  - { name: socSource, kind: enum, unit: null, desc: Where the level comes from. One of car_soc_sources }
+  - { name: socAgeS, kind: age, unit: s, desc: Seconds since the car reported the level or someone set it }
+  - { name: energySinceWh, kind: energy, unit: Wh, desc: Energy delivered to the car since then. Negative when a V2X session took energy out }
+  - { name: socEstimate, kind: bool, unit: null, desc: The box counts the level as an estimate }
+  - { name: chargeLimitPermille, kind: ratio, unit: permille, desc: The charge limit the car reported with its level }
+  - { name: goal, kind: object, unit: null, desc: What the car should reach and when. Absent when none }
+  - { name: goal.targetPermille, kind: ratio, unit: permille, desc: The level to reach }
+  - { name: goal.readyByMin, kind: minutes, unit: min, desc: Ready time in minutes after midnight in the box's time zone }
+  - { name: goal.days, kind: mask, unit: null, desc: ISO weekdays with Monday in bit 0. 0 is once at the next ready time and 127 every day }
+  - { name: goal.finishAtLimit, kind: bool, unit: null, desc: Charge on to the car's own limit rather than to targetPermille }
+  - { name: surplusOnly, kind: bool, unit: null, desc: The car charges from surplus PV only wherever it is plugged in }
+  - { name: identifiers, kind: text_list, unit: null, desc: RFID tags and MAC addresses and eMAIDs that name the car to a charger }
+  - { name: sources, kind: text_list, unit: null, desc: The vehicle drivers on this box that report the car's level. Each box has its own }
+
+# Where a level comes from, best first after vehicle. A newer reading from
+# the car beats a level someone set. assumed is a known car's plug-in default
+# and never a visitor's: a car the box cannot name gets no level at all. A
+# level read before the car last left a charger is an estimate.
+car_soc_sources: [vehicle, manual, assumed]
+
+# How the box knows which car is on a charger. charger is the charger's own
+# word (OCPP idTag or MAC or eMAID). car is the car's own source. only is the
+# one car the box knows. tap is someone choosing. asking means the box raised
+# car.which and waits: a tap or the charger or the car ends it, and so does
+# the unplug. none is a visitor: no rule answered, the charger named a car the
+# box does not know, the only car said it is not here, or a tap said none of
+# these. The order of the rules is in docs/cars.md.
+car_identified_by: [charger, car, only, tap, asking, none]
+
+# What a charger carries about its car, beside its own fields. Empty while
+# nothing is plugged in.
+charger_car_fields:
+  - { name: session, kind: text, unit: null, desc: This plug-in's id. A tap names it and is refused once it has changed }
+  - { name: carId, kind: text, unit: null, desc: The car on the charger. Empty when the box does not know which }
+  - { name: carIdentifiedBy, kind: enum, unit: null, desc: How the box knows. One of car_identified_by }
+  - { name: carCorrected, kind: bool, unit: null, desc: A better rule replaced the car the box first named }
+  - { name: carCorrectedFrom, kind: text, unit: null, desc: The car the box named before that }
+  - { name: choose, kind: text_list, unit: null, desc: While asking the cars a tap may pick. At most four }

@@ -86,3 +86,14 @@ events:
     # anything, including give others access.
     title: A new owner
     body: "A phone was paired as an owner of your box. If that was not you, remove it in the app."
+  - kind: car.which
+    # When a car is plugged in and the box cannot tell which of its owners'
+    # cars it is: no charger identity, no word from the car within a minute,
+    # and more than one car. Once per plug-in. The event names the charger,
+    # the plug-in's session, and at most four cars not on another charger,
+    # by opaque id. The phone shows one button per car with the names from
+    # its own table and a "None of these" button; a tap sends
+    # session.car.set with the session. With more than four cars it offers
+    # no buttons and opens FTW.
+    title: Which car is plugged in?
+    body: "Tap the car so the box plans for its level and goal."
