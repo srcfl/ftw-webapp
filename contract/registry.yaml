@@ -363,6 +363,11 @@ source_states: [live, lagging, stale, down, never]
 # tunnel is the box's own session carried by FTW Cloud, which cannot read it.
 # cloud is the box-signed copy FTW Cloud holds and can read.
 carrier_states: [webrtc, relay, tunnel, cloud, cache, none]
+# How a session with FTW Cloud travels, under the tunnel and cloud carriers:
+# QUIC on UDP 443, or the WebSocket on TCP 443 that a client falls back to
+# (srcfl/ftw docs/protocol-cloud.md, "QUIC"). It says nothing about
+# freshness, which stays carrier and source state.
+cloud_transports: [quic, websocket]
 
 # ---------------------------------------------------------------------------
 # History resolutions backed by what the box actually stores.
