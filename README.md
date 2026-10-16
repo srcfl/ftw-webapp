@@ -55,10 +55,12 @@ encrypted frames and knows which opaque handle is online. The relay cannot read
 a watt, a device name or a command. This is enforced by the protocol, and a CI
 test dumps the relay's database and fails if anything recognisable is in it.
 
-This app does not use FTW Cloud. FTW Cloud is a separate service for the
-iPhone app, proposed and not yet built. If a box owner turns it on, Sourceful
-can read what the owner enabled; it never sends control.
-[ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) records it, and the relay and escrow stay blind either way.
+The default build still dials the relay. `VITE_CARRIER=cloud` sends the same
+sealed frames to `wss://cloud.ftw.energy` and falls back to `relay.ftw.energy`
+when that host does not speak them. That is not the iPhone's readable FTW
+Cloud session at `/v1/app`. FTW Cloud, when a box owner turns the grant on,
+can read what the owner enabled; it never sends control through that session.
+[ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) records it, and the relay and escrow cannot read the sealed frames either way.
 
 If a household asks, the escrow will also hold one sealed copy of its home, so a
 new phone gets back in with a passkey instead of a trip to the box. Sourceful

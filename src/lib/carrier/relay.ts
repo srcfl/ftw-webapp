@@ -71,8 +71,16 @@ const CORRECTION_LIMIT = 2
 const MAX_EPOCH_CORRECTION = 1
 
 export interface RelayCarrierOptions {
-  /** Relay origin, e.g. `wss://relay.sourceful.energy`. No path. */
+  /** Relay origin, e.g. `wss://relay.ftw.energy`. No path. */
   url: string
+  /**
+   * Dialled once when `url` closes before it has spoken the relay protocol.
+   *
+   * The transition path: `wss://cloud.ftw.energy` until that host serves
+   * these frames, then `wss://relay.ftw.energy`. A host that sends `ready`,
+   * `gone`, a frame, or a relay close code is the protocol, and we stay.
+   */
+  fallbackUrl?: string
   /** Shared with the box optically at enrollment. Never sent anywhere. */
   secret: Uint8Array
   /** Injected by tests. Defaults to the platform WebSocket. */
@@ -85,6 +93,10 @@ export class RelayCarrier extends CarrierBase implements Carrier {
   readonly kind: CarrierState = 'relay'
 
   #url: string
+  /** Cleared once used, or once the first host proves it speaks the protocol. */
+  #fallbackUrl: string | undefined
+  /** True after ready, gone, a frame, or a relay close code. */
+  #protocolSeen = false
   #secret: Uint8Array
   #WS: typeof WebSocket
   #now: () => number
@@ -110,6 +122,8 @@ export class RelayCarrier extends CarrierBase implements Carrier {
   constructor(opts: RelayCarrierOptions) {
     super()
     this.#url = opts.url.replace(/\/+$/, '')
+    const fallback = opts.fallbackUrl?.replace(/\/+$/, '')
+    this.#fallbackUrl = fallback && fallback !== this.#url ? fallback : undefined
     this.#secret = opts.secret
     this.#WS = opts.WebSocketImpl ?? globalThis.WebSocket
     this.#now = opts.now ?? (() => Date.now())
@@ -209,6 +223,7 @@ export class RelayCarrier extends CarrierBase implements Carrier {
   #onMessage(ev: MessageEvent): void {
     if (typeof ev.data === 'string') {
       if (ev.data === CTRL_READY) {
+        this.#noteProtocol()
         this.#corrections = 0
         if (this.#status.phase !== 'open') {
           markLinkPhase('relay-ready', { relayDialMs: this.#rttMs })
@@ -216,11 +231,13 @@ export class RelayCarrier extends CarrierBase implements Carrier {
         this.#setStatus({ phase: 'open', sinceMs: this.#now() })
       } else if (ev.data === CTRL_GONE) {
         // The box left. Keep the socket; the relay will say when it is back.
+        this.#noteProtocol()
         this.#setStatus({ phase: 'closed', reason: 'box offline', retryable: true })
       }
       return
     }
 
+    this.#noteProtocol()
     if (this.#status.phase !== 'open') return
     const bytes = new Uint8Array(ev.data as ArrayBuffer)
     addLinkCount('relayRxFrames')
@@ -237,6 +254,14 @@ export class RelayCarrier extends CarrierBase implements Carrier {
     if (this.#shutdown || ws !== this.#ws) return
     this.#ws = null
     this.#rttMs = null
+
+    if (this.#takeFallback(code)) {
+      // The preferred host never spoke. Dial the relay now, still
+      // `connecting`: nothing has been open to lose.
+      this.#attempt = 0
+      this.#dial()
+      return
+    }
 
     let delayMs: number
     if (code === CLOSE_ROTATED) {
@@ -257,6 +282,36 @@ export class RelayCarrier extends CarrierBase implements Carrier {
 
     this.#setStatus({ phase: 'closed', reason: closeReason(code), retryable: true })
     this.#schedule(delayMs)
+  }
+
+  /** The host has spoken the relay protocol, so the fallback is no longer a candidate. */
+  #noteProtocol(): void {
+    this.#protocolSeen = true
+    this.#fallbackUrl = undefined
+  }
+
+  /**
+   * Move to the fallback host when this close is not the relay protocol.
+   *
+   * Close codes 4400, 4409, 4410 and 4429 are the relay's own, including a
+   * refusal. Those mean the host is the protocol and a different origin
+   * would only hide that. An abnormal close before any of them, and before
+   * `ready` or `gone`, is what an undeployed cloud path looks like.
+   */
+  #takeFallback(code: number): boolean {
+    if (this.#protocolSeen || !this.#fallbackUrl) return false
+    if (
+      code === CLOSE_BAD_JOIN ||
+      code === CLOSE_EPOCH ||
+      code === CLOSE_ROTATED ||
+      code === CLOSE_BUSY
+    ) {
+      this.#noteProtocol()
+      return false
+    }
+    this.#url = this.#fallbackUrl
+    this.#fallbackUrl = undefined
+    return true
   }
 
   /**

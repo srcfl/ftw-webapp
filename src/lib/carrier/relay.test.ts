@@ -321,4 +321,52 @@ describe('backing off from a relay that accepts and then drops', () => {
 
     carrier.close()
   })
+
+  it('dials the fallback once when the first host never speaks the relay protocol', () => {
+    const carrier = new RelayCarrier({
+      url: 'ws://cloud.invalid',
+      fallbackUrl: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 0,
+    })
+    expect(StubSocket.all[0]!.url).toContain('cloud.invalid/r/')
+    StubSocket.all[0]!.drop()
+    expect(StubSocket.all).toHaveLength(2)
+    expect(StubSocket.all[1]!.url).toContain('relay.invalid/r/')
+    expect(carrier.status.phase).toBe('connecting')
+    StubSocket.all[1]!.accept()
+    expect(carrier.status.phase).toBe('open')
+    carrier.close()
+  })
+
+  it('stays on a host that closes with a relay code', () => {
+    const carrier = new RelayCarrier({
+      url: 'ws://cloud.invalid',
+      fallbackUrl: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 0,
+    })
+    StubSocket.all[0]!.readyState = 3
+    StubSocket.all[0]!.onclose?.({ code: 4410, reason: '12' })
+    vi.advanceTimersByTime(1)
+    expect(StubSocket.all.every((socket) => socket.url.includes('cloud.invalid'))).toBe(true)
+    carrier.close()
+  })
+
+  it('does not leave a host that has already said ready', () => {
+    const carrier = new RelayCarrier({
+      url: 'ws://cloud.invalid',
+      fallbackUrl: 'ws://relay.invalid',
+      secret: SECRET,
+      WebSocketImpl: StubSocket as unknown as typeof WebSocket,
+      random: () => 0,
+    })
+    StubSocket.all[0]!.accept()
+    StubSocket.all[0]!.drop()
+    vi.advanceTimersByTime(1)
+    expect(StubSocket.all.at(-1)!.url).toContain('cloud.invalid')
+    carrier.close()
+  })
 })
