@@ -34,6 +34,8 @@ export const SCOPES = [
   'ftw.dispatch.hold',
   'ftw.goals.request',
   'ftw.update.request',
+  'ftw.cars.read',
+  'ftw.cars.write',
 ] as const
 
 export type Scope = (typeof SCOPES)[number]

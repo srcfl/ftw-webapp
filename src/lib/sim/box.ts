@@ -47,6 +47,12 @@ import {
   OP_LOADPOINT_BOOST,
   OP_LOADPOINT_SOC_SET,
   OP_LOADPOINT_SURPLUS_ONLY_SET,
+  OP_CAR_GOAL_SET,
+  OP_CAR_SOC_SET,
+  OP_SESSION_CAR_SET,
+  OP_CAR_ADD,
+  OP_CAR_UPDATE,
+  OP_CAR_REMOVE,
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
@@ -241,7 +247,26 @@ const OP_SCOPES: Record<string, string> = {
   [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
   [OP_LOADPOINT_SOC_SET]: 'ftw.dispatch.write',
   [OP_LOADPOINT_SURPLUS_ONLY_SET]: 'ftw.dispatch.write',
+  [OP_CAR_GOAL_SET]: 'ftw.dispatch.write',
+  [OP_CAR_SOC_SET]: 'ftw.dispatch.write',
+  [OP_SESSION_CAR_SET]: 'ftw.dispatch.write',
+  [OP_CAR_ADD]: 'ftw.cars.write',
+  [OP_CAR_UPDATE]: 'ftw.cars.write',
+  [OP_CAR_REMOVE]: 'ftw.cars.write',
 }
+
+/**
+ * The car ops. The simulated box keeps no cars and does not claim der.car,
+ * so it answers them as a box from before cars does.
+ */
+const CAR_OPS: readonly string[] = [
+  OP_CAR_GOAL_SET,
+  OP_CAR_SOC_SET,
+  OP_SESSION_CAR_SET,
+  OP_CAR_ADD,
+  OP_CAR_UPDATE,
+  OP_CAR_REMOVE,
+]
 
 const CAPS = [
   'status.core',
@@ -714,7 +739,7 @@ export class SimBox {
     // An op the box has never heard of is refused by name, exactly as the
     // box refuses it — falling through to some default behaviour would let
     // an app typo pass every test here and fail against every real box.
-    if (!(cmd.op in OP_SCOPES)) {
+    if (!(cmd.op in OP_SCOPES) || CAR_OPS.includes(cmd.op)) {
       this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
       return
     }
