@@ -88,6 +88,12 @@ describe('opening without a network', () => {
     expect(await answer(worker, request('/assets/index-a1.js'))).toEqual({ body: 'app a1' })
   })
 
+  it("leaves an assistant's consent link to the network, never the shell", async () => {
+    const worker = await activate('a1')
+
+    expect(await answer(worker, request('/a', 'navigate'))).toBeNull()
+  })
+
   it('answers any navigation with the shell, whatever the path', async () => {
     const worker = await activate('a1')
     server = new Map()
