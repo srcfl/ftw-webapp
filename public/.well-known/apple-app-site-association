@@ -7,7 +7,8 @@
       {
         "appIDs": ["L66M368PZ6.energy.ftw.app"],
         "components": [
-          { "/": "/p", "comment": "A pairing code scanned with the iPhone camera" }
+          { "/": "/p", "comment": "A pairing code scanned with the iPhone camera" },
+          { "/": "/a", "comment": "An assistant's consent page asks the owner to approve in the app" }
         ]
       }
     ]

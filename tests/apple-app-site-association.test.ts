@@ -26,14 +26,26 @@ describe('the apple-app-site-association file', () => {
     expect(aasa().webcredentials?.apps).toEqual([APP_ID])
   })
 
-  it('opens the app only for the pairing path the web app also serves', () => {
+  it('opens the app only for pairing and for an assistant\'s consent link', () => {
     const details = aasa().applinks?.details ?? []
     expect(details.map(d => d.appIDs)).toEqual([[APP_ID]])
     const paths = details.flatMap(d => d.components ?? []).map(c => c['/'])
-    expect(paths).toEqual(['/p'])
+    // Only /a itself: the request rides in the fragment, never a path.
+    expect(paths).toEqual(['/p', '/a'])
     // The web app answers the same path, so a phone without the app still pairs.
     const redirects = readFileSync('public/_redirects', 'utf8')
     expect(redirects).toMatch(/^\/p \/index\.html 200$/m)
+  })
+
+  it('answers a consent link without the app with a page that sends you to it', () => {
+    const redirects = readFileSync('public/_redirects', 'utf8')
+    // Without .html: Cloudflare answers a .html path with a 307.
+    expect(redirects).toMatch(/^\/a \/access-link 200$/m)
+    expect(redirects).not.toMatch(/^\/a\//m)
+    const page = readFileSync('public/access-link.html', 'utf8')
+    expect(page).toContain('Open this on your iPhone with FTW')
+    // It approves nothing and reads nothing: no script, no form, no fetch.
+    expect(page).not.toMatch(/<script|<form|fetch\(/i)
   })
 
   it('is served as JSON', () => {

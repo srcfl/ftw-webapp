@@ -9,5 +9,17 @@
 # scanned in the address bar, which is what they can check against the box.
 /p /index.html 200
 
+# /a is where an assistant's consent page at FTW Cloud sends the owner, with
+# the request and the signed offer in the fragment, which never reaches this
+# server. The iPhone app opens it when installed (apple-app-site-association).
+# Anywhere else this small page says to open it on the iPhone with FTW; it
+# never reads the fragment, and the web app has no part in approving. There
+# is no /a/<request>: a request in a path would land in a log.
+#
+# The target is the page's own path, without .html: Cloudflare serves
+# access-link.html there and answers a .html path with a 307, which would
+# turn this rewrite into a redirect.
+/a /access-link 200
+
 # Everything else is hash-routed inside the shell, so there is no SPA fallback
 # to add. A request for an unknown path is genuinely not found.

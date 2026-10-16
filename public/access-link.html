@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Where https://app.ftw.energy/a lands when the FTW iPhone app is not there
+  to open it. An assistant's consent page at FTW Cloud links here, with its
+  signed offer in the fragment, which never reaches this server and which
+  this page never reads. Approving happens in the app, with Face ID, and
+  nowhere else: the web app has no key the box would take.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <title>Open this on your iPhone with FTW</title>
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <style>
+      :root { color-scheme: light dark; --ink: #111; --ink2: #555; --ground: #f4f4f2; }
+      @media (prefers-color-scheme: dark) { :root { --ink: #eee; --ink2: #9a9a9a; --ground: #0d0d0d; } }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--ground); color: var(--ink);
+             font: 17px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+      main { max-width: 26rem; padding: 32px 24px; }
+      h1 { font-size: 1.6rem; line-height: 1.2; margin: 0 0 12px; }
+      p { margin: 0 0 12px; color: var(--ink2); }
+      p[lang="sv"] { margin-top: 28px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Open this on your iPhone with FTW</h1>
+      <p>This link asks you to let an assistant reach your home. Open it on the iPhone where the FTW app is installed, and approve there with Face ID.</p>
+      <p>Or open FTW and type the code the page showed you: Settings, Assistants and support, Add an assistant.</p>
+      <p lang="sv"><strong>Öppna länken på din iPhone med FTW.</strong> Där godkänner du med Face ID, eller skriver koden från sidan under Inställningar, Assistenter och support, Lägg till en assistent.</p>
+    </main>
+  </body>
+</html>

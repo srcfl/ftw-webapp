@@ -77,6 +77,11 @@ sw.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
   if (url.origin !== sw.location.origin) return
 
+  // An assistant's consent link (/a#<request>.<offer>) is the iPhone app's,
+  // and its page here only says so. The network answers it, never the
+  // shell: the web app has no part in approving.
+  if (url.pathname === '/a') return
+
   // Cache first, so opening the app never waits on a network that may not be
   // there. A build is only ever replaced wholesale, so this cannot serve a
   // shell that disagrees with the assets it will ask for next.
