@@ -65,7 +65,7 @@ events:
     # the release check access to the box. Access from outside the house is
     # news every owner should hear, as with cloud.granted.
     title: New access to your box
-    body: "You gave an assistant or Sourceful access. See who has access in the app."
+    body: "An assistant or Sourceful was given access to your box. See who has access in the app."
   - kind: agent.request
     # To every owner, when an agent asks for a durable change. It waits for
     # one of them to confirm it, and runs out after twelve hours.
