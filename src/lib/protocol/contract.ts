@@ -12,7 +12,11 @@
  * Add nothing here that is not in the registry.
  */
 
-/** One object axis, two verb axes. `<object>.<read|write>`. */
+/**
+ * An object and a verb: `<object>.<read|write|run|hold|request>`. read and
+ * write are a phone's; run, hold and request are an agent's (docs/agents.md
+ * in srcfl/ftw).
+ */
 export const SCOPES = [
   'ftw.live.read',
   'ftw.history.read',
@@ -24,9 +28,31 @@ export const SCOPES = [
   'ftw.mode.write',
   'ftw.members.read',
   'ftw.members.write',
+  'ftw.logs.read',
+  'ftw.config.read',
+  'ftw.diag.run',
+  'ftw.dispatch.hold',
+  'ftw.goals.request',
+  'ftw.update.request',
+  'ftw.cars.read',
+  'ftw.cars.write',
 ] as const
 
 export type Scope = (typeof SCOPES)[number]
+
+/** What an assistant or Sourceful support may carry at most. */
+const AGENT_SCOPES: readonly string[] = [
+  'ftw.live.read',
+  'ftw.history.read',
+  'ftw.plan.read',
+  'ftw.health.read',
+  'ftw.events.read',
+  'ftw.logs.read',
+  'ftw.config.read',
+  'ftw.diag.run',
+  'ftw.dispatch.hold',
+  'ftw.goals.request',
+]
 
 /**
  * What each role carries, with the registry's `'*'` expanded.
@@ -39,6 +65,12 @@ export const ROLE_SCOPES: Record<string, readonly string[]> = {
   owner: SCOPES,
   viewer: ['ftw.live.read'],
   watch: ['ftw.live.read', 'ftw.plan.read', 'ftw.events.read', 'ftw.dispatch.write'],
+  // Agents: grants an owner gives to an assistant, to Sourceful support or to
+  // the release check. The most a grant of each kind may carry; each grant
+  // names a subset, and the box enforces it.
+  agent: AGENT_SCOPES,
+  support: AGENT_SCOPES,
+  release: ['ftw.health.read'],
 }
 
 /** The label the registry gives each role. The app owns no other wording. */
@@ -46,6 +78,9 @@ export const ROLE_LABELS: Record<string, string> = {
   owner: 'Owner',
   viewer: 'Viewer',
   watch: 'Watch',
+  agent: 'Assistant',
+  support: 'Sourceful support',
+  release: 'Release check',
 }
 
 /** Whether a role carries a scope. An unknown role carries nothing. */

@@ -489,6 +489,13 @@ export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
 export const OP_LOADPOINT_BOOST = 'loadpoint.boost'
 export const OP_LOADPOINT_SOC_SET = 'loadpoint.soc.set'
 export const OP_LOADPOINT_SURPLUS_ONLY_SET = 'loadpoint.surplus_only.set'
+/** Cars (docs/cars.md in srcfl/ftw). A box offers them with `der.car`. */
+export const OP_CAR_GOAL_SET = 'car.goal.set'
+export const OP_CAR_SOC_SET = 'car.soc.set'
+export const OP_SESSION_CAR_SET = 'session.car.set'
+export const OP_CAR_ADD = 'car.add'
+export const OP_CAR_UPDATE = 'car.update'
+export const OP_CAR_REMOVE = 'car.remove'
 
 export interface Guard {
   fid: Fid
@@ -574,6 +581,22 @@ const RETRYABLE: Record<string, boolean> = {
   // no role and no ceremony changes it.
   E_WHOLE_DOCUMENT: false,
   E_LOCAL_ONLY: false,
+  // Agents' refusals (docs/agents.md in srcfl/ftw). A rate limit clears once
+  // the grant's minute has room; every other one gets the same answer again.
+  E_GRANT_EXPIRED: false,
+  E_OP_NOT_GRANTED: false,
+  E_CAP_EXCEEDED: false,
+  E_RATE_LIMITED: true,
+  E_NEEDS_OWNER: false,
+  E_BAD_SIGNATURE: false,
+  E_NO_APPROVAL_KEY: false,
+  E_NOT_FOUND: false,
+  // The approval's atMs is too far from the box's clock; the phone signs
+  // again with args.boxMs, so asking again can succeed.
+  E_CLOCK_SKEW: true,
+  // Cars' refusals (docs/cars.md in srcfl/ftw): asking again gets the same
+  // answer. E_NOT_FOUND is above.
+  E_DUPLICATE: false,
   // Not from the box. The session layer raises this one itself out of
   // api.end{truncated: true} — see contract/registry.yaml, client_errors.
   E_RESPONSE_TOO_LARGE: false,
