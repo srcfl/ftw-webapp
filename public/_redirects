@@ -15,7 +15,11 @@
 # Anywhere else this small page says to open it on the iPhone with FTW; it
 # never reads the fragment, and the web app has no part in approving. There
 # is no /a/<request>: a request in a path would land in a log.
-/a /access-link.html 200
+#
+# The target is the page's own path, without .html: Cloudflare serves
+# access-link.html there and answers a .html path with a 307, which would
+# turn this rewrite into a redirect.
+/a /access-link 200
 
 # Everything else is hash-routed inside the shell, so there is no SPA fallback
 # to add. A request for an unknown path is genuinely not found.

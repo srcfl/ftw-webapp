@@ -39,7 +39,8 @@ describe('the apple-app-site-association file', () => {
 
   it('answers a consent link without the app with a page that sends you to it', () => {
     const redirects = readFileSync('public/_redirects', 'utf8')
-    expect(redirects).toMatch(/^\/a \/access-link\.html 200$/m)
+    // Without .html: Cloudflare answers a .html path with a 307.
+    expect(redirects).toMatch(/^\/a \/access-link 200$/m)
     expect(redirects).not.toMatch(/^\/a\//m)
     const page = readFileSync('public/access-link.html', 'utf8')
     expect(page).toContain('Open this on your iPhone with FTW')
