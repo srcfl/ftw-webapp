@@ -30,7 +30,8 @@ describe('the apple-app-site-association file', () => {
     const details = aasa().applinks?.details ?? []
     expect(details.map(d => d.appIDs)).toEqual([[APP_ID]])
     const paths = details.flatMap(d => d.components ?? []).map(c => c['/'])
-    expect(paths).toEqual(['/p', '/a', '/a/*'])
+    // Only /a itself: the request rides in the fragment, never a path.
+    expect(paths).toEqual(['/p', '/a'])
     // The web app answers the same path, so a phone without the app still pairs.
     const redirects = readFileSync('public/_redirects', 'utf8')
     expect(redirects).toMatch(/^\/p \/index\.html 200$/m)
@@ -39,7 +40,7 @@ describe('the apple-app-site-association file', () => {
   it('answers a consent link without the app with a page that sends you to it', () => {
     const redirects = readFileSync('public/_redirects', 'utf8')
     expect(redirects).toMatch(/^\/a \/access-link\.html 200$/m)
-    expect(redirects).toMatch(/^\/a\/\* \/access-link\.html 200$/m)
+    expect(redirects).not.toMatch(/^\/a\//m)
     const page = readFileSync('public/access-link.html', 'utf8')
     expect(page).toContain('Open this on your iPhone with FTW')
     // It approves nothing and reads nothing: no script, no form, no fetch.

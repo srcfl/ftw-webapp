@@ -10,12 +10,12 @@
 /p /index.html 200
 
 # /a is where an assistant's consent page at FTW Cloud sends the owner, with
-# the signed offer in the fragment. The iPhone app opens it when installed
-# (apple-app-site-association). Anywhere else this small page says to open
-# it on the iPhone with FTW; it never reads the fragment, and the web app
-# has no part in approving.
+# the request and the signed offer in the fragment, which never reaches this
+# server. The iPhone app opens it when installed (apple-app-site-association).
+# Anywhere else this small page says to open it on the iPhone with FTW; it
+# never reads the fragment, and the web app has no part in approving. There
+# is no /a/<request>: a request in a path would land in a log.
 /a /access-link.html 200
-/a/* /access-link.html 200
 
 # Everything else is hash-routed inside the shell, so there is no SPA fallback
 # to add. A request for an unknown path is genuinely not found.
