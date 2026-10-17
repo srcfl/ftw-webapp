@@ -27,7 +27,7 @@ export function parseFleet(value: unknown, nowMs: number): PublicFleetFeed {
 export async function collectFleet(env: AppEnv, nowMs = Date.now()) {
   const started = new Date(nowMs).toISOString()
   try {
-    const r=await fetch('https://cloud.ftw.energy/v1/fleet/public',{redirect:'error',headers:{accept:'application/json'},signal:AbortSignal.timeout(15000)})
+    const r=await fetch('https://cloud.ftw.energy/v1/fleet/public',{redirect:'manual',headers:{accept:'application/json'},signal:AbortSignal.timeout(15000)})
     if (!r.ok) {await r.body?.cancel();throw new Error('fleet unavailable')}
     const reader=r.body?.getReader(); if (!reader) throw new Error('empty fleet')
     const parts:Uint8Array[]=[];let size=0

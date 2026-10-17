@@ -779,3 +779,22 @@ describe('installation estimates',()=>{
   await expect(collectUsage(env,now)).resolves.toBeUndefined()
  })
 })
+
+
+describe('Cloud collector redirects in the Workers runtime', () => {
+  it.each([['usage', collectUsage], ['fleet', collectFleet]] as const)(
+    '%s uses a valid edge Request and rejects a redirect without storing it',
+    async (_name, collect) => {
+      const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        expect(request.redirect).toBe('manual')
+        return new Response(null, {status: 302, headers: {location: 'https://other.example/feed'}})
+      })
+      vi.stubGlobal('fetch', send)
+      await expect(collect(env)).rejects.toThrow('unavailable')
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_snapshots').first('n')).toBe(0)
+      expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM cloud_fleet_view').first('n')).toBe(0)
+    }
+  )
+})
