@@ -601,7 +601,7 @@ describe('project stats Worker', () => {
     })
 
     await worker.scheduled(
-      { cron: '3 * * * *', scheduledTime: Date.UTC(2026, 7, 16, 9, 3), noRetry() {} },
+      { cron: '23 * * * *', scheduledTime: Date.UTC(2026, 7, 16, 9, 23), noRetry() {} },
       env
     )
 
@@ -614,6 +614,35 @@ describe('project stats Worker', () => {
       .first<{ ok: number; detail: string }>()
     expect(run).toEqual({ ok: 1, detail: '7-day traffic window' })
   })
+})
+
+it('keeps six-repo snapshots, daily traffic and public Cloud feeds within separate 50-request budgets', async () => {
+  const repos=['ftw','device-drivers','ftw-cloud','ftw-app','ftw-webapp','ftw-web']
+  let requests=0
+  vi.stubGlobal('fetch',async(input:RequestInfo|URL)=>{
+    if(++requests>50) throw new Error('Too many subrequests.')
+    const url=new URL(typeof input==='string'?input:input instanceof URL?input:input.url)
+    if(url.hostname==='api.cloudflare.com') return Response.json({data:{viewer:{zones:[{traffic:[]}]}},errors:null})
+    if(url.hostname==='cloud.ftw.energy') return url.pathname==='/v1/stats'
+      ? new Response(null,{status:503,headers:{'FTW-Statistics-State':'disabled'}})
+      : Response.json(fleetView(Date.now()))
+    if(url.pathname==='/search/issues') return Response.json({total_count:0})
+    if(url.pathname.endsWith('/traffic/views')) return Response.json({views:[]})
+    if(url.pathname.endsWith('/traffic/clones')) return Response.json({clones:[]})
+    if(url.pathname.includes('/traffic/')) return Response.json([])
+    if(url.pathname==='/repos/srcfl/ftw/issues' && url.searchParams.get('page')==='1') return Response.json(Array.from({length:100},(_,number)=>({number})))
+    if(url.pathname.split('/').length===4) return Response.json({stargazers_count:0,forks_count:0,subscribers_count:0,pushed_at:null})
+    return Response.json([])
+  })
+  const all={...env,GITHUB_REPOS:repos.join(',')}
+  for(const [cron,count] of [['3 * * * *',43],['23 * * * *',9],['17 0 * * *',24]] as const){
+    requests=0
+    await worker.scheduled({cron,scheduledTime:Date.now(),noRetry(){}},all)
+    expect(requests).toBe(count)
+  }
+  const runs=await env.DB.prepare('SELECT source,ok FROM collector_runs').all<{source:string;ok:number}>()
+  expect(runs.results).toHaveLength(15)
+  expect(runs.results.every(r=>r.ok===1)).toBe(true)
 })
 
 function relayPayload(now: Date, reports: number): RelayIngestBody {

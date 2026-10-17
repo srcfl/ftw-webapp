@@ -43,6 +43,7 @@ export async function collectGitHub(env: AppEnv, daily: boolean, nowMs = Date.no
   let complete = 0
 
   for (const repo of repos) {
+    if (!daily) {
     try {
       const snapshot = await collectSnapshot(owner, repo, token, nowMs)
       await saveSnapshot(env.DB, snapshot)
@@ -56,10 +57,12 @@ export async function collectGitHub(env: AppEnv, daily: boolean, nowMs = Date.no
       await saveCollectorRun(env.DB, `github:${repo}`, startedAt, false, 'repository request failed')
     }
 
-    if (!daily) continue
+    continue
+    }
     try {
       await collectTraffic(env.DB, owner, repo, token, nowMs)
       await saveCollectorRun(env.DB, `github-traffic:${repo}`, startedAt, true, 'traffic window')
+      complete += 1
     } catch (error) {
       console.error('stats: GitHub traffic collection failed', {
         repo,
