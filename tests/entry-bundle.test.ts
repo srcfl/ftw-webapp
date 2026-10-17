@@ -109,6 +109,9 @@ function chunkWith(marker: string): string {
 }
 
 describe('what a cold start downloads before it can paint', () => {
+  it('ships no Frankfurt relay connection or fallback', () => {
+    for (const code of chunks.values()) expect(code).not.toContain('relay.ftw.energy')
+  })
   it('is really the launch path and not the whole build', () => {
     // The control. Every rule below is an absence, and an absence proves
     // nothing if the thing being searched is empty or is everything.

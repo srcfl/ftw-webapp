@@ -7,11 +7,10 @@
  *   8       body        ChaCha20-Poly1305 over the frame, tag included
  *
  * Why a sequence number is on the wire at all: Noise's own counter is implicit
- * and assumes an ordered, lossless carrier. The relay is a WebSocket and gives
- * us that, but the LAN carrier is a WebRTC DataChannel, which may reorder and
- * may drop. Carrying the counter lets the receiver set the nonce for whatever
- * actually arrived, so the same code serves both carriers and a lost frame
- * costs one frame instead of the session.
+ * and assumes an ordered, lossless carrier. The box's Cloud uplink can use
+ * QUIC and reorder frames before they reach this client's WebSocket. Carrying
+ * the counter lets the receiver set the nonce for whatever arrived, so a lost
+ * frame costs one frame instead of the session.
  *
  * The eight bytes are a monotonic counter and nothing else. Frame size stays
  * constant, which is the property lane 0 depends on.
@@ -31,11 +30,10 @@ export const TRANSPORT_OVERHEAD = SEQ_BYTES + TAG_BYTES
 /**
  * How far out of order a frame may arrive and still be accepted.
  *
- * At 1 Hz on lane 0, 64 frames is a minute of tolerance — far beyond any
- * reordering a DataChannel produces, and small enough that the window is one
- * machine word.
+ * The box's Cloud uplink may use QUIC. Bulk can overtake control there even
+ * when this client uses WebSocket. Match Go and iOS's minimum of 1024.
  */
-export const REPLAY_WINDOW = 64
+export const REPLAY_WINDOW = 1024
 
 const WINDOW = BigInt(REPLAY_WINDOW)
 const WINDOW_MASK = (1n << WINDOW) - 1n

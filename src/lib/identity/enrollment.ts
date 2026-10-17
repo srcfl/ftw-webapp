@@ -6,7 +6,7 @@
  * v3 is v2 with the home id at FTW Cloud, base64url of its 26 characters, so a
  * new phone can reach the box through FTW Cloud before any session with it
  * (srcfl/ftw docs/protocol-cloud.md, "Pairing through the service"). Both are
- * read; this app does not use the home id yet.
+ * read by the codec; pairing requires v3 to reach FTW Cloud.
  *
  * Everything after the `#` is a URL fragment, and a fragment is never sent in
  * an HTTP request. That is the whole design: the trust anchor reaches the app

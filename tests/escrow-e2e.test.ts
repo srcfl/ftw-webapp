@@ -132,6 +132,7 @@ async function wipeThisDevice(): Promise<void> {
 
 function enrollmentUrl(): string {
   return buildEnrollmentUrl({
+    home: 'fjzyr67buzpyncqmjliwgezvde',
     boxStaticPublic: BOX_KEY,
     pairingCode: new Uint8Array(16).fill(0x11),
     rendezvousSecret: RENDEZVOUS,

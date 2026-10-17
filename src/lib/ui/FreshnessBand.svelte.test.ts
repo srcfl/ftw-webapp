@@ -62,6 +62,22 @@ describe('the freshness band on a phone whose access ended', () => {
     expect(document.body.textContent).not.toMatch(/\blive\b/i)
   })
 
+  it('names the encrypted Cloud tunnel and still ages stale readings', () => {
+    render(FreshnessBand, {
+      props: { carrier: 'tunnel', srcState: 'live', ageMs: 0, phase: 'streaming' },
+    })
+    expect(document.body.textContent).toContain('Live, encrypted via FTW Cloud')
+  })
+
+  it('never calls stale tunnel readings live', () => {
+    render(FreshnessBand, {
+      props: { carrier: 'tunnel', srcState: 'stale', ageMs: 60_000, phase: 'streaming' },
+    })
+    expect(document.body.textContent).toContain('Encrypted link connected')
+    expect(document.body.textContent).not.toMatch(/\blive\b/i)
+    expect(document.body.textContent).toContain('1 min ago')
+  })
+
   it('agrees with the starting screen and shows the box progress', () => {
     render(FreshnessBand, {
       props: {

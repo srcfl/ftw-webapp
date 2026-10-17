@@ -51,6 +51,13 @@ fragments. Cadence changes only after an explicit visibility `sub`: 1 Hz while
 the document is visible and 0.2 Hz while it is hidden. It never changes with
 the telemetry it carries. If the box has nothing to say it sends `tick` anyway.
 
+Through FTW Cloud's tunnel the box sends a padded frame when a reading lands,
+plus a beat while quiet. The relay's fixed cadence applies only to the relay.
+The tunnel's envelope, limits and session ids follow Core's
+[Cloud protocol](https://github.com/srcfl/ftw/blob/master/docs/protocol-cloud.md#tunnel).
+The browser uses the same Noise and CBOR as iPhone over the service's existing
+WebSocket endpoint; its custom QUIC transport is not a WebTransport endpoint.
+
 This constancy is a privacy control, not a performance choice. A delta that
 does not fit sends the highest-priority fields and sets `TRUNC`; the rest
 follows on the next tick or as a fresh snapshot on the bulk lane. It never

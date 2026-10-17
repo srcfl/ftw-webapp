@@ -39,6 +39,7 @@ import { db, requestPersistence, type StoredSite } from '$lib/store/db'
 export interface PairedSite {
   siteId: string
   label: string
+  cloudHome?: string
   /** Pinned optically. This is what stops the relay impersonating a box. */
   boxStaticKey: Uint8Array
   /** Single use. Goes in handshake message 1 so the box can accept us. */
@@ -104,6 +105,10 @@ export async function pairWithBox(
   opts: PairOptions = {}
 ): Promise<PairResult> {
   const enrollment = parseScanned(scanned)
+  if (!enrollment.home) {
+    throw new EnrollmentError('Cloud home missing', 'E_QR_HOME',
+      'This code is from before FTW Cloud. Update your box, then show a new pairing QR in Settings → FTW app.')
+  }
   const store = opts.store ?? openVaultStore()
 
   // One prompt. A device that already has a passkey unlocks; a new one enrolls.
@@ -122,6 +127,7 @@ export async function pairWithBox(
   const site: PairedSite = {
     siteId,
     label: 'Home',
+    ...(enrollment.home ? { cloudHome: enrollment.home } : {}),
     boxStaticKey: enrollment.boxStaticPublic,
     pairingCode: enrollment.pairingCode,
     rendezvousSecret: enrollment.rendezvousSecret,
@@ -178,6 +184,7 @@ async function holdSealedCopy(
     const outcome = await saveEscrowCopy(store, wrapping, escrow ?? {}, {
       siteId: site.siteId,
       label: site.label,
+      ...(site.cloudHome ? { cloudHome: site.cloudHome } : {}),
       boxStaticKey: site.boxStaticKey,
       rendezvousSecret: site.rendezvousSecret,
     })
@@ -210,6 +217,7 @@ async function storeSite(site: PairedSite): Promise<void> {
   const row: StoredSite = {
     siteId: site.siteId,
     label: site.label,
+    ...(site.cloudHome ? { cloudHome: site.cloudHome } : {}),
     boxStaticKey: site.boxStaticKey,
     // Kept because the handle has to keep rotating long after the pairing
     // code is spent. The QR is the only place it ever appears.

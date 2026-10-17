@@ -34,6 +34,7 @@
  */
 
 import { BOX_KEY_BYTES, RENDEZVOUS_SECRET_BYTES } from './enrollment'
+import { validHome } from '$lib/protocol/cloud'
 
 /** The X25519 scalar. Not a choice — it is what Noise needs to be this device. */
 const SCALAR_BYTES = 32
@@ -41,9 +42,9 @@ const SCALAR_BYTES = 32
 /**
  * The one length every sealed blob is written at.
  *
- * One home costs 66 bytes plus its id and its name — 86 for a site id and
- * "Home". The fixed cost is 33 for the device key and the count, so five homes
- * with ordinary names still fit inside the payload budget below.
+ * Each home costs 93 bytes plus its site id and name when it names a Cloud
+ * home. The device key and count add 33 bytes. The encoder checks the total
+ * against the payload budget below.
  *
  * The escrow refuses a blob of any other length, and a test pins its constant
  * to this one.
@@ -51,13 +52,14 @@ const SCALAR_BYTES = 32
 export const RECOVERY_BLOB_MAX_BYTES = 512
 
 /**
- * The layout, version 2.
+ * The layout, version 3.
  *
  * Sealed:  [version 1 B][nonce 12 B][ciphertext + tag]
  *
  * Plain:   [device scalar 32 B][home count 1 B]
  *          then per home: [id length 1 B][id][name length 1 B][name]
  *                         [box static key 32 B][rendezvous secret 32 B]
+ *                         [Cloud home length 1 B][Cloud home, 0 or 26 B]
  *          then zeroes, out to RECOVERY_BLOB_PLAIN_BYTES.
  *
  * Additional data: [version 1 B][escrow version 4 B, big-endian]
@@ -79,7 +81,7 @@ export const RECOVERY_BLOB_MAX_BYTES = 512
  * put a code the box has already refused into a handshake that does not need
  * one.
  */
-export const RECOVERY_BLOB_VERSION = 2
+export const RECOVERY_BLOB_VERSION = 3
 
 /** No escrow behind this blob. Reserved so a version is never absent. */
 export const ESCROW_VERSION_NONE = 0
@@ -103,6 +105,7 @@ export const MAX_NAME_CHARS = 32
 export interface RecoverableHome {
   siteId: string
   label: string
+  cloudHome?: string
   /** The box's static Noise key. The trust anchor, pinned optically once. */
   boxStaticKey: Uint8Array
   /** Long-lived; the rotating relay handle is derived from it and only from it. */
@@ -162,13 +165,15 @@ export function encodeRecoveryBlob(blob: RecoveryBlob): Uint8Array<ArrayBuffer> 
     }
     const siteId = encoder.encode(home.siteId)
     const label = encoder.encode(cutToCharacters(home.label, MAX_NAME_CHARS))
+    if (home.cloudHome !== undefined && !validHome(home.cloudHome)) throw format('invalid Cloud home')
     if (siteId.length > 0xff || label.length > 0xff) throw format('a name is longer than a byte')
     return { siteId, label, home }
   })
 
   let size = SCALAR_BYTES + 1
-  for (const { siteId, label } of homes) {
+  for (const { siteId, label, home } of homes) {
     size += 1 + siteId.length + 1 + label.length + BOX_KEY_BYTES + RENDEZVOUS_SECRET_BYTES
+    size += 1 + (home.cloudHome ? 26 : 0)
   }
   if (size > RECOVERY_BLOB_PLAIN_BYTES) {
     throw new RecoveryBlobError(
@@ -196,6 +201,10 @@ export function encodeRecoveryBlob(blob: RecoveryBlob): Uint8Array<ArrayBuffer> 
     at += BOX_KEY_BYTES
     out.set(home.rendezvousSecret, at)
     at += RENDEZVOUS_SECRET_BYTES
+    const cloud = encoder.encode(home.cloudHome ?? '')
+    out[at++] = cloud.length
+    out.set(cloud, at)
+    at += cloud.length
   }
   return out
 }
@@ -228,7 +237,9 @@ export function decodeRecoveryBlob(plain: Uint8Array): RecoveryBlob {
     at += BOX_KEY_BYTES
     const rendezvousSecret = plain.slice(at, at + RENDEZVOUS_SECRET_BYTES)
     at += RENDEZVOUS_SECRET_BYTES
-    homes.push({ siteId, label, boxStaticKey, rendezvousSecret })
+    const cloudHome = decoder.decode(readSlice())
+    if (cloudHome && !validHome(cloudHome)) throw format('invalid Cloud home')
+    homes.push({ siteId, label, boxStaticKey, rendezvousSecret, ...(cloudHome ? { cloudHome } : {}) })
   }
 
   // The tail is padding and has to look like it. Anything else is a payload

@@ -51,6 +51,8 @@ export const ROLE_OWNER: Role = 'owner'
 export const ROLE_VIEWER: Role = 'viewer'
 
 export interface HelloOk {
+  /** Box-signed copy identity, learned only inside the box's Noise session. */
+  cloud?: { home: string; pk: Uint8Array; boot: Uint8Array; sources: Record<string, string>; loadpoints: Record<string, string> }
   /** Negotiated version. PROTO_FLOOR means the app is too old for full mode. */
   proto: number
   mode: BoxMode

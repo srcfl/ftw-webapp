@@ -1,10 +1,10 @@
 /* The carrier that makes every other carrier private.
  *
- * Wraps an inner carrier — relay today, a WebRTC DataChannel later — and runs
+ * Wraps an inner carrier, now the FTW Cloud tunnel, and runs
  * the Noise IK handshake across it before a single application frame moves.
  * Everything above sees an ordinary Carrier; everything below sees opaque
  * bytes. That is the whole reason the relay can be blind without the session
- * layer knowing a relay exists.
+ * layer knowing which service carries it.
  *
  * The box's static key is pinned optically from the QR code at enrollment,
  * which is what IK needs and what stops the relay presenting itself as a box:
@@ -213,6 +213,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
 
   #beginHandshake(): void {
     if (this.#closed || this.#awaitingReply || this.#transport) return
+
+    this.#inner.beginSession?.()
 
     // A fresh handshake per connection. Reusing the old one would mint a
     // second cipher pair from the same chaining key — the same key at nonce
