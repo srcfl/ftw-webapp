@@ -11,17 +11,23 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:stats": "WRANGLER_WRITE_LOGS=0 wrangler deploy --dry-run --config stats/wrangler.jsonc --outdir stats/dist",
     "preview": "vite preview",
     "relay": "node relay/src/main.ts",
     "icons": "node scripts/make-icons.mjs",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json && npm run check:stats",
+    "check:stats": "tsc -p stats/tsconfig.json && npm run types:stats -- --check",
     "check:contract": "node scripts/check-contract-drift.mjs",
     "check:tokens": "node scripts/check-token-drift.mjs",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:stats",
+    "test:stats": "WRANGLER_WRITE_LOGS=0 vitest run --config stats/vitest.config.ts",
+    "types:stats": "WRANGLER_WRITE_LOGS=0 wrangler types stats/worker-configuration.d.ts --config stats/wrangler.jsonc --include-runtime false",
     "test:watch": "vitest",
-    "verify": "npm run check && npm run test && npm run build"
+    "verify": "npm run check && npm run test && npm run build && npm run build:stats"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.21.3",
+    "@cloudflare/workers-types": "^5.20260814.1",
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@testing-library/svelte": "^5.4.2",
     "@types/node": "^26.1.2",
@@ -41,6 +47,7 @@
     "@noble/hashes": "^2.2.0",
     "cbor2": "^2.3.0",
     "idb": "^8.0.3",
+    "jose": "^6.2.8",
     "jsqr": "^1.4.0",
     "ws": "^8.21.2"
   }
