@@ -42,6 +42,7 @@ export async function pruneStoredData(db: D1Database, nowMs: number): Promise<vo
     db.prepare('DELETE FROM site_traffic_daily WHERE date < ?').bind(cutoff.siteTraffic),
     db.prepare('DELETE FROM relay_snapshots WHERE observed_at < ?').bind(cutoff.relaySnapshots),
     db.prepare('DELETE FROM fleet_daily WHERE date < ?').bind(cutoff.fleetDaily),
+    db.prepare('DELETE FROM cloud_fleet_view WHERE observed_at < ?').bind(cutoff.githubSnapshots),
     db.prepare('DELETE FROM usage_snapshots WHERE captured_hour < ?').bind(cutoff.githubSnapshots),
     db.prepare('DELETE FROM collector_runs WHERE finished_at < ?').bind(cutoff.collectorRuns),
   ])

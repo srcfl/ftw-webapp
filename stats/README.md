@@ -2,7 +2,7 @@
 
 This Worker keeps project growth data in one small D1 database. It polls the
 configured GitHub repositories, reads server-side traffic counts for
-`app.ftw.energy`, polls public FTW Cloud usage cells, keeps the retired relay archive, and serves a
+`app.ftw.energy`, polls public FTW Cloud daily reports and usage cells, keeps the retired relay archive, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
 The public view follows the six active public product repositories: `ftw`,
@@ -23,7 +23,15 @@ show smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
 
 The separate relay is retired. Earlier reports remain as an archive and do
 not measure current Cloud use. Core's anonymous daily reports now go to
-Cloud; they still cannot count unique installations. The separate usage
+Cloud; the Worker reads its thresholded public view at `/v1/fleet/public`. They still cannot count unique installations.
+
+The installation estimate divides reports from the last seven complete UTC
+days by seven, then rounds to a whole installation. Core normally reports
+once a day. Missing or privacy-withheld days hide the estimate; stale source
+data is marked. Opt-outs, offline boxes, failed sends, restarts and test boxes
+can change it. It estimates active reporting installations, not people or
+all installations ever made. Cloud holds imported relay history, so the page
+uses the Cloud view in place of the archive and never adds them together. The separate usage
 policy below supplies installation, capacity and energy cells. Never merge
 these two report types or treat check-ins as people.
 
@@ -77,8 +85,8 @@ RELAY_STATS_EXPORT_URL=https://stats.ftw.energy/api/ingest/relay
 RELAY_STATS_EXPORT_SECRET=replace_with_the_same_secret
 ```
 
-The relay keeps working if export fails. It tries once at startup and then once
-every five minutes.
+The retired relay exporter used to retry every five minutes. It is no longer
+a source for current activity.
 
 ## Retention
 
@@ -86,6 +94,7 @@ The hourly cleanup keeps only the data each dashboard window needs:
 
 - 90 days of GitHub snapshots, relay snapshots, fleet daily totals and
   collector results;
+- only the latest thresholded Cloud daily-report view, removed if over 90 days old;
 - 30 UTC days of GitHub traffic, referrers and popular paths;
 - the last 7 complete UTC days of site traffic.
 
@@ -122,7 +131,9 @@ stale and privacy-withheld values remain distinct from zero.
 
 The paired Core and Cloud changes implement the separate policy
 `ftw-project-stats-2026-10-v1`. Owners must accept it before their box sends
-new fields; old consents do not enable them. Until those changes are deployed
+new fields; old consents do not enable them. Cloud must also advertise the exact
+policy after the C8 DPIA review. An HTTP 503 with `FTW-Statistics-State: disabled`
+is an expected waiting state, not a collector failure. Until those changes are deployed
 and boxes report, the page shows an awaiting-source state. The public view
 requires at least 20 homes per cell and no home above 30 percent of a sum.
 

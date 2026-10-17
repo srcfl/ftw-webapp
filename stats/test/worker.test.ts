@@ -3,6 +3,7 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
 import { collectUsage, parseUsage, usageKeys } from '../src/usage.ts'
+import { installationEstimate, parseFleet, collectFleet } from '../src/fleet.ts'
 import { collectGitHub } from '../src/github.ts'
 import { ingestRelay } from '../src/relay.ts'
 import { pruneStoredData, retentionCutoffs, utcDayCutoff } from '../src/retention.ts'
@@ -573,7 +574,8 @@ describe('project stats Worker', () => {
     let siteCalls = 0
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
-      if (url.hostname === 'cloud.ftw.energy') return Response.json(usageView(Date.UTC(2026,7,16,9,3)))
+      if (url.hostname === 'cloud.ftw.energy' && url.pathname === '/v1/fleet/public') return Response.json(fleetView(Date.now()))
+      if (url.hostname === 'cloud.ftw.energy') return Response.json(usageView(Date.now()))
       if (url.hostname === 'api.cloudflare.com') {
         siteCalls += 1
         return githubResponse({ data: { viewer: { zones: [{ traffic: [] }] } }, errors: null })
@@ -709,4 +711,33 @@ describe('Cloud usage cells', () => {
     await expect(collectUsage(env,now)).rejects.toThrow()
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_snapshots').first('n')).toBe(0)
   })
+})
+
+function fleetView(now: number) {
+ const end=Math.floor(now/86400_000)*86400_000
+ return {schema:'ftw.fleet-public/1',meaning:'reports, not unique boxes',minimum:10,observed_at:new Date(now).toISOString(),days:[22,20,23,22,22,26,21].map((reports,i)=>({date:new Date(end-(7-i)*86400_000).toISOString().slice(0,10),reports,ftw_versions:{},channels:{},drivers:{},battery_kwh:{},price_zones:{},install_age:{}}))}
+}
+describe('installation estimates',()=>{
+ it('uses seven complete days and never adds overlapping sources or today',()=>{
+  const now=Date.UTC(2026,9,17,13);const v=fleetView(now)
+  expect(installationEstimate(v.days,now,v.observed_at,'cloud')).toMatchObject({state:'estimated',value:22,reports:156,window_start:'2026-10-10',window_end:'2026-10-16'})
+  expect(installationEstimate(v.days.slice(1),now,v.observed_at,'cloud')).toMatchObject({state:'insufficient',value:null})
+ })
+ it('rejects small public cells and extra household fields before storage',()=>{
+  const now=Date.UTC(2026,9,17,13);const v=fleetView(now)
+  expect(parseFleet(v,now)).toEqual(v)
+  v.days[0]!.drivers={privateDriver:1} as {}
+  expect(()=>parseFleet(v,now)).toThrow()
+  expect(()=>parseFleet({...fleetView(now),home:'secret'},now)).toThrow()
+ })
+ it('collects the safe Cloud feed independently of hourly energy approval',async()=>{
+  const now=Date.UTC(2026,9,17,13)
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(fleetView(now))))
+  await collectFleet(env,now)
+  const data=await dashboardData(env,false,now)
+  expect(data['installation_estimate']).toMatchObject({value:22,source:'cloud.ftw.energy'})
+  expect(data['coverage']).toMatchObject({fleet:{state:'connected'}})
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(null,{status:503,headers:{'FTW-Statistics-State':'disabled'}})))
+  await expect(collectUsage(env,now)).resolves.toBeUndefined()
+ })
 })

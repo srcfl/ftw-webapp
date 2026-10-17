@@ -48,11 +48,12 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
         <article class="metric-card overview-card"><span>Project work</span><strong id="overview-merges">—</strong><small id="overview-prs">Merged PRs in 30d</small></article>
         <article class="metric-card overview-card"><span>Web app visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 7 complete days</small></article>
-        <article class="metric-card overview-card"><span>Reporting installations</span><strong id="overview-installations">—</strong><small>Opted in · last 24 closed hours</small></article>
+        <article class="metric-card overview-card"><span id="installation-label">Active installations (estimate)</span><strong id="overview-installations">—</strong><small id="installation-period">Last 7 complete UTC days</small></article>
         <article class="metric-card overview-card"><span>Flexible power</span><strong id="usage-power">—</strong><small>Configured battery + charger limits · kW</small></article>
       </div>
     </section>
 
+    <p id="installation-method" class="footnote">Estimate pending. Total installations through all time are unknown.</p>
     <section class="panel" aria-labelledby="usage-title">
       <div class="panel-head"><div><p class="eyebrow">ENERGY VIA FTW CLOUD</p><h2 id="usage-title">Capacity and recorded energy</h2></div><span id="usage-age" class="muted">Awaiting source</span></div>
       <div class="mini-grid usage-grid">
@@ -70,7 +71,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section class="panel" aria-labelledby="coverage-title">
       <div class="panel-head"><div><p class="eyebrow">DATA SOURCES</p><h2 id="coverage-title">What this page covers</h2></div></div>
       <p id="coverage-repos" class="panel-copy">Six active public repositories. Private repositories and archived experiments are outside these totals.</p>
-      <p class="panel-copy">The separate relay is retired. Usage comes through FTW Cloud with a separate statistics choice. App Store installs are not collected. Native app development appears below.</p>
+      <p class="panel-copy">The separate relay is retired. Anonymous daily reports now come through FTW Cloud. Hourly energy needs the separate statistics choice. App Store installs are not collected. Native app development appears below.</p>
       <p class="footnote">Missing usage values stay unknown. Public energy cells need at least 20 contributing installations. Historical relay reports remain in the archive below.</p>
     </section>
 
@@ -210,7 +211,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
   }
 
   function renderFreshness(freshness, privateMode) {
-    const labels = [['github', 'GitHub', 2], ['github_traffic', 'Repo traffic', 30], ['site', 'Web app', 2], ['usage', 'Cloud usage', 2]];
+    const labels = [['github', 'GitHub', 2], ['github_traffic', 'Repo traffic', 30], ['site', 'Web app', 2], ['cloud_fleet', 'Daily reports', 2], ['usage', 'Energy reports', 2]];
 
     const host = $('freshness');
     host.replaceChildren();
@@ -263,12 +264,17 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('fleet-source', 'Historical check-ins from the retired relay. Last saved summary ' + age(data.freshness && data.freshness.fleet) + '.');
   }
 
-  function renderUsage(usage) {
+  function renderUsage(usage, estimate) {
     const u = usage || {};
     const format = (c, scale = 1) => c && (c.state === 'visible' || c.state === 'empty') && typeof c.value === 'number'
       ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.value / scale) : '—';
     const m = u.metrics || {};
-    setText('overview-installations', format(u.installations));
+    if (u.installations && u.installations.state === 'visible') {
+      setText('overview-installations', format(u.installations)); setText('installation-label','Reporting installations'); setText('installation-period','Opted in · last 24 closed hours');
+    } else if (estimate && typeof estimate.value === 'number') {
+      setText('overview-installations','≈ ' + number(estimate.value)); setText('installation-period',estimate.window_start + ' to ' + estimate.window_end + (estimate.state === 'stale' ? ' · stale source' : ''));
+    }
+    if (estimate && typeof estimate.value === 'number') setText('installation-method',estimate.reports + ' reports over ' + estimate.days + ' complete days. About one successful report per installation per day. Counts reporting active installations, not people or all-time installs; opt-outs, offline boxes, failed sends, restarts and test boxes affect the estimate. Source: ' + estimate.source + '.');
     setText('usage-power', format(m.flexible_power_w, 1000));
     setText('usage-battery', format(m.battery_capacity_wh, 1000));
     setText('usage-solar', format(m.pv_rated_w, 1000));
@@ -508,7 +514,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       setText('generated', 'Updated ' + age(data.generated_at));
       renderFreshness(data.freshness || {}, data.mode === 'private');
       renderOverview(data);
-      renderUsage(data.usage);
+      renderUsage(data.usage, data.installation_estimate);
       renderHeadline(data.github || {});
       renderRepositories(data.github && data.github.repositories, data.coverage);
       renderLine('star-chart', aggregateStateHistory(data.github && data.github.history, 'stars', data.github && data.github.repositories));

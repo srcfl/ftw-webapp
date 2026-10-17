@@ -1,4 +1,5 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
+import { installationEstimate, type PublicFleetFeed } from './fleet.ts'
 import { retentionCutoffs, utcDayCutoff } from './retention.ts'
 import { parseRepos } from './github.ts'
 
@@ -184,6 +185,8 @@ export async function dashboardData(
     ])
 
   const usage = await env.DB.prepare('SELECT view_json, observed_at FROM usage_snapshots ORDER BY captured_hour DESC LIMIT 1').first<{ view_json: string; observed_at: string }>()
+  const cloudFleet = await env.DB.prepare('SELECT observed_at, view_json FROM cloud_fleet_view WHERE id=1').first<{ observed_at: string; view_json: string }>()
+  const feed = cloudFleet ? JSON.parse(cloudFleet.view_json) as PublicFleetFeed : null
   const repoOrder = parseRepos(env.GITHUB_REPOS)
   const repositories = [...latest.results]
     .filter((row) => repoOrder.includes(row.repo))
@@ -236,9 +239,11 @@ export async function dashboardData(
       pending_repositories: repoOrder.filter((repo) => !repositories.some((row) => row['repo'] === repo)),
       cloud: { hostname: 'cloud.ftw.energy', state: usage ? 'connected' : 'pending' },
       native_app: { state: 'not_collected', meaning: 'App Store installs and app sessions are not collected' },
-      fleet: { source: 'relay.ftw.energy', state: 'retired' },
+      fleet: { source: feed ? 'cloud.ftw.energy' : 'relay.ftw.energy', state: feed ? 'connected' : 'retired' },
     },
-    freshness: { ...freshness, usage: usage?.observed_at ?? null },
+    freshness: { ...freshness, cloud_fleet: cloudFleet?.observed_at ?? null, usage: usage?.observed_at ?? null },
+    installation_estimate: installationEstimate(feed?.days ?? (fleetView['days'] as {date:string;reports:number|null}[] ?? []), nowMs, cloudFleet?.observed_at ?? freshness['fleet'] ?? null, feed ? 'cloud.ftw.energy' : 'retired relay archive'),
+    fleet_current: feed,
     usage: usage ? { state: 'connected', ...JSON.parse(usage.view_json) as Record<string, unknown> } : { state: 'pending', minimum: 20 },
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),

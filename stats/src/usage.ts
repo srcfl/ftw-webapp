@@ -41,6 +41,7 @@ export async function collectUsage(env: AppEnv, nowMs = Date.now()): Promise<voi
   const started = new Date(nowMs).toISOString()
   try {
     const response = await fetch('https://cloud.ftw.energy/v1/stats', { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(15_000) })
+    if (response.status === 503 && response.headers.get('FTW-Statistics-State') === 'disabled') {await response.body?.cancel(); await saveCollectorRun(env.DB,'cloud:usage',started,true,'awaiting policy approval');return}
     if (!response.ok) { await response.body?.cancel(); throw new Error('usage source unavailable') }
     const reader = response.body?.getReader()
     if (!reader) throw new Error('empty usage body')

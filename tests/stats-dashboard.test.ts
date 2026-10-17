@@ -52,7 +52,7 @@ describe('stats dashboard coverage', () => {
     const items = [...document.querySelectorAll('#freshness .freshness-item')]
     expect(items.find((item) => item.textContent!.startsWith('Repo traffic'))!.querySelector('.dot.ok')).not.toBeNull()
     expect(items.find((item) => item.textContent!.startsWith('GitHub'))!.querySelector('.dot.warn')).not.toBeNull()
-    expect(items.find((item) => item.textContent!.startsWith('Cloud usage'))!.querySelector('.dot.idle')).not.toBeNull()
+    expect(items.find((item) => item.textContent!.startsWith('Energy reports'))!.querySelector('.dot.idle')).not.toBeNull()
     expect(items.some(item => item.textContent!.includes('Legacy'))).toBe(false)
   })
 
