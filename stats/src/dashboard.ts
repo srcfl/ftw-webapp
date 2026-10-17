@@ -42,7 +42,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section aria-labelledby="overview-title">
       <div class="section-head">
         <div><p class="eyebrow">OVERVIEW</p><h2 id="overview-title">Project at a glance</h2></div>
-        <p class="section-copy">GitHub activity and opted-in installation totals. No people or household profiles.</p>
+        <p class="section-copy">GitHub activity, a reporting-installation estimate and opted-in energy totals.</p>
       </div>
       <div class="overview-grid">
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
@@ -282,7 +282,8 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('usage-grid', format(m.grid_import_wh, 1000) + ' / ' + format(m.grid_export_wh, 1000));
     setText('usage-battery-energy', format(m.battery_charge_wh, 1000) + ' / ' + format(m.battery_discharge_wh, 1000));
     setText('usage-vehicle-energy', format(m.vehicle_charge_wh, 1000) + ' / ' + format(m.vehicle_discharge_wh, 1000));
-    setText('usage-age', age(u.observed_at));
+    setText('usage-age', u.state === 'paused' ? 'Waiting for review' : age(u.observed_at));
+    if (u.state === 'paused') setText('usage-note', 'Hourly energy collection is off pending privacy review and policy activation. It then needs a fresh owner choice. Any saved values are historical; no new household reports are collected.');
     if (u.state === 'connected') setText('usage-note', 'Window: ' + u.window_start + ' to ' + u.window_end + '. Each value needs at least 20 contributors; a household above 30% of a sum withholds that cell. ' + (Date.now() - Date.parse(u.observed_at) > 2 * 3600000 ? 'Source is stale; these are the last saved values.' : 'Source: FTW Cloud.'));
   }
 

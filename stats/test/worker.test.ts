@@ -693,6 +693,15 @@ function usageView(now: number) {
     installations: {state:'visible',value:20,homes:20}, metrics:Object.fromEntries(usageKeys.map(k=>[k,{state:'visible',value:20000,homes:20}])) }
 }
 describe('Cloud usage cells', () => {
+  it('shows policy review as a pause without inventing zero usage', async () => {
+    const now = Date.now()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, {status:503,headers:{'FTW-Statistics-State':'disabled'}})))
+    await collectUsage(env, now)
+    const data = await dashboardData(env, false, now)
+    expect(data['usage']).toMatchObject({state:'paused'})
+    expect(data['coverage']).toMatchObject({cloud:{state:'paused'}})
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_snapshots').first('n')).toBe(0)
+  })
   it('collects only validated public cells and exposes the saved source', async () => {
     const now=Date.UTC(2026,9,17,12,3), view=usageView(now)
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(view)))

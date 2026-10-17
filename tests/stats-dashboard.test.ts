@@ -6,7 +6,7 @@ afterEach(() => {
   document.documentElement.innerHTML = ''
 })
 
-async function render(privateView = false) {
+async function render(privateView = false, extra: Record<string, unknown> = {}) {
   const now = Date.now()
   const hoursAgo = (hours: number) => new Date(now - hours * 3600_000).toISOString()
   const data = {
@@ -20,6 +20,7 @@ async function render(privateView = false) {
     relay_activity: { state: 'reporting', rooms_band: '10–99' },
     relay: { state: 'visible', latest: { rooms: 17, sockets: 20, observed_at: hoursAgo(0) } },
   }
+  Object.assign(data, extra)
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(data)))
   const html = dashboardDocument(privateView).html
   document.documentElement.innerHTML = html
@@ -29,6 +30,19 @@ async function render(privateView = false) {
 }
 
 describe('stats dashboard coverage', () => {
+  it('distinguishes a seven-day installation estimate from paused energy collection', async () => {
+    await render(false, {
+      installation_estimate: {state:'estimated',value:22,reports:156,days:7,window_start:'2026-10-10',window_end:'2026-10-16',source:'cloud.ftw.energy'},
+      usage: {state:'paused'},
+    })
+    expect(document.getElementById('overview-installations')!.textContent).toBe('≈ 22')
+    expect(document.getElementById('installation-period')!.textContent).toContain('2026-10-10 to 2026-10-16')
+    expect(document.getElementById('installation-method')!.textContent).toContain('not people or all-time installs')
+    expect(document.getElementById('usage-age')!.textContent).toBe('Waiting for review')
+    expect(document.getElementById('usage-note')!.textContent).toContain('off pending privacy review')
+    expect(document.getElementById('usage-power')!.textContent).toBe('—')
+  })
+
   it('shows the whole configured stack, names missing sources and keeps relay load out of the public view', async () => {
     await render()
     const rows = document.querySelectorAll('#repositories tr')

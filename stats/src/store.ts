@@ -185,6 +185,8 @@ export async function dashboardData(
     ])
 
   const usage = await env.DB.prepare('SELECT view_json, observed_at FROM usage_snapshots ORDER BY captured_hour DESC LIMIT 1').first<{ view_json: string; observed_at: string }>()
+  const usagePaused = collectors.results.some(row => row.source === 'cloud:usage' && row.ok === 1 && row.detail === 'awaiting policy approval')
+  const usageState = usagePaused ? 'paused' : usage ? 'connected' : 'pending'
   const cloudFleet = await env.DB.prepare('SELECT observed_at, view_json FROM cloud_fleet_view WHERE id=1').first<{ observed_at: string; view_json: string }>()
   const feed = cloudFleet ? JSON.parse(cloudFleet.view_json) as PublicFleetFeed : null
   const repoOrder = parseRepos(env.GITHUB_REPOS)
@@ -237,14 +239,14 @@ export async function dashboardData(
     coverage: {
       repositories: repoOrder,
       pending_repositories: repoOrder.filter((repo) => !repositories.some((row) => row['repo'] === repo)),
-      cloud: { hostname: 'cloud.ftw.energy', state: usage ? 'connected' : 'pending' },
+      cloud: { hostname: 'cloud.ftw.energy', state: usageState },
       native_app: { state: 'not_collected', meaning: 'App Store installs and app sessions are not collected' },
       fleet: { source: feed ? 'cloud.ftw.energy' : 'relay.ftw.energy', state: feed ? 'connected' : 'retired' },
     },
     freshness: { ...freshness, cloud_fleet: cloudFleet?.observed_at ?? null, usage: usage?.observed_at ?? null },
     installation_estimate: installationEstimate(feed?.days ?? (fleetView['days'] as {date:string;reports:number|null}[] ?? []), nowMs, cloudFleet?.observed_at ?? freshness['fleet'] ?? null, feed ? 'cloud.ftw.energy' : 'retired relay archive'),
     fleet_current: feed,
-    usage: usage ? { state: 'connected', ...JSON.parse(usage.view_json) as Record<string, unknown> } : { state: 'pending', minimum: 20 },
+    usage: { ...(usage ? JSON.parse(usage.view_json) as Record<string, unknown> : { minimum: 20 }), state: usageState },
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),
     fleet: fleetView,
