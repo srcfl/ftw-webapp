@@ -7,11 +7,10 @@
  *   8       body        ChaCha20-Poly1305 over the frame, tag included
  *
  * Why a sequence number is on the wire at all: Noise's own counter is implicit
- * and assumes an ordered, lossless carrier. The relay is a WebSocket and gives
- * us that, but the LAN carrier is a WebRTC DataChannel, which may reorder and
- * may drop. Carrying the counter lets the receiver set the nonce for whatever
- * actually arrived, so the same code serves both carriers and a lost frame
- * costs one frame instead of the session.
+ * and assumes an ordered, lossless carrier. The box's Cloud uplink can use
+ * QUIC and reorder frames before they reach this client's WebSocket. Carrying
+ * the counter lets the receiver set the nonce for whatever arrived, so a lost
+ * frame costs one frame instead of the session.
  *
  * The eight bytes are a monotonic counter and nothing else. Frame size stays
  * constant, which is the property lane 0 depends on.

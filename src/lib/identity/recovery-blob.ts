@@ -42,9 +42,9 @@ const SCALAR_BYTES = 32
 /**
  * The one length every sealed blob is written at.
  *
- * One home costs 66 bytes plus its id and its name — 86 for a site id and
- * "Home". The fixed cost is 33 for the device key and the count, so five homes
- * with ordinary names still fit inside the payload budget below.
+ * Each home costs 93 bytes plus its site id and name when it names a Cloud
+ * home. The device key and count add 33 bytes. The encoder checks the total
+ * against the payload budget below.
  *
  * The escrow refuses a blob of any other length, and a test pins its constant
  * to this one.
