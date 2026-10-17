@@ -2,6 +2,7 @@ import { applyD1Migrations, env as cloudflareEnv, reset, type D1Migration } from
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
+import { collectUsage, parseUsage, usageKeys } from '../src/usage.ts'
 import { collectGitHub } from '../src/github.ts'
 import { ingestRelay } from '../src/relay.ts'
 import { pruneStoredData, retentionCutoffs, utcDayCutoff } from '../src/retention.ts'
@@ -32,7 +33,7 @@ describe('project stats Worker', () => {
     expect(page.headers.get('content-security-policy')).toContain("default-src 'none'")
     expect(page.headers.get('x-frame-options')).toBe('DENY')
     const html = await page.text()
-    expect(html).toContain('Project growth, without user tracking.')
+    expect(html).toContain('FTW development and energy.')
     expect(html).toContain('Project at a glance')
     expect(html).toContain('What this page covers')
     expect(html).toContain('Daily counts stay hidden while the public sample is small.')
@@ -83,7 +84,7 @@ describe('project stats Worker', () => {
     const data = await dashboardData({ ...env, GITHUB_REPOS: 'ftw,ftw-cloud,ftw-app' }, false) as Record<string, any>
     expect(data.coverage.repositories).toEqual(['ftw', 'ftw-cloud', 'ftw-app'])
     expect(data.coverage.pending_repositories).toEqual(['ftw-cloud', 'ftw-app'])
-    expect(data.coverage.cloud.state).toBe('not_connected')
+    expect(data.coverage.cloud.state).toBe('pending')
     expect(data.coverage.fleet.source).toBe('relay.ftw.energy')
     expect(data.github.totals.stars).toBe(7)
     expect(data.github.totals.views_14d).toBe(9)
@@ -572,6 +573,7 @@ describe('project stats Worker', () => {
     let siteCalls = 0
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
+      if (url.hostname === 'cloud.ftw.energy') return Response.json(usageView(Date.UTC(2026,7,16,9,3)))
       if (url.hostname === 'api.cloudflare.com') {
         siteCalls += 1
         return githubResponse({ data: { viewer: { zones: [{ traffic: [] }] } }, errors: null })
@@ -682,3 +684,29 @@ function githubResponse(value: unknown): Response {
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
 }
+
+function usageView(now: number) {
+  const end = Math.floor(now / 3600_000) * 3600_000
+  return { schema: 'ftw.project-usage/1', observed_at: new Date(now).toISOString(), window_start: new Date(end-24*3600_000).toISOString(), window_end: new Date(end).toISOString(), minimum: 20,
+    installations: {state:'visible',value:20,homes:20}, metrics:Object.fromEntries(usageKeys.map(k=>[k,{state:'visible',value:20000,homes:20}])) }
+}
+describe('Cloud usage cells', () => {
+  it('collects only validated public cells and exposes the saved source', async () => {
+    const now=Date.UTC(2026,9,17,12,3), view=usageView(now)
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(view)))
+    await collectUsage(env,now)
+    const data=await dashboardData(env,false,now)
+    expect(data['usage']).toMatchObject({state:'connected',installations:{value:20}})
+    expect(JSON.stringify(data['usage'])).not.toContain('statsId')
+  })
+  it('rejects small, stale or extra household fields without saving them', async () => {
+    const now=Date.UTC(2026,9,17,12,3)
+    const small=usageView(now);small.metrics['pv_rated_w']!.homes=19
+    expect(()=>parseUsage(small,now)).toThrow()
+    expect(()=>parseUsage({...usageView(now),home:'secret'},now)).toThrow()
+    expect(()=>parseUsage(usageView(now-3*3600_000),now)).toThrow()
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({...usageView(now),home:'secret'})))
+    await expect(collectUsage(env,now)).rejects.toThrow()
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_snapshots').first('n')).toBe(0)
+  })
+})

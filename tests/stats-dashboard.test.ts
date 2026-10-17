@@ -14,7 +14,7 @@ async function render(privateView = false) {
     generated_at: hoursAgo(0),
     coverage: { repositories: ['ftw', 'device-drivers', 'ftw-cloud', 'ftw-app', 'ftw-webapp', 'ftw-web'], pending_repositories: ['ftw-cloud', 'ftw-app', 'ftw-web'] },
     freshness: { github: hoursAgo(6), github_traffic: hoursAgo(6), site: hoursAgo(0), fleet: hoursAgo(1), relay: hoursAgo(0) },
-    github: { repositories: [{ repo: 'ftw', latest_release: 'v0.144.1-beta.1' }], totals: { stars: 21 } },
+    github: { repositories: [{ repo: 'ftw', latest_release: 'v0.144.1-beta.1' }, { repo: 'ftw-cloud' }], totals: { stars: 21 }, history: [{repo:'ftw',date:'2026-10-15',stars:20},{repo:'ftw',date:'2026-10-16',stars:21},{repo:'ftw',date:'2026-10-17',stars:21},{repo:'ftw-cloud',date:'2026-10-17',stars:1}], traffic:[{repo:'ftw',date:'2026-10-16',views:9}] },
     site: { hostname: 'app.ftw.energy', totals: { visits_7d: 227 } },
     fleet: { state: 'withheld', minimum: 10, reports_30d: null, days: [] },
     relay_activity: { state: 'reporting', rooms_band: '10–99' },
@@ -35,13 +35,16 @@ describe('stats dashboard coverage', () => {
     expect(rows).toHaveLength(6)
     expect(document.querySelector('#repositories a[href="https://github.com/srcfl/ftw-app"]')).not.toBeNull()
     expect(document.querySelector('#repositories a[href="https://github.com/srcfl/ftw-cloud"]')).not.toBeNull()
-    expect(rows[2]!.textContent).toContain('Awaiting first collection')
+    expect(rows[3]!.textContent).toContain('Awaiting first collection')
     expect(rows[0]!.textContent).toContain('v0.144.1-beta.1')
     expect(document.getElementById('site-hostname')!.textContent).toBe('app.ftw.energy')
     expect(document.getElementById('relay-section')!.hidden).toBe(true)
     expect(document.getElementById('coverage-title')!.parentElement!.parentElement!.parentElement!.textContent).toContain('App Store installs are not collected')
-    expect(document.getElementById('overview-fleet')!.textContent).toBe('< 10')
-    expect(document.getElementById('fleet-source')!.textContent).toContain('Cloud reports are not connected')
+    expect(document.getElementById('overview-installations')!.textContent).toBe('—')
+    expect(document.querySelectorAll('#star-chart circle')).toHaveLength(3)
+    expect(document.querySelectorAll('#star-chart polyline')).toHaveLength(2)
+    expect(document.querySelector('#traffic-chart .bar-wrap')!.getAttribute('title')).toContain('1/2 repos')
+    expect(document.getElementById('fleet-source')!.textContent).toContain('retired relay')
   })
 
   it('grades the daily GitHub traffic feed separately from hourly sources', async () => {
@@ -49,7 +52,8 @@ describe('stats dashboard coverage', () => {
     const items = [...document.querySelectorAll('#freshness .freshness-item')]
     expect(items.find((item) => item.textContent!.startsWith('Repo traffic'))!.querySelector('.dot.ok')).not.toBeNull()
     expect(items.find((item) => item.textContent!.startsWith('GitHub'))!.querySelector('.dot.warn')).not.toBeNull()
-    expect(items.find((item) => item.textContent!.startsWith('Legacy report feed'))!.querySelector('.dot.warn')).not.toBeNull()
+    expect(items.find((item) => item.textContent!.startsWith('Cloud usage'))!.querySelector('.dot.idle')).not.toBeNull()
+    expect(items.some(item => item.textContent!.includes('Legacy'))).toBe(false)
   })
 
   it('keeps the old relay counters available as private migration diagnostics', async () => {

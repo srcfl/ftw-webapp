@@ -183,6 +183,7 @@ export async function dashboardData(
     ).all<CollectorRow>(),
     ])
 
+  const usage = await env.DB.prepare('SELECT view_json, observed_at FROM usage_snapshots ORDER BY captured_hour DESC LIMIT 1').first<{ view_json: string; observed_at: string }>()
   const repoOrder = parseRepos(env.GITHUB_REPOS)
   const repositories = [...latest.results]
     .filter((row) => repoOrder.includes(row.repo))
@@ -233,11 +234,12 @@ export async function dashboardData(
     coverage: {
       repositories: repoOrder,
       pending_repositories: repoOrder.filter((repo) => !repositories.some((row) => row['repo'] === repo)),
-      cloud: { hostname: 'cloud.ftw.energy', state: 'not_connected' },
+      cloud: { hostname: 'cloud.ftw.energy', state: usage ? 'connected' : 'pending' },
       native_app: { state: 'not_collected', meaning: 'App Store installs and app sessions are not collected' },
-      fleet: { source: 'relay.ftw.energy', state: 'legacy' },
+      fleet: { source: 'relay.ftw.energy', state: 'retired' },
     },
-    freshness,
+    freshness: { ...freshness, usage: usage?.observed_at ?? null },
+    usage: usage ? { state: 'connected', ...JSON.parse(usage.view_json) as Record<string, unknown> } : { state: 'pending', minimum: 20 },
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),
     fleet: fleetView,

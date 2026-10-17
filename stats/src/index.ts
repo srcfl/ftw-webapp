@@ -1,5 +1,6 @@
 import { accessIdentity } from './access.ts'
 import { dashboardDocument } from './dashboard.ts'
+import { collectUsage } from './usage.ts'
 import { collectGitHub } from './github.ts'
 import { ingestRelay } from './relay.ts'
 import { pruneStoredData } from './retention.ts'
@@ -89,7 +90,10 @@ export default {
         code: siteCollectorFailureCode(error),
       })
     }
-    await pruneStoredData(env.DB, controller.scheduledTime)
+    try { await collectUsage(env, controller.scheduledTime) } catch {
+ failures.push('cloud:usage'); console.error('stats: Cloud usage collection unavailable')
+ }
+ await pruneStoredData(env.DB, controller.scheduledTime)
     if (failures.length > 0) throw new Error('one or more scheduled collectors failed')
   },
 } satisfies ExportedHandler<AppEnv>

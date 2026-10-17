@@ -2,7 +2,7 @@
 
 This Worker keeps project growth data in one small D1 database. It polls the
 configured GitHub repositories, reads server-side traffic counts for
-`app.ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
+`app.ftw.energy`, polls public FTW Cloud usage cells, keeps the retired relay archive, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
 The public view follows the six active public product repositories: `ftw`,
@@ -19,28 +19,17 @@ dimension label also stays hidden until its own count reaches that threshold.
 A report is one daily check-in, not one user or one box. The private view may
 show smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
 
-## FTW Cloud transition
+## Relay retirement
 
-FTW Cloud is replacing the separate relay. This dashboard does not yet receive
-Cloud usage statistics or the Cloud statistics consent flow's reports. It also
-does not collect App Store installs or native app sessions. Native app and
-Cloud development appear in the repository figures; those figures do not
-measure use of either product.
+The separate relay is retired. Earlier reports remain as an archive and do
+not measure current Cloud use. Core's anonymous daily reports now go to
+Cloud; they still cannot count unique installations. The separate usage
+policy below supplies installation, capacity and energy cells. Never merge
+these two report types or treat check-ins as people.
 
-The existing daily reports still reach this Worker through the relay's signed
-export. Keep that ingest route until its replacement works. The public page
-names this source and shows its age. Relay load stays in the private view as
-migration diagnostics; it must never stand in for Cloud usage.
-
-Before retiring the relay, move both Core's daily-report destination and the
-aggregate export to an agreed replacement. FTW Cloud's statistics work needs
-its own consent, ingest and privacy checks in `srcfl/ftw-cloud` and Core; a URL
-change in this Worker cannot supply them. Do not combine legacy daily totals
-with a new feed without handling overlap and their different consent rules.
-
-The service never accepts routed frames, room handles, box ids, serials, IP
-addresses, site names, or raw fleet reports. The relay signs one body made from
-process counters and the daily fleet totals it already holds.
+The signed legacy ingest route stays for compatibility. It accepts group
+counters only, never routed frames, room handles, box ids, serials, IP
+addresses, site names or raw household reports.
 
 ## Set up
 
@@ -69,8 +58,8 @@ limit. It sends no
 browser script and stores no request rows, IP addresses or visitor ids.
 
 The GitHub repository snapshot and site query run each hour. GitHub traffic
-runs once a day because GitHub exposes it as a rolling daily window. The relay
-pushes one aggregate snapshot every five minutes.
+runs once a day because GitHub exposes it as a rolling daily window. Cloud usage collection also runs hourly. The retired relay no longer
+supplies an active source.
 
 Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. Protect
 `stats.ftw.energy/admin*` and `stats.ftw.energy/api/admin*` with one Cloudflare
@@ -81,7 +70,7 @@ Use a policy made for this app and include the GitHub organization `srcfl`.
 Do not add GitHub as a separate login-method Include rule: Access joins Include
 rules with OR, which would let any GitHub user through.
 
-Set the same relay ingest secret and the Worker ingest URL on the relay host:
+Historical relay export configuration (retired; do not set up again):
 
 ```sh
 RELAY_STATS_EXPORT_URL=https://stats.ftw.energy/api/ingest/relay
@@ -123,3 +112,22 @@ windows are deleted, not only hidden from dashboard queries.
   page does not render them. The private view shows current room and socket
   counts plus frame and byte deltas over the current relay process, capped to
   the last 24 hours. These counts do not measure FTW Cloud.
+
+## Cloud usage
+
+The hourly collector reads only public group cells from
+`https://cloud.ftw.energy/v1/stats`. D1 keeps those published snapshots for
+90 days. It never receives a home id, stats id or per-home reading. Missing,
+stale and privacy-withheld values remain distinct from zero.
+
+The paired Core and Cloud changes implement the separate policy
+`ftw-project-stats-2026-10-v1`. Owners must accept it before their box sends
+new fields; old consents do not enable them. Until those changes are deployed
+and boxes report, the page shows an awaiting-source state. The public view
+requires at least 20 homes per cell and no home above 30 percent of a sum.
+
+Relay is retired. Earlier relay reports remain as an archive; they are
+check-ins, never unique users or installations. The legacy signed ingest
+route remains for compatibility and is not the Cloud usage source. GitHub
+charts keep saved subtotals with repo coverage; star lines break when the
+set changes, so adding repositories cannot look like organic growth.
