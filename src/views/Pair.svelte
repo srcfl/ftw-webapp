@@ -57,6 +57,7 @@
    * may well come back to this screen more than once before they finish.
    */
   const inSafariTab = isIosSafariTab(currentEnvironment())
+  const cloudNotice = "FTW Cloud connects this app to your box. The connection stays encrypted. The service sees your home's id, internet addresses and when data passes."
 
   type Stage =
     | 'intro'
@@ -101,7 +102,7 @@
       ])
       if (!(await isEnrolled(openVaultStore()))) return
       const sites = await pairedSites()
-      const first = sites[0]
+      const first = sites.find(row => row.cloudHome)
       if (first) known = { siteId: first.siteId, label: first.label }
     })()
   })
@@ -335,12 +336,17 @@
   {:else if stage === 'pairing'}
     <h1>Securing this phone</h1>
     <p>Confirm with Face ID or Touch ID if your phone asks.</p>
+    <!-- The ceremony usually answers by itself. When it stalls instead, this
+         is the way out that does not need the OS: the screen steps back, and
+         a result that lands anyway still applies. -->
+    <button class="quiet" onclick={cancel}>Cancel</button>
   {:else if stage === 'demoing'}
     <h1>Starting the demo</h1>
     <p>Loading a simulated home.</p>
   {:else if stage === 'recovering'}
     <h1>Checking</h1>
     <p>Asking your passkey what it can open.</p>
+    <button class="quiet" onclick={cancel}>Cancel</button>
   {:else if stage === 'choosing'}
     <!-- Named by fingerprint as well as label, for the same reason the offer
          above a scanned link is: two homes with the same name are two
@@ -369,6 +375,7 @@
       {/if}
     </p>
 
+    <p class="security-note">{cloudNotice}</p>
     {#if message}
       <p class="problem">{message}</p>
     {/if}
@@ -437,6 +444,7 @@
           copy that Sourceful cannot open. If not, pairing still works; a new
           Settings QR is the way back.
         </p>
+        <p class="security-note">{cloudNotice}</p>
         {#if canScan()}
           <button class="primary" onclick={startScan}>Scan the pairing QR</button>
         {/if}

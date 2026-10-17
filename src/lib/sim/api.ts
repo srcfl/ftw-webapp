@@ -27,8 +27,8 @@
  * test here passed while a real box refused what the app had drawn.
  */
 
-import { DAY_ANCHOR_PERMILLE, sample, stepSoc, type HouseConfig } from './energy'
-import { OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/messages'
+import { DAY_ANCHOR_PERMILLE, sample, stepSoc, type HouseConfig, type Reading } from './energy'
+import { OP_PLANNER_PREFS_SET, OP_SET_MODE, ROLE_OWNER, ROLE_VIEWER, type Role } from '$lib/protocol/messages'
 import { roleHasScope } from '$lib/protocol/contract'
 import { wireBytes } from '$lib/protocol/frame'
 import { buildEnrollmentUrl } from '$lib/identity/enrollment'
@@ -45,18 +45,29 @@ const RULE_TYPES = [
   'update_available',
   'fuse_over_limit',
   'concurrent_drivers_offline',
+  'charging.connected',
   'charging.session_complete',
   'charging.interrupted',
+  'charging.goal_at_risk',
   'update.installed',
+  'driver.offline',
+  'fuse.over_limit',
+  'cloud.granted',
+  'cloud.revoked',
 ]
+
+/** The box seeds these on: each says the house started or stopped sending a
+ * readable copy to FTW Cloud, which every owner should hear unasked. */
+const ON_BY_DEFAULT = new Set(['cloud.granted', 'cloud.revoked'])
 
 /**
  * How much a route costs before it runs. Four, not three.
  *
  * read      answers a question, changes nothing, and hands back nothing that
  *           could be replayed as authority. A shared viewer may ask for it.
- * configure changes a setting. Owner, with a step-up. A late execution is the
- *           same instruction, only later.
+ * configure changes a setting. Owner, and usually a step-up. A late execution
+ *           is the same instruction, only later. A route marked noStepUp skips
+ *           the ceremony.
  * actuate   moves energy, or takes control of what is moving it. Refused
  *           through the passthrough for everybody: an HTTP request carries no
  *           expiry, and a request with no expiry must not move energy.
@@ -81,6 +92,11 @@ export interface RouteFacts {
    * sender working from an older idea of it drops every field it never knew.
    */
   replacesAll?: boolean
+  /**
+   * Owner is enough; no fresh passkey ceremony. The charging schedule is
+   * the case: login already proved who is asking.
+   */
+  noStepUp?: boolean
 }
 
 /**
@@ -92,7 +108,10 @@ export interface RouteFacts {
 const ROUTES: Record<string, RouteFacts> = {
   // Reads the app makes, and one it never will.
   'GET /api/status': { tier: 'read' },
+  'GET /api/planner/prefs': { tier: 'read' },
+  'POST /api/planner/prefs': { tier: 'actuate', cmdOp: OP_PLANNER_PREFS_SET },
   'GET /api/energy/daily': { tier: 'read' },
+  'GET /api/savings/daily': { tier: 'read' },
   'GET /api/app-link/devices': { tier: 'read' },
   // A read that answers with a gzipped archive. Priced read because it hands
   // back nothing replayable — the session refuses it later, at the status
@@ -118,12 +137,13 @@ const ROUTES: Record<string, RouteFacts> = {
   // The charger. Reads are reads; everything that starts, stops or redirects
   // charging is actuation, priced exactly as the box prices it. The schedule
   // alone is configuration — a standing instruction about future days, with
-  // its own route since srcfl/ftw#869 — while the target route it once rode
-  // stays actuation, because target also carries one-shot fields that move
-  // energy now.
+  // its own route since srcfl/ftw#869 — and NoStepUp, because login already
+  // proved who is asking. The target route it once rode stays actuation,
+  // because target also carries one-shot fields that move energy now.
   'GET /api/loadpoints': { tier: 'read' },
-  'PUT /api/loadpoints/{id}/schedule': { tier: 'configure' },
-  'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure' },
+  'POST /api/loadpoints/{id}/vehicle': { tier: 'configure' },
+  'PUT /api/loadpoints/{id}/schedule': { tier: 'configure', noStepUp: true },
+  'DELETE /api/loadpoints/{id}/schedule': { tier: 'configure', noStepUp: true },
   'GET /api/mpc/plan': { tier: 'read' },
   'GET /api/loadpoints/{id}/manual_hold': { tier: 'read' },
   'GET /api/loadpoints/{id}/battery_boost': { tier: 'read' },
@@ -145,6 +165,9 @@ const ROUTES: Record<string, RouteFacts> = {
   'DELETE /api/notifications/subscriptions/{id}': { tier: 'configure' },
   'PUT /api/notifications/rules': { tier: 'configure' },
   'POST /api/notifications/test': { tier: 'configure' },
+
+  // Owner recovery: a late restart is the same instruction, only later.
+  'POST /api/restart': { tier: 'configure' },
 
   // At the box, in the house. A credential, a whole file, or a person needed
   // in the room.
@@ -234,10 +257,37 @@ export interface SimApiOptions {
    * What the door has done to the charger, read live from the box. The
    * loadpoints answer must describe the same household the stream does.
    */
-  loadpointState?: () => { holdW: number | null; boostActive: boolean }
+  loadpointState?: () => {
+    holdW: number | null
+    boost: { expiresAtMs: number; minBatterySoc: number } | null
+    /** The last stop's reason, kept until the next boost, as the box keeps it. */
+    boostStop: { reason: string; atMs: number } | null
+    /** The car's level as the box holds it, a 0–1 fraction. */
+    soc: number
+    surplusOnly: boolean
+  }
+  /**
+   * The live sample the 1 Hz stream is already sending. Status must describe
+   * the same moment or the hero and the charger sheet disagree.
+   */
+  liveReading?: () => Reading | null
+  /** GET /api/planner/prefs, as the box currently holds it. */
+  plannerPrefs?: () => Record<string, unknown>
 }
 
 const DAY_MS = 86_400_000
+
+/**
+ * Whether the simulated car is on the cable: from the evening commute until
+ * the morning departure, UTC. One rule for the loadpoints answer and for the
+ * door, so a level set for a car that is not there is refused the way the
+ * box refuses it.
+ */
+export function evPluggedIn(nowMs: number): boolean {
+  const d = new Date(nowMs)
+  const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
+  return hourOfDay >= 17 || hourOfDay < 7
+}
 
 /** The box's own word for a code somebody reads aloud, and its own TTL. */
 const appPairingKindSpoken = 'spoken'
@@ -273,6 +323,7 @@ function json(status: number, value: unknown): ApiAnswer {
 export class SimApi {
   #opts: SimApiOptions
   #devices: SimDevice[]
+  #vehicleCapacityWh = 60000
   #pairing: { code: string; role: Role; expiresAtMs: number } | null = null
   /**
    * The charger's standing instruction, mutable the way the box's is.
@@ -280,8 +331,8 @@ export class SimApi {
    * app must meet that as an absence rather than an empty object.
    */
   #schedule: Record<string, unknown> | null = {
-    soc_pct: 84,
-    time_of_day_min_utc: 360,
+    soc: 0.84,
+    time_of_day_min: 420,
     recurring: true,
   }
 
@@ -300,9 +351,13 @@ export class SimApi {
   #pushRules: { enabled: boolean; events: Record<string, unknown>[] } | null = null
   /** How many test pushes were asked for, for a test to look at. */
   #testPushes = 0
+  /** How many times this box was asked to restart, for a test to look at. */
+  #restarts = 0
+  #plannerPrefs?: () => Record<string, unknown>
 
   constructor(opts: SimApiOptions) {
     this.#opts = opts
+    if (opts.plannerPrefs) this.#plannerPrefs = opts.plannerPrefs
     const now = opts.now()
     this.#devices = [
       {
@@ -338,7 +393,8 @@ export class SimApi {
   }
 
   /**
-   * The default rule set, every kind disabled, exactly as the box seeds it.
+   * The default rule set exactly as the box seeds it: every kind disabled
+   * but the two FTW Cloud notices.
    * The thresholds exist so a partial PUT entry would visibly wipe them —
    * the trap the app's whole-entry rule guards against.
    */
@@ -347,7 +403,7 @@ export class SimApi {
       enabled: false,
       events: RULE_TYPES.map((type) => ({
         type,
-        enabled: false,
+        enabled: ON_BY_DEFAULT.has(type),
         threshold_s: 300,
         threshold_n: 0,
         priority: 3,
@@ -366,6 +422,11 @@ export class SimApi {
 
   get testPushes(): number {
     return this.#testPushes
+  }
+
+  /** Restarts this box was asked for, for a test to look at. */
+  get restarts(): number {
+    return this.#restarts
   }
 
   /**
@@ -401,7 +462,7 @@ export class SimApi {
     // The box's own file server, which this session does not carry.
     if (!matched) return { code: 'E_UNKNOWN_OP', args: { t: 'api.req', field: 'path' } }
 
-    const { tier, cmdOp, replacesAll } = matched.facts
+    const { tier, cmdOp, replacesAll, noStepUp } = matched.facts
 
     switch (tier) {
       case 'read':
@@ -418,7 +479,7 @@ export class SimApi {
         if (req.role !== ROLE_OWNER) {
           return { code: 'E_SCOPE_DENIED', args: { needRole: ROLE_OWNER, role: req.role } }
         }
-        if (this.#opts.requireStepUp !== false && !req.stepUp) {
+        if (this.#opts.requireStepUp !== false && !req.stepUp && !noStepUp) {
           return { code: 'E_NEEDS_STEP_UP', args: { tier } }
         }
         break
@@ -460,9 +521,30 @@ export class SimApi {
   ): ApiAnswer {
     const route = matched.pattern
 
+    if (route === 'GET /api/status') return this.#status()
+    if (route === 'GET /api/planner/prefs') {
+      return json(200, this.#plannerPrefs?.() ?? {
+        forecast_trust: 'balanced',
+        battery_export: 'unknown',
+        safety_k: 0.3,
+        mapped_k: 0.3,
+        mapped_mode: 'planner_passive_arbitrage',
+      })
+    }
     if (route === 'GET /api/energy/daily') return this.#energyDaily(req.query)
+    if (route === 'GET /api/savings/daily') return this.#savingsDaily(req.query)
     if (route === 'GET /api/loadpoints') return this.#loadpoints()
     if (route === 'GET /api/mpc/plan') return this.#mpcPlan()
+    if (route === 'POST /api/loadpoints/{id}/vehicle') {
+      if (matched.params['id'] !== 'carport') return json(404, { error: 'Unknown charger' })
+      let body: { capacity_wh?: unknown }
+      try { body = JSON.parse(new TextDecoder().decode(req.body ?? new Uint8Array())) }
+      catch { return json(400, { error: 'Enter a valid battery size' }) }
+      const capacity = body.capacity_wh
+      if (typeof capacity !== 'number' || !Number.isFinite(capacity) || capacity < 1000 || capacity > 300000) return json(400, { error: 'Enter a battery size from 1 to 300 kWh' })
+      this.#vehicleCapacityWh = capacity
+      return json(200, { ok: true, vehicle_capacity_wh: capacity, capacity_source: 'configured' })
+    }
     if (route === 'PUT /api/loadpoints/{id}/schedule') {
       return this.#putSchedule(matched.params['id'] ?? '', req.body)
     }
@@ -491,6 +573,10 @@ export class SimApi {
       return json(200, { status: 'sent', to: this.#pushSubscriptions.size })
     }
     if (route === 'GET /api/notifications/history') return this.#pushHistory()
+    if (route === 'POST /api/restart') {
+      this.#restarts += 1
+      return json(202, { status: 'restarting' })
+    }
 
     // A real read whose answer this session cannot carry. Refused by class at
     // the status line, never by a list of paths, so a route added next year
@@ -539,6 +625,60 @@ export class SimApi {
   }
 
   /**
+   * The dashboard's own snapshot. Field names match handleStatus: snake_case,
+   * SoC as a 0–1 fraction, energy.today in watt-hours, one object per driver.
+   */
+  #status(): ApiAnswer {
+    const now = this.#opts.now()
+    const live = this.#opts.liveReading?.()
+    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    let r = live ?? sample(this.#opts.house, now, DAY_ANCHOR_PERMILLE, this.#opts.ceilingW)
+    if (!live && door.holdW !== null) {
+      r = { ...r, evW: door.holdW, gridW: r.gridW - r.evW + door.holdW }
+    }
+
+    const todayMidnight = new Date(now).setHours(0, 0, 0, 0)
+    const today = this.#integrate(todayMidnight, now)
+
+    const drivers: Record<string, Record<string, unknown>> = {}
+    if (this.#opts.house.pvPeakW > 0) {
+      drivers['sungrow'] = { status: 'ok', pv_w: r.pvW }
+    }
+    if (this.#opts.house.batteryCapacityWh > 0) {
+      drivers['lynx'] = {
+        status: 'ok',
+        bat_w: r.batteryW,
+        bat_soc: r.batterySocPermille / 1000,
+      }
+    }
+    drivers['easee'] = { status: 'ok', ev_w: r.evW }
+
+    return json(200, {
+      grid_w: r.gridW,
+      pv_w: r.pvW,
+      bat_w: r.batteryW,
+      ev_w: r.evW,
+      load_w: r.loadW,
+      bat_soc: r.batterySocPermille / 1000,
+      fuse: {
+        max_amps: this.#opts.house.fuseA,
+        phases: this.#opts.house.phases,
+        voltage: 230,
+      },
+      phase_amps: Array.from(
+        { length: this.#opts.house.phases },
+        () => r.gridW / 230 / this.#opts.house.phases,
+      ),
+      phase_powers: Array.from(
+        { length: this.#opts.house.phases },
+        () => r.gridW / this.#opts.house.phases,
+      ),
+      energy: { today },
+      drivers,
+    })
+  }
+
+  /**
    * The charger, from the same house the live view samples.
    *
    * Same generator, same seed, same minute — the panel's "charging at
@@ -548,22 +688,29 @@ export class SimApi {
    *
    * Field names are the box's own: `loadpoint.State` marshals snake_case,
    * and an app built against camelCase here would render blanks against
-   * every real box while this tree stayed green. No `current_soc_pct` on
-   * purpose — an easee without a car API genuinely does not know it, and
-   * the honest absence is a case the panel has to carry.
+   * every real box while this tree stayed green. `current_soc` is a
+   * fraction and its source is `inferred`: an easee without a car API does
+   * not know the car's level, and the box estimates one from energy
+   * delivered rather than serving none — which is what its own page
+   * prefills the slider with, and what this app's panel must meet.
    */
   #loadpoints(): ApiAnswer {
     const now = this.#opts.now()
     const r = sample(this.#opts.house, now, 500, this.#opts.ceilingW)
     // What the door has done overrides what the generator would do — the
     // stream applies the same override, so both surfaces tell one story.
-    const door = this.#opts.loadpointState?.() ?? { holdW: null, boostActive: false }
+    const door = this.#opts.loadpointState?.() ?? {
+      holdW: null,
+      boost: null,
+      boostStop: null,
+      soc: 0,
+      surplusOnly: false,
+    }
     const powerW = door.holdW ?? r.evW
     const d = new Date(now)
     const hourOfDay = d.getUTCHours() + d.getUTCMinutes() / 60
 
-    // Plugged in from the evening commute until the morning departure.
-    const pluggedIn = hourOfDay >= 17 || hourOfDay < 7
+    const pluggedIn = evPluggedIn(now)
 
     // What the session has delivered so far: the charging window is flat
     // ~7.2 kW, so the meter is minutes-into-window times that rate.
@@ -582,22 +729,44 @@ export class SimApi {
         {
           id: 'carport',
           driver_name: 'easee',
+          vehicle_capacity_wh: this.#vehicleCapacityWh,
+          capacity_source: 'configured',
           plugged_in: pluggedIn,
+          // The box's zero values for an empty bay; it omits an empty source.
+          current_soc: pluggedIn ? door.soc : 0,
+          ...(pluggedIn ? { soc_source: 'inferred' } : {}),
           current_power_w: powerW,
           delivered_wh_session: pluggedIn ? sessionWh : 0,
-          target_soc_pct: 84,
+          target_soc: typeof this.#schedule?.soc === 'number' ? this.#schedule.soc : 0,
           updated_at_ms: now,
-          soc_source: 'none',
           min_charge_w: 4140,
           max_charge_w: 11000,
           phases: 3,
           voltage_v: 230,
           manual_active: door.holdW !== null,
-          battery_boost: door.boostActive
-            ? { state: 'active', active: true }
-            : { state: 'inactive', active: false },
-          surplus_only: false,
-          ...(this.#schedule ? { schedule: this.#schedule } : {}),
+          // Zero is a pause; the manual status still names it if a box omits zero watts.
+          ...(door.holdW !== null ? { manual_charge_w: door.holdW } : {}),
+          ...(door.holdW === 0 ? { manual: { active: true, state: 'paused', requested_a: 0 } } : {}),
+          // The box's BatteryBoostStatus, in its three states.
+          battery_boost: door.boost
+            ? {
+                state: 'active',
+                active: true,
+                expires_at_ms: door.boost.expiresAtMs,
+                min_battery_soc: door.boost.minBatterySoc,
+              }
+            : door.boostStop
+              ? {
+                  state: 'stopped',
+                  active: false,
+                  stop_reason: door.boostStop.reason,
+                  stopped_at_ms: door.boostStop.atMs,
+                }
+              : { state: 'inactive', active: false },
+          surplus_only: door.surplusOnly,
+          schedule: this.#schedule
+            ? { ...this.#schedule, time_of_day_min_utc: this.#utcMinute(this.#schedule['time_of_day_min'] as number) }
+            : { soc: 0, time_of_day_min_utc: 0, recurring: false },
         },
       ],
     })
@@ -625,16 +794,40 @@ export class SimApi {
     if (typeof parsed !== 'object') return json(400, { error: 'invalid schedule' })
 
     const s = parsed as Record<string, unknown>
-    const min = s['time_of_day_min_utc']
+    const min = s['time_of_day_min_utc'] ?? 0
     if (typeof min !== 'number' || min < 0 || min >= 1440) {
       return json(400, { error: 'time_of_day_min_utc must be 0..1439' })
+    }
+    // The household clock wins; an older client sends only the UTC minute.
+    const clock = s['time_of_day_min'] ?? this.#clock(min)
+    if (typeof clock !== 'number' || clock < 0 || clock >= 1440) {
+      return json(400, { error: 'time_of_day_min must be 0..1439' })
     }
     const days = s['days']
     if (days !== undefined && (typeof days !== 'number' || days < 0 || days > 127)) {
       return json(400, { error: 'days must be a 7-bit weekday mask (0..127, bit 0 = Monday)' })
     }
-    this.#schedule = s
+    const soc = typeof s['soc'] === 'number' ? s['soc'] : typeof s['soc_pct'] === 'number' ? s['soc_pct'] / 100 : 0
+    if (soc < 0 || soc > 1) return json(400, { error: 'soc must be between 0 and 1' })
+    const { soc_pct: _legacy, time_of_day_min_utc: _utc, ...fields } = s
+    this.#schedule = { ...fields, soc, time_of_day_min: clock }
     return json(200, { ok: true })
+  }
+
+  /**
+   * The household clock and its UTC minute today, as the box converts
+   * them. The sim's house keeps this browser's zone.
+   */
+  #clock(minUtc: number): number {
+    const d = new Date(this.#opts.now())
+    d.setUTCHours(Math.floor(minUtc / 60), minUtc % 60, 0, 0)
+    return d.getHours() * 60 + d.getMinutes()
+  }
+
+  #utcMinute(clock: number): number {
+    const d = new Date(this.#opts.now())
+    d.setHours(Math.floor(clock / 60), clock % 60, 0, 0)
+    return d.getUTCHours() * 60 + d.getUTCMinutes()
   }
 
   #clearSchedule(id: string): ApiAnswer {
@@ -822,6 +1015,38 @@ export class SimApi {
     }
 
     return json(200, { days: out, tz: 'Local' })
+  }
+
+  /**
+   * Site savings vs a no-PV/no-battery baseline, as handleSavingsDaily
+   * answers them. Costs are in öre. The numbers are a shape, not a tariff
+   * model: enough for the compact card to have something true to print.
+   */
+  #savingsDaily(query: Record<string, string>): ApiAnswer {
+    let days = 7
+    const asked = Number.parseInt(query['days'] ?? '', 10)
+    if (Number.isFinite(asked) && asked > 0) days = asked
+    if (days > 90) days = 90
+
+    const nowMs = this.#opts.now()
+    const todayMidnight = new Date(nowMs).setHours(0, 0, 0, 0)
+    const out = []
+    for (let i = days - 1; i >= 0; i--) {
+      const dayStart = new Date(todayMidnight).setDate(new Date(todayMidnight).getDate() - i)
+      const dayEnd = Math.min(new Date(dayStart).setDate(new Date(dayStart).getDate() + 1), nowMs)
+      const e = this.#integrate(dayStart, dayEnd)
+      const baselineOre = Math.round((e.load_wh / 1000) * 150)
+      const actualOre = Math.round((e.import_wh / 1000) * 150 - (e.export_wh / 1000) * 60)
+      out.push({
+        day: dayKey(dayStart),
+        ...e,
+        actual_cost_ore: actualOre,
+        baseline_cost_ore: baselineOre,
+        saved_ore: baselineOre - actualOre,
+        resolution: 'slot',
+      })
+    }
+    return json(200, { days: out, tz: 'Local', value_scope: 'site_total' })
   }
 
   #integrate(fromMs: number, toMs: number) {

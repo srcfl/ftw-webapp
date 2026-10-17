@@ -381,6 +381,7 @@ export class Session {
   #pendingCmd = new Map<string, PendingCmd>()
   /** The api queue's tail. Always settled-safe; see api(). */
   #apiTail: Promise<void> = Promise.resolve()
+  #apiGeneration = 0
   /** Set only while the box says it is starting. See BOOT_RETRY_MS. */
   #bootRetry: ReturnType<typeof setTimeout> | undefined
 
@@ -623,17 +624,41 @@ export class Session {
    * serves: a second in flight is answered "busy", which costs whichever view
    * lost the race a thirty-second backoff over a collision no view can see.
    * The queue is chained on settle, not success, so a call that fails hands
-   * the wire to the one behind it — and each call's deadline is armed when it
-   * dispatches, because a place in the queue is not time spent waiting on the
-   * box.
+   * the wire to the one behind it. Queue waits expire separately from wire
+   * silence, and a call never crosses a disconnect into a new session.
    */
   api(req: ApiReq): Promise<ApiResponse> {
-    const turn = this.#apiTail.then(() => this.#dispatchApi(req))
-    this.#apiTail = turn.then(
-      () => undefined,
-      () => undefined
-    )
-    return turn
+    const generation = this.#apiGeneration
+    return new Promise<ApiResponse>((resolve, reject) => {
+      let queued = true
+      const timer = setTimeout(() => {
+        queued = false
+        reject(new Error('api queue wait timed out'))
+      }, API_TIMEOUT_MS)
+      const turn = this.#apiTail.then(() => {
+        if (!queued) return
+        queued = false
+        clearTimeout(timer)
+        return this.#apiWithRetry(req, generation).then(resolve, reject)
+      })
+      this.#apiTail = turn.then(() => undefined, () => undefined)
+    })
+  }
+
+  async #apiWithRetry(req: ApiReq, generation: number): Promise<ApiResponse> {
+    for (let attempt = 0; ; attempt++) {
+      if (generation !== this.#apiGeneration) throw new Error('carrier closed')
+      try {
+        return await this.#dispatchApi(req)
+      } catch (err) {
+        // The box can send its last frame before releasing its API slot.
+        // Only this explicit refusal proves that no handler ran. Never retry
+        // a timeout, a lost answer, a handler failure or a step-up refusal.
+        if (!(err instanceof ApiError) || err.detail.code !== 'E_UNAVAILABLE' ||
+          err.detail.args?.['reason'] !== 'busy' || !err.detail.retryable || attempt >= 3) throw err
+        await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
+      }
+    }
   }
 
   #dispatchApi(req: ApiReq): Promise<ApiResponse> {
@@ -1193,6 +1218,7 @@ export class Session {
    * later, on its own timer, against a view that has long since moved on.
    */
   #settlePending(): void {
+    this.#apiGeneration++
     for (const map of [
       this.#pendingHistory,
       this.#pendingPlan,

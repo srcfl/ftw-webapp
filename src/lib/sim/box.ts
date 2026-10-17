@@ -40,15 +40,25 @@ import {
   ROLE_OWNER,
   API_CHUNK_BYTES,
   API_MAX_BYTES,
+  OP_PLANNER_PREFS_SET,
   OP_SET_MODE,
   OP_BATTERY_HOLD,
   OP_LOADPOINT_HOLD,
   OP_LOADPOINT_BOOST,
+  OP_LOADPOINT_SOC_SET,
+  OP_LOADPOINT_SURPLUS_ONLY_SET,
+  OP_CAR_GOAL_SET,
+  OP_CAR_SOC_SET,
+  OP_SESSION_CAR_SET,
+  OP_CAR_ADD,
+  OP_CAR_UPDATE,
+  OP_CAR_REMOVE,
   carriesOverSession,
   isRetryable,
 } from '$lib/protocol/messages'
-import { SimApi } from './api'
-import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
+import { SAFETY_K_DEFAULT, clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
+import { SimApi, evPluggedIn } from './api'
+import { roleHasScope, ROLE_SCOPES, CAP_CLOUD_TUN } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
 import {
   RESOLUTIONS,
@@ -176,7 +186,13 @@ const MODE_CATALOG: ModeInfo[] = [
       'Full price arbitrage \u2014 charge cheap, discharge into expensive hours (battery may export to grid).',
     tier: 'primary',
   },
-  { key: 'idle', label: 'Idle', tooltip: 'Do nothing \u2014 no dispatch.', tier: 'advanced' },
+  {
+    key: 'idle',
+    label: 'Stop batteries',
+    tooltip:
+      "Hold every battery at 0 W for as long as this mode is on, so none of them drifts back to the inverter's own behaviour. Fuse protection still applies: a battery discharges if the site is about to trip its main fuse. EV charging and PV curtailment carry on \u2014 stop those on their own controls.",
+    tier: 'advanced',
+  },
   {
     key: 'self_consumption',
     label: 'Self (manual)',
@@ -207,18 +223,6 @@ const MODE_CATALOG: ModeInfo[] = [
     tooltip: 'Forecast-driven \u2014 grid-charges during cheap hours, never exports.',
     tier: 'hidden',
   },
-  {
-    key: 'priority',
-    label: 'Priority',
-    tooltip: 'Fill the highest-priority battery first.',
-    tier: 'hidden',
-  },
-  {
-    key: 'weighted',
-    label: 'Weighted',
-    tooltip: 'Distribute dispatch across batteries by configured weights.',
-    tier: 'hidden',
-  },
 ]
 
 const MODE_KEYS = MODE_CATALOG.map((m) => m.key)
@@ -237,10 +241,32 @@ const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
  */
 const OP_SCOPES: Record<string, string> = {
   [OP_SET_MODE]: 'ftw.mode.write',
+  [OP_PLANNER_PREFS_SET]: 'ftw.mode.write',
   [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_SOC_SET]: 'ftw.dispatch.write',
+  [OP_LOADPOINT_SURPLUS_ONLY_SET]: 'ftw.dispatch.write',
+  [OP_CAR_GOAL_SET]: 'ftw.dispatch.write',
+  [OP_CAR_SOC_SET]: 'ftw.dispatch.write',
+  [OP_SESSION_CAR_SET]: 'ftw.dispatch.write',
+  [OP_CAR_ADD]: 'ftw.cars.write',
+  [OP_CAR_UPDATE]: 'ftw.cars.write',
+  [OP_CAR_REMOVE]: 'ftw.cars.write',
 }
+
+/**
+ * The car ops. The simulated box keeps no cars and does not claim der.car,
+ * so it answers them as a box from before cars does.
+ */
+const CAR_OPS: readonly string[] = [
+  OP_CAR_GOAL_SET,
+  OP_CAR_SOC_SET,
+  OP_SESSION_CAR_SET,
+  OP_CAR_ADD,
+  OP_CAR_UPDATE,
+  OP_CAR_REMOVE,
+]
 
 const CAPS = [
   'status.core',
@@ -303,6 +329,14 @@ export interface SimBoxOptions {
   scopes?: string[]
   /** False models a box from before hello could carry a subscription. */
   inlineSubscribe?: boolean
+  cloud?: HelloOk['cloud']
+  /**
+   * Starting dispatch mode. Defaults to FTW's own default (passive
+   * arbitrage). Tests that open the Plan screen already on a manual
+   * fallback pass `self_consumption` so they do not have to click through
+   * the disclosure first.
+   */
+  mode?: SiteMode
 }
 
 export class SimBox {
@@ -319,16 +353,35 @@ export class SimBox {
   /** The operator's manual charge hold, set through the door. Null when none. */
   #evHold: { powerW: number } | null = null
   /** The battery-boost lease, set through the door. Null when none. */
-  #evBoost: { expiresAtMs: number } | null = null
+  #evBoost: { expiresAtMs: number; minBatterySoc: number } | null = null
+  /**
+   * Why the last boost stopped, kept until the next one starts — the box
+   * keeps its terminal status the same way, and its page reads it back.
+   */
+  #evBoostStop: { reason: string; atMs: number } | null = null
+  /**
+   * The car's level as the box holds it, a fraction: the plug-in anchor
+   * until an operator corrects it, which is what the box's inferred estimate
+   * is. Fixed rather than climbing with the session, because what the tests
+   * and the demo need is a level to prefill and to read back, not a battery
+   * model.
+   */
+  #evSoc = 0.42
+  /** PV-only charging, set through the door. */
+  #evSurplusOnly = false
   #subscribed = false
   #negotiatedProto = PROTO_MAX
   #bucket: 256 | 512 = 512
   #hz: Sub['hz'] = 1
   #inlineSubscribe: boolean
+  #cloud: HelloOk['cloud']
   #lastReading: Reading | null = null
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
   #mode: SiteMode = DEFAULT_MODE
+  /** Household planner prefs. The default matches Core; export starts unchecked. */
+  #safetyK = SAFETY_K_DEFAULT
+  #batteryExport: BatteryExport = 'unknown'
   #planRev = 1
   #role: Role
   #scopes: string[] | null
@@ -357,6 +410,8 @@ export class SimBox {
     this.#role = opts.role ?? ROLE_OWNER
     this.#scopes = opts.scopes ?? null
     this.#inlineSubscribe = opts.inlineSubscribe ?? true
+    this.#cloud = opts.cloud
+    if (opts.mode && MODE_KEYS.includes(opts.mode)) this.#mode = opts.mode
     this.#api = new SimApi({
       house: this.house,
       now: this.#now,
@@ -368,9 +423,39 @@ export class SimBox {
       // household, whichever surface asks.
       loadpointState: () => ({
         holdW: this.#evHold?.powerW ?? null,
-        boostActive: this.#evBoost !== null,
+        boost: this.#liveBoost(),
+        boostStop: this.#evBoostStop,
+        soc: this.#evSoc,
+        surplusOnly: this.#evSurplusOnly,
       }),
+      liveReading: () => this.#lastReading,
+      plannerPrefs: () => this.plannerPrefsBody(),
     })
+  }
+
+  /**
+   * GET /api/planner/prefs, in the box's shape.
+   *
+   * mapped_mode is this simulator's answer. Callers read it; they do not
+   * derive a mode from battery_export themselves.
+   */
+  plannerPrefsBody(): Record<string, unknown> {
+    const safetyK = clampSafetyK(this.#safetyK)
+    return {
+      forecast_trust: trustFromSafetyK(safetyK),
+      battery_export: this.#batteryExport,
+      safety_k: safetyK,
+      mapped_k: safetyK,
+      mapped_mode: this.#batteryExport === 'allowed' ? 'planner_arbitrage' : 'planner_passive_arbitrage',
+    }
+  }
+
+  get safetyK(): number {
+    return clampSafetyK(this.#safetyK)
+  }
+
+  get batteryExport(): BatteryExport {
+    return this.#batteryExport
   }
 
   /** What this session's enrolment is allowed to do. */
@@ -552,7 +637,8 @@ export class SimBox {
       mode: this.faults.booting ? 'booting' : proto === PROTO_FLOOR ? 'floor' : 'full',
       box: { id: 'sim-0001', build: 'sim', tz: 'Europe/Stockholm' },
       clock: { source: 'ntp', syncedAtMs: this.#startedAtMs, uptimeMs: this.uptimeMs },
-      caps: proto === PROTO_FLOOR ? ['status.core'] : CAPS,
+      caps: proto === PROTO_FLOOR ? ['status.core'] : this.#cloud ? [...CAPS, CAP_CLOUD_TUN] : CAPS,
+      ...(this.#cloud ? { cloud: this.#cloud } : {}),
       capsHash: 'sim',
       // Sent so the app knows what to draw, and for nothing else. Hiding a
       // button is presentation; every refusal above is the box's.
@@ -657,7 +743,7 @@ export class SimBox {
     // An op the box has never heard of is refused by name, exactly as the
     // box refuses it — falling through to some default behaviour would let
     // an app typo pass every test here and fail against every real box.
-    if (!(cmd.op in OP_SCOPES)) {
+    if (!(cmd.op in OP_SCOPES) || CAR_OPS.includes(cmd.op)) {
       this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
       return
     }
@@ -730,6 +816,52 @@ export class SimBox {
       return
     }
 
+    // Household prefs. The mapped planner mode is decided here, the way
+    // ApplyPlannerPrefs does, and only applied when a planner mode is
+    // already driving. A manual house stays manual until "Use the plan".
+    if (cmd.op === OP_PLANNER_PREFS_SET) {
+      const k = cmd.args['safety_k']
+      const exp = cmd.args['battery_export']
+      if (k !== undefined && (typeof k !== 'number' || !Number.isFinite(k))) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'safety_k', value: k ?? null },
+        })
+        return
+      }
+      if (exp !== undefined && exp !== 'unknown' && exp !== 'not_allowed' && exp !== 'allowed') {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'battery_export', value: exp ?? null },
+        })
+        return
+      }
+      if (k === undefined && exp === undefined) {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { op: cmd.op } })
+        return
+      }
+      if (typeof k === 'number') this.#safetyK = clampSafetyK(k)
+      if (exp !== undefined) this.#batteryExport = exp as BatteryExport
+      const mapped = this.plannerPrefsBody()['mapped_mode']
+      if (
+        this.#mode.startsWith('planner_') &&
+        typeof mapped === 'string' &&
+        MODE_KEYS.includes(mapped) &&
+        mapped !== this.#mode
+      ) {
+        this.#mode = mapped
+      }
+      this.#planRev += 1
+      if (this.#subscribed) this.#sendSnapshot()
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#safetyK,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
     // The charger's two ops, box conventions throughout: clearing is its
     // own signal because 0 W is a valid pause hold, an unknown loadpoint is
     // a bad argument, and the readback reports what the charger holds now.
@@ -749,6 +881,8 @@ export class SimBox {
           })
           return
         }
+        // A hold sets what the car draws; a running boost keeps letting the
+        // house battery cover it, as the box does.
         this.#evHold = { powerW: Math.round(w) }
       }
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
@@ -766,20 +900,108 @@ export class SimBox {
         return
       }
       if (cmd.args['cancel'] === true) {
-        this.#evBoost = null
+        this.#stopBoost('cancelled')
       } else {
-        const durS = cmd.args['duration_s']
-        if (typeof durS !== 'number' || durS <= 0) {
+        // The box's rules, value for value: exactly one of duration_s and
+        // expires_at_ms; a reserve of 5–100 % after its legacy-percent
+        // reading; one minute to four hours; and a refusal, not a lease,
+        // while an operator hold is on the charger or it runs on spare
+        // solar only.
+        const durS = typeof cmd.args['duration_s'] === 'number' ? cmd.args['duration_s'] : 0
+        const expiresAt =
+          typeof cmd.args['expires_at_ms'] === 'number' ? cmd.args['expires_at_ms'] : 0
+        if (durS > 0 === expiresAt > 0) {
           this.#cmdResult(cmd.cmdId, 'rejected', {
             code: 'E_UNKNOWN_OP',
-            args: { field: 'duration_s' },
+            args: { op: cmd.op, arg: 'duration_s', value: durS },
           })
           return
         }
-        this.#evBoost = { expiresAtMs: this.#now() + durS * 1000 }
+        const now = this.#now()
+        const expiresAtMs = durS > 0 ? now + durS * 1000 : expiresAt
+        const raw =
+          typeof cmd.args['min_battery_soc_pct'] === 'number' ? cmd.args['min_battery_soc_pct'] : 0
+        const minBatterySoc = raw > 1 ? raw / 100 : raw
+        const lengthS = (expiresAtMs - now) / 1000
+        if (minBatterySoc < 0.05 || minBatterySoc > 1 || lengthS < 60 || lengthS > 4 * 3600) {
+          this.#cmdResult(cmd.cmdId, 'rejected', {
+            code: 'E_UNKNOWN_OP',
+            args: { op: cmd.op, arg: 'lease', value: null },
+          })
+          return
+        }
+        if (this.#evSurplusOnly) {
+          this.#cmdResult(cmd.cmdId, 'rejected', {
+            code: 'E_UNAVAILABLE',
+            args: { op: cmd.op },
+          })
+          return
+        }
+        this.#evBoost = { expiresAtMs, minBatterySoc }
+        this.#evBoostStop = null
       }
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {
         value: this.#evBoost ? 1 : 0,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // The car's level, corrected: a fraction in [0, 1] as the box takes it,
+    // refused by name when no car is on the cable — the route's 409 — and
+    // read back as the level the box now holds.
+    if (cmd.op === OP_LOADPOINT_SOC_SET) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      const soc = cmd.args['soc']
+      if (typeof soc !== 'number' || soc < 0 || soc > 1) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'soc', value: soc ?? null },
+        })
+        return
+      }
+      if (!evPluggedIn(this.#now())) {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNAVAILABLE',
+          args: { op: cmd.op, reason: 'unplugged' },
+        })
+        return
+      }
+      this.#evSoc = soc
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evSoc,
+        src: 'core',
+        uptimeMs: this.uptimeMs,
+      })
+      this.#sendPlan()
+      return
+    }
+
+    // PV only, on or off: stored, read back as 1 or 0 the way the box
+    // reports a flag, and — as the box's own tick does — a running boost is
+    // withdrawn the moment the charger goes back to spare solar only.
+    if (cmd.op === OP_LOADPOINT_SURPLUS_ONLY_SET) {
+      if (cmd.args['id'] !== 'carport') {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_UNKNOWN_OP', args: { field: 'id' } })
+        return
+      }
+      const on = cmd.args['surplus_only']
+      if (typeof on !== 'boolean') {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'surplus_only', value: on ?? null },
+        })
+        return
+      }
+      this.#evSurplusOnly = on
+      if (on) this.#stopBoost('surplus_only')
+      this.#cmdResult(cmd.cmdId, 'applied', undefined, {
+        value: this.#evSurplusOnly ? 1 : 0,
         src: 'core',
         uptimeMs: this.uptimeMs,
       })
@@ -793,6 +1015,19 @@ export class SimBox {
       src: SRC.BATTERY,
       uptimeMs: this.uptimeMs,
     })
+  }
+
+  /** The lease as the box would report it now: expiry is enforced lazily. */
+  #liveBoost(): { expiresAtMs: number; minBatterySoc: number } | null {
+    if (this.#evBoost && this.#evBoost.expiresAtMs <= this.#now()) this.#stopBoost('expired')
+    return this.#evBoost
+  }
+
+  /** Withdraw the boost and keep the reason, as the box's controller does. Idempotent. */
+  #stopBoost(reason: string): void {
+    if (!this.#evBoost) return
+    this.#evBoost = null
+    this.#evBoostStop = { reason, atMs: this.#now() }
   }
 
   #onPlanGet(id: number): void {

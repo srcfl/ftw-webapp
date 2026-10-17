@@ -13,9 +13,18 @@
 # lost every notification that mattered.
 version: 1
 events:
+  - kind: charging.connected
+    title: Car plugged in
+    body: "Open to see charging status, check the battery level and set a ready time."
   - kind: charging.session_complete
     title: Car charged
     body: "{kwh} kWh delivered — ready to go."
+  - kind: charging.goal_at_risk
+    # Only when the box knows the car's level, from the car or from someone
+    # who set it, and the plan cannot reach the goal by the ready time. An
+    # assumed level would make this a guess. Once per plug-in.
+    title: The car may not be ready
+    body: "It will not reach {target} % by {by} at this pace."
   - kind: charging.interrupted
     # Only after the hysteresis window the box applies: a charge that had
     # been running steadily and then stopped without finishing. A flapping
@@ -25,6 +34,16 @@ events:
   - kind: update.installed
     title: Your box updated itself
     body: "Now running {version}. Everything came back on its own."
+  - kind: driver.offline
+    # After the box's own threshold: ten minutes of silence from a driver
+    # that had been reporting. A blip must not become a lock-screen.
+    title: A device went quiet
+    body: "{name} stopped answering."
+  - kind: fuse.over_limit
+    # After the box's own threshold: thirty seconds over the rating. A
+    # kettle must not page anyone.
+    title: The house is drawing too much
+    body: "{phase} is over the fuse rating."
   - kind: box.unreachable
     # The one sentence the box cannot send about itself. The relay holds
     # this pre-encrypted and posts it only when the box has missed its
@@ -32,3 +51,49 @@ events:
     # has. The box encrypts it before it ever leaves home.
     title: Your box is out of reach
     body: "It stopped answering. Power cut, or the internet at home is down."
+  - kind: cloud.granted
+    # To every owner, when an owner turns FTW Cloud on. Sharing a readable
+    # copy of the house is a choice every owner should hear about.
+    title: FTW Cloud is on
+    body: "Your box now shares a copy of its readings with FTW Cloud. You can turn it off in the app or on the box."
+  - kind: cloud.revoked
+    # To every owner, when FTW Cloud is turned off at either door.
+    title: FTW Cloud is off
+    body: "Your box stopped sharing with FTW Cloud and asked it to delete its copy."
+  - kind: agent.added
+    # To every owner, when an owner gives an assistant, Sourceful support or
+    # the release check access to the box. Access from outside the house is
+    # news every owner should hear, as with cloud.granted.
+    title: New access to your box
+    body: "An assistant or Sourceful was given access to your box. See who has access in the app."
+  - kind: agent.request
+    # To every owner, when an agent asks for a durable change. It waits for
+    # one of them to confirm it, and runs out after twelve hours.
+    title: Waiting for your answer
+    body: "An assistant asks to change a setting. Open FTW to confirm or decline."
+  - kind: agent.expiring
+    # To every owner, a day before an agent's grant runs out, so access that
+    # should go on is renewed and access that should end can be left to end.
+    title: Access ends tomorrow
+    body: "An assistant's or Sourceful's access to your box runs out in a day. Renew it in the app if it should go on."
+  - kind: approval.key.set
+    # To every owner, when a phone registers or replaces the key that
+    # approves access. A new key is a new way to let others in.
+    title: A phone can now approve access
+    body: "A phone set up the key it uses to approve access to your box. If that was not you, remove the phone in the app."
+  - kind: owner.added
+    # To every owner, when a phone pairs as an owner. An owner can do
+    # anything, including give others access.
+    title: A new owner
+    body: "A phone was paired as an owner of your box. If that was not you, remove it in the app."
+  - kind: car.which
+    # When a car is plugged in and the box cannot tell which of its owners'
+    # cars it is: no charger identity, no word from the car within a minute,
+    # and more than one car. Once per plug-in. The event names the charger,
+    # the plug-in's session, and at most four cars not on another charger,
+    # by opaque id. The phone shows one button per car with the names from
+    # its own table and a "None of these" button; a tap sends
+    # session.car.set with the session. With more than four cars it offers
+    # no buttons and opens FTW.
+    title: Which car is plugged in?
+    body: "Tap the car so the box plans for its level and goal."

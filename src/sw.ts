@@ -77,6 +77,11 @@ sw.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
   if (url.origin !== sw.location.origin) return
 
+  // An assistant's consent link (/a#<request>.<offer>) is the iPhone app's,
+  // and its page here only says so. The network answers it, never the
+  // shell: the web app has no part in approving.
+  if (url.pathname === '/a') return
+
   // Cache first, so opening the app never waits on a network that may not be
   // there. A build is only ever replaced wholesale, so this cannot serve a
   // shell that disagrees with the assets it will ask for next.
@@ -119,26 +124,38 @@ async function fromCache(path: string, request: Request): Promise<Response> {
 sw.addEventListener('push', (event) => {
   let title = 'Something happened at home'
   let body = 'Open the app to see what.'
+  let loadpointId: string | undefined
   try {
-    const payload = event.data?.json() as { title?: unknown; body?: unknown } | null
+    const payload = event.data?.json() as { title?: unknown; body?: unknown; kind?: unknown; loadpoint_id?: unknown } | null
     if (payload && typeof payload.title === 'string' && payload.title !== '') {
       title = payload.title
       body = typeof payload.body === 'string' ? payload.body : ''
+      if (typeof payload.kind === 'string' && payload.kind.startsWith('charging.')) {
+        loadpointId = chargerId(payload.loadpoint_id)
+      }
     }
   } catch {
     /* Not the JSON it claimed to be. The generic sentence stands. */
   }
-  event.waitUntil(sw.registration.showNotification(title, { body }))
+  event.waitUntil(sw.registration.showNotification(title, { body, ...(loadpointId ? { data: { loadpointId } } : {}) }))
 })
 
 sw.addEventListener('notificationclick', (event) => {
   event.notification.close()
   event.waitUntil(
     (async () => {
-      // The app is one screen, so any open client is the right one to front.
+      const loadpointId = chargerId(event.notification.data?.loadpointId)
       const open = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      if (open[0]) await open[0].focus()
-      else await sw.clients.openWindow('/')
+      if (open[0]) {
+        if (loadpointId) open[0].postMessage({ type: 'ftw-open-charger', loadpointId })
+        await open[0].focus()
+      } else {
+        await sw.clients.openWindow(loadpointId ? '/#/now?charger=' + encodeURIComponent(loadpointId) : '/')
+      }
     })()
   )
 })
+
+function chargerId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : undefined
+}

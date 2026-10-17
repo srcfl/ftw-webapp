@@ -8,19 +8,19 @@
 {
 	# Caddy's own diagnostics, which the site block below does not govern.
 	#
-	# Left at the default they go to stderr, which Docker keeps in an
-	# unrotated json-file — and a proxy error names the request URI, which
-	# carries the rendezvous handle, beside the client address. That is the
-	# household identifier this design exists to withhold, written to the
-	# least guarded file on the host and kept forever. ERROR only, to a
-	# rotating file, and never stdout.
+	# Left at the default they go to stderr, which Docker keeps. Pointed at a
+	# file, they still keep a record: a proxy error names the request URI,
+	# which carries the rendezvous handle, beside the client address, and Go's
+	# "TLS handshake error from <address>" puts the address in the message
+	# text itself, where no field filter reaches it. That is the household
+	# identifier this design exists to withhold. So, as in the escrow: they
+	# are discarded, which is a shape rather than a list of fields.
+	#
+	# What that costs: no Caddy log to read when a certificate stops renewing.
+	# `curl -sI https://relay.ftw.energy/healthz` from outside covers it end
+	# to end.
 	log {
-		output file /var/log/caddy/caddy.log {
-			roll_size 10mb
-			roll_keep 3
-		}
-		level ERROR
-		format json
+		output discard
 	}
 }
 
@@ -29,6 +29,14 @@ relay.ftw.energy {
 	# relay still serves this path on loopback for SSM checks.
 	@fleet_stats path /fleet/stats /fleet/stats/
 	respond @fleet_stats 404
+
+	# A watch's exchange is one request per command. With the URI and the
+	# addresses cut, the access log would still keep one line per request
+	# with its time, sizes and duration: a record of each command, which is
+	# what the escrow had to remove from its own proxy. So these requests
+	# write no access log line at all.
+	@exchange path /x/*
+	log_skip @exchange
 
 	# The relay reads this to rate-limit. Behind a terminator every client is
 	# one address, so without it the whole fleet shares a single limit and

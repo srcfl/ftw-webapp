@@ -618,3 +618,12 @@ instead of rediscovering it.
 - **Growing the file needs the service stopped.** It is a few seconds for a file
   of this size and it is a decision an operator makes, so it has no locking and
   no online path. `src/grow.ts` says what it reveals.
+
+## License and source
+
+This service uses AGPL-3.0-only with the Energyplan combination permission.
+See [LICENSE](../LICENSE), [LICENSING.md](../LICENSING.md) and
+[NOTICE](../NOTICE). Commercial use is allowed under those terms.
+The container serves its matching build source at `/source`. Keep that offer
+available to network users and include your changes when hosting a modified
+version. The archive contains build-time source, not runtime household data.

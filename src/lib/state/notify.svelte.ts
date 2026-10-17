@@ -88,6 +88,7 @@ export class NotifyStore {
 
   /** The box answered E_UNKNOWN_OP: it has no notification routes yet. */
   oldBox = $state(false)
+  availableKinds = $state<string[]>([])
 
   busy = $state<'none' | 'enabling' | 'disabling' | 'saving' | 'testing'>('none')
 
@@ -114,6 +115,7 @@ export class NotifyStore {
 
   #applyDoc(doc: RulesDoc): void {
     this.#doc = doc
+    this.availableKinds = doc.events.map(rule => rule.type)
     this.boxEnabled = doc.enabled
     const next = allOff()
     for (const rule of doc.events) {
@@ -304,6 +306,9 @@ export class NotifyStore {
     this.testSent = false
     try {
       return await this.#writeRules(next)
+    } catch (err) {
+      this.#fail(err)
+      return false
     } finally {
       this.busy = 'none'
     }

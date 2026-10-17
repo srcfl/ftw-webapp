@@ -3,7 +3,9 @@
  * Everything the relay ever says to a peer is in this file. Close codes carry
  * the reason a socket ended, and the two control words say whether the other
  * side of the room is present. There is no relay message with a body, which is
- * why the routing path never has to interpret anything.
+ * why the routing path never has to interpret anything. The one thing the
+ * relay adds to a message is the exchange id, on the box's exchange socket,
+ * and it is the relay's own random number.
  *
  * The carrier holds its own copy of these rather than importing them, so the
  * relay can be deployed and audited without the app beside it.
@@ -30,3 +32,12 @@ export const CTRL_GONE = 'gone'
 
 /** A rendezvous handle is 128 bits in hex. See src/lib/carrier/rendezvous.ts. */
 export const HANDLE_CHARS = 32
+
+/**
+ * The relay's own id in front of every message on a box's exchange socket.
+ *
+ * Random, drawn per request, and copied back by the box in front of its
+ * answer. It names nothing outside the relay's memory. See
+ * docs/watch-exchange.md.
+ */
+export const EXCHANGE_ID_BYTES = 16

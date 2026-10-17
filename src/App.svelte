@@ -9,11 +9,12 @@
   import { onMount, tick, untrack } from 'svelte'
   import FreshnessBand from '$lib/ui/FreshnessBand.svelte'
   import InstallHint from '$lib/ui/InstallHint.svelte'
+  import SourceNotice from '$lib/ui/SourceNotice.svelte'
   import Now from '$views/Now.svelte'
   import Plan from '$views/Plan.svelte'
   import Pair from '$views/Pair.svelte'
   import { SiteStore } from '$lib/state/site.svelte'
-  import { Router, type Route } from '$lib/state/route.svelte'
+  import { Router, routeIndex, type Route } from '$lib/state/route.svelte'
   import { checkForAppUpdate } from '$lib/pwa/service-worker.svelte'
 
   // Replaced wholesale when someone signs out. `$state.raw` rather than
@@ -35,6 +36,14 @@
   // the browser tab's localStorage, and to any install whose localStorage was
   // evicted while the sites survived.
   let siteId = $state<string | null>(readSiteHint())
+  let ChargingNotice = $state<import('svelte').Component<{ site: SiteStore }> | null>(null)
+  $effect(() => {
+    if (!site.heardFromBox || ChargingNotice) return
+    let cancelled = false
+    void import('$lib/ui/ChargingNotice.svelte').then(m => { if (!cancelled) ChargingNotice = m.default })
+    return () => { cancelled = true }
+  })
+
   /** A public simulator session. It has no site id and writes no home to disk. */
   let demoActive = $state(false)
 
@@ -105,6 +114,25 @@
   }
 
   /**
+   * The settling pane is quiet on purpose; this is its one exception.
+   *
+   * Opening a home is a local read that lands in a frame or two and paints
+   * nothing. If it outlives a beat — a cold database, a slow device — one
+   * line appears, because a blank pane that never changes reads as frozen.
+   * The timer dies with settling, however settling ends.
+   */
+  let settlingSlow = $state(false)
+
+  $effect(() => {
+    if (!(resolvingSite || restoringHome)) {
+      settlingSlow = false
+      return
+    }
+    const slowTimer = setTimeout(() => (settlingSlow = true), 700)
+    return () => clearTimeout(slowTimer)
+  })
+
+  /**
    * Landing on a pairing link, from a camera or a shared URL.
    *
    * With nothing paired this is checked synchronously, so the pairing screen
@@ -154,6 +182,8 @@
   let displayedRoute = $state<Route | null>(
     router.current === 'history' || router.current === 'box' ? null : router.current
   )
+  /** Which way the incoming panel slides, read off the tab order. */
+  let viewDir = $state<'fwd' | 'back'>('fwd')
   let seen = $state({
     plan: router.current === 'plan',
     history: false,
@@ -198,7 +228,8 @@
    *
    * The token makes a slow History import unable to win after a later Box
    * tap. The first tick mounts the target hidden; the second restores that
-   * tab's own scroll position after it becomes the one layout can see.
+   * tab's own scroll position after it becomes the one layout can see —
+   * except Now, which always opens on the house.
    */
   async function showRoute(route: Route): Promise<void> {
     const request = ++routeRequest
@@ -213,9 +244,19 @@
       scrollByRoute[displayedRoute] = scrollPane.scrollTop
     }
     routeSavedFrom = null
+    // Read before the swap: the direction is where this panel sits in the bar
+    // relative to the one leaving. A first paint has nothing to compare to.
+    if (displayedRoute) {
+      viewDir = routeIndex(route) >= routeIndex(displayedRoute) ? 'fwd' : 'back'
+    }
     displayedRoute = route
     await tick()
-    if (request === routeRequest && scrollPane) scrollPane.scrollTop = scrollByRoute[route]
+    if (request === routeRequest && scrollPane) {
+      // Now is a glance at the house. Restoring a scroll that had walked
+      // down to the fuse would hide the thing someone opened the tab for —
+      // the box's own Overview resets to the top for the same reason.
+      scrollPane.scrollTop = route === 'now' ? 0 : scrollByRoute[route]
+    }
   }
 
   $effect(() => {
@@ -224,6 +265,8 @@
   })
 
   function go(route: Route): void {
+    // Android ticks the tab switch; iOS Safari has no vibrate API and skips it.
+    if ('vibrate' in navigator) navigator.vibrate?.(5)
     // Save before changing the hash. WebKit may reset the scroller as it
     // updates history, which is too late for the async panel swap to read it.
     if (displayedRoute && scrollPane) {
@@ -632,6 +675,8 @@
     />
   {/if}
 
+  {#if hasHome && !recovering && ChargingNotice}<ChargingNotice {site} />{/if}
+
   <main bind:this={scrollPane}>
     <div class="pull-refresh" data-state="idle" aria-hidden="true" bind:this={pullIndicator}>
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -643,8 +688,13 @@
     {#if (resolvingSite || restoringHome) && !pairingFragment}
       <!-- A local read, so this is a frame or two. Deliberately quiet: it is
            not a spinner for a network call, it is the app checking what it
-           already knows. -->
-      <section class="settling"></section>
+           already knows. Only if the read outlives the beat does one line
+           appear — a blank pane must never be mistaken for a frozen one. -->
+      <section class="settling">
+        {#if settlingSlow}
+          <p class="settling-note">Opening your home</p>
+        {/if}
+      </section>
     {:else if needsPairing || pairingFragment || recovering}
       <!-- `problem` is what this phone cannot do, and it decides which ways in
            the screen offers. Null unless a carrier could not be built at all,
@@ -664,7 +714,7 @@
            leave the shell with nothing to paint. Each tab also gets its own
            saved scroll position. A view that has never been requested is not
            built; `seen` pays that cost once and keeps its state after. -->
-      <div class="view" hidden={displayedRoute !== 'now'}>
+      <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'now'}>
         <Now
           {site}
           active={displayedRoute === 'now'}
@@ -674,7 +724,7 @@
       </div>
 
       {#if seen.plan}
-        <div class="view" hidden={displayedRoute !== 'plan'}>
+        <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'plan'}>
           <Plan {site} />
         </div>
       {/if}
@@ -682,7 +732,7 @@
       {#if seen.history}
         <!-- Loaded on demand: the chart, its canvas and the tile cache must
              not sit on the path to the first frame of the app. -->
-        <div class="view" hidden={displayedRoute !== 'history'}>
+        <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'history'}>
           {#if HistoryView}
             <HistoryView {site} active={displayedRoute === 'history'} />
           {:else if viewLoadError.history}
@@ -696,7 +746,7 @@
       {#if seen.box}
         <!-- Opened by hand a handful of times in the life of an install, so it
              is loaded when someone asks for it and never before. -->
-        <div class="view" hidden={displayedRoute !== 'box'}>
+        <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'box'}>
           {#if demoActive && DemoBoxView}
             <DemoBoxView {site} onExit={exitDemo} />
           {:else if BoxView}
@@ -710,6 +760,7 @@
       {/if}
     {/if}
     </div>
+    <SourceNotice />
   </main>
 
   <!-- Four screens, so four buttons. The hash already works and the back
@@ -758,7 +809,7 @@
 
 <style>
   .demo-band {
-    z-index: 5;
+    z-index: var(--z-band);
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -795,6 +846,15 @@
     min-height: 60vh;
   }
 
+  /* The settling pane's one word, shown only when opening outlives the beat.
+     Same grammar as Now's .note: mono, small, saying what is happening. */
+  .settling-note {
+    padding: var(--space-7) var(--space-4) 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+  }
+
   /* A view whose code never arrived. Quiet prose where the screen would be,
      because a blank panel under a working tab bar reads as a broken app. */
   .load-note {
@@ -810,15 +870,50 @@
     display: none;
   }
 
+  /* A tab switch slides the incoming panel in from the direction of travel.
+     Leaving display:none restarts the animation, so only the panel coming in
+     moves and the three hidden ones cost nothing. Reduced motion is already
+     covered globally: --motion-base collapses to 1ms in tokens.css, which
+     turns this into a plain swap with no per-rule override needed. */
+  .view {
+    animation: view-fwd var(--motion-base) var(--ease);
+  }
+
+  .view[data-dir='back'] {
+    animation-name: view-back;
+  }
+
+  @keyframes view-fwd {
+    from {
+      opacity: 0;
+      transform: translateX(14px);
+    }
+  }
+
+  @keyframes view-back {
+    from {
+      opacity: 0;
+      transform: translateX(-14px);
+    }
+  }
+
   /* The shell is exactly one screen, and the view inside it scrolls — the
      tab bar stays put and `main` scrolls inside itself.
 
      Anchored with `position: fixed; inset: 0`, not a dynamic viewport unit.
      The insets live here: the top padding reserves the notch, the tab bar
-     reserves the home indicator, and <body> only paints the backstop. */
+     reserves the home indicator, and <body> only paints the backstop.
+
+     This is a phone-shaped app. On a tablet or desktop the shell keeps that
+     shape as one centred column — both insets pin the box and the auto
+     margins split what is left of the 34rem cap. Everything inside inherits
+     the cap, so the band above main and the tab bar below it need no rule
+     of their own; body paints the same surface behind the margins. */
   .app {
     position: fixed;
     inset: 0;
+    max-width: 34rem;
+    margin-inline: auto;
     display: flex;
     flex-direction: column;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);

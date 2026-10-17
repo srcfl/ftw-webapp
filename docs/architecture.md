@@ -3,9 +3,26 @@
 What was decided, what was rejected, and why. Read this before changing
 anything structural.
 
+## Product requirements
+
+Follow [FTW's vision](https://github.com/srcfl/ftw/blob/master/VISION.md). The normal UI should
+show requested intent, Core acceptance, device response, measured effect and
+freshness. Opening after car connection should expose the SoC control without
+extra navigation or a Save step, then show the accepted plan. Keep offline-car
+estimates distinct from readings. Charging failures and goal risks require
+notifications, including when the app is closed.
+
+Agent access is part of the product direction. A cloud MCP endpoint may be an
+authorized client of the box; the relay remains a carrier of encrypted frames.
+An authorized endpoint can read its granted data, so its access must be explicit
+and revocable. Reuse the session where suitable and test Core authorization,
+expiry and outcome reporting. This section adds no operation or grant to the
+current protocol. Retain the difference between persistent schedule changes
+and temporary control that needs renewal.
+
 ## The model
 
-**Edge-authoritative, client-local, cloud-blind.**
+**The box decides; the client caches; the tunnel stays encrypted.**
 
 The box at home is the system of record. It measures, controls, stores the
 full history, holds identity and decides what is safe. It works with the
@@ -15,9 +32,24 @@ This app is a cached projection of the box. It renders from its own store
 first and replaces that with fresher data when a carrier answers. It expresses
 intent; it never decides.
 
-Sourceful's cloud serves this bundle and relays encrypted frames. On that path
-it knows that an opaque handle is online and roughly how much traffic passed.
-It cannot read a watt, a device name or a command.
+The web app and iPhone reach the same FTW Cloud service. The browser opens
+`/v1/app?home=…` over WebSocket and runs Noise IK to the service's pinned key.
+Its own Noise session with the box rides inside that session as `tun`. The
+box's first handshake may ride in `now.tun`, as on iPhone. Cloud cannot read
+or forge that inner session. It sees the stable home id, addresses and timing.
+
+The readable copy is an owner opt-in, separate from remote access. Sourceful
+can read that copy when enabled; this client uses the tunnel for reads,
+history and commands, and does not display the copy's envelopes. See
+[srcfl/ftw ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md)
+and the normative [Cloud protocol](https://github.com/srcfl/ftw/blob/master/docs/protocol-cloud.md).
+The relay and escrow remain blind.
+
+Pairing requires QR v3, with the Cloud home id. Existing installations without
+it pair again; no bridge or relay fallback is built. The origin and RP ID stay
+`app.ftw.energy`. A visible tab holds one Web Lock for its home's connection;
+a second tab waits. A hidden tab closes its session and releases the lock.
+A replaced session does not try to take the device slot back in a loop.
 
 A separate daily fleet-report endpoint is the stated exception. Unless the box
 owner opts out, it receives six coarse labels with no box id and reduces them
@@ -36,7 +68,7 @@ Behind a common session abstraction sit three carriers:
 
 | Carrier | Role | Status |
 |---|---|---|
-| Relay | Default, and the only remote path | v1 |
+| Cloud tunnel | The remote box session, over WebSocket | current |
 | Cache | Read-only view when nothing reaches the box | v1 |
 | WebRTC DataChannel | Opportunistic LAN shortcut | after measurement |
 
@@ -192,25 +224,27 @@ home. The mitigations are an append-only build transparency log, a service
 worker that refuses a bundle whose hash is not in it, no third-party scripts
 and no analytics. They reduce the risk; they do not remove it.
 
-So the claim is **"Sourceful's services cannot decrypt your energy data"** —
-not "it is mathematically impossible for Sourceful to ever access anything".
-The second sentence is marketing. The first is true.
+So the claim is **"Sourceful's relay and escrow cannot decrypt your energy
+data"** — not "it is mathematically impossible for Sourceful to ever access
+anything". The second sentence is marketing. The first is true. It does not
+cover FTW Cloud, which can read what a box owner turns on;
+[ADR 0008](https://github.com/srcfl/ftw/blob/master/docs/adr/0008-ftw-cloud.md) states that service's own claim.
 
 ### What is not yet true
 
 An adversarial review of the crypto, identity and relay layers found the
-content half of that promise sound and the metadata half not. These are open,
-and listed here rather than in a tracker because a privacy claim with quiet
-exceptions is worse than no claim.
+content half of that promise sound and the metadata half not. The relay
+findings below record that earlier path; the web client now uses the Cloud
+tunnel described above.
 
 - **The rendezvous secret cannot yet be rotated from a session.** The v2 QR
   payload carries one, so the handle is no longer a hash of a key that never
   changes, but replacing it still means scanning a new code. The field exists
   so that a `rendezvous.rotate` command can arrive later without another
   payload version.
-- **The box authenticates nobody.** Noise IK proves the box's identity to the
-  app, not the reverse. The pairing code that would close it is parsed and
-  then unused. So today the guarantee is one-way.
+- **Device admission now runs at both ends.** Cloud admits the device key
+  from the signed roster, or once from a pending pairing proof. The box
+  checks the actual code inside its own Noise handshake.
 - **The app-to-box direction has constant frame size but not constant
   cadence.** Frames leave only on user action, so the relay can see when
   someone opened the app and how many times — a much thinner channel than the
@@ -266,7 +300,7 @@ remove it. Its claim is:
 > beside it.**
 
 The copy is the recovery blob: the device's Noise static and, per home, the box
-key and the rendezvous secret. It is AES-GCM under a key derived from PRF
+key, Cloud home id and the QR's rendezvous secret. It is AES-GCM under a key derived from PRF
 output and padded to a fixed 512 bytes, so its length says nothing about how
 many homes are inside. The id is HKDF over the same PRF secret under a
 different `info` string — a sibling of the key, never derived from it — so a

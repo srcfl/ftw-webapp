@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { planHeadline, slotAction, reasonText, formatPrice, modeLabel, modeHelp } from './plan'
+import {
+  planHeadline,
+  planBrief,
+  slotAction,
+  reasonText,
+  formatPrice,
+  modeLabel,
+  modeHelp,
+} from './plan'
 import { formatPrice as boxPrice, unitLabel } from '$vendor/ftw/price-units.js'
 import type { Plan, PlanSlot, PlanReason, ModeInfo } from '$lib/protocol/messages'
 
@@ -18,8 +26,6 @@ const FTW_MODES = [
   'charge',
   'planner_self',
   'planner_cheap',
-  'priority',
-  'weighted',
 ] as const
 
 const T0 = Date.UTC(2026, 6, 15, 12, 0, 0)
@@ -119,6 +125,50 @@ describe('planHeadline', () => {
   })
 })
 
+describe('planBrief', () => {
+  // The Overview card on the box: a command, a clock, a reason — never a
+  // present-tense claim that fights the live reading above it.
+  it('says the act as a command, until the run ends', () => {
+    const p = plan([
+      slot(0, 3000, 'solar_surplus'),
+      slot(1, 3000, 'solar_surplus'),
+      slot(2, 0, 'idle'),
+    ])
+    const b = planBrief(p, T0 + 60_000, { mode: 'planner_passive_arbitrage' })
+    expect(b.action).toBe('Charge battery at 3.0 kW')
+    expect(b.action).not.toMatch(/is charging/)
+    expect(b.time).toMatch(/Now, until/)
+    expect(b.reason).toBe('Spare solar')
+    expect(b.state).toEqual({ label: 'Plan active', tone: 'active' })
+  })
+
+  it('names a future act when the battery is resting now', () => {
+    const p = plan([slot(0, 0, 'reserve_held'), slot(1, -2000, 'expensive_import')])
+    const b = planBrief(p, T0, { mode: 'planner_arbitrage' })
+    expect(b.action).toBe('Use battery at 2.0 kW')
+    expect(b.time).toMatch(/^At /)
+    expect(b.reason).toBe('Power is expensive')
+  })
+
+  it('admits fallback without claiming a live charge', () => {
+    const b = planBrief(plan([slot(0, 3000)], { stale: true }), T0, {
+      mode: 'planner_passive_arbitrage',
+    })
+    expect(b.state.tone).toBe('warn')
+    expect(b.state.label).toBe('Fallback active')
+    expect(b.action).not.toMatch(/is charging/)
+    expect(b.constraint).toMatch(/safe live balancing/)
+  })
+
+  it('says when safety has paused dispatch', () => {
+    const b = planBrief(plan([slot(0, 3000)]), T0, {
+      mode: 'planner_passive_arbitrage',
+      dispatchBlockedBy: ['meter.p1'],
+    })
+    expect(b.constraint).toMatch(/meter stopped reporting/)
+  })
+})
+
 describe('mode wording comes from the box', () => {
   // The failure this replaces: the app renamed FTW's modes — "Passive
   // arbitrage" became "Cheapest power" — so the same setting had two names,
@@ -153,7 +203,7 @@ describe('mode wording comes from the box', () => {
     // divergence in the contract file fails a test.
     expect(FTW_MODES).toContain('planner_passive_arbitrage')
     expect(FTW_MODES).toContain('planner_arbitrage')
-    expect(FTW_MODES).toHaveLength(10)
+    expect(FTW_MODES).toHaveLength(8)
   })
 
   it('has words for every reason the box can send', () => {

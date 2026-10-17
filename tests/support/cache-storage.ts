@@ -68,7 +68,7 @@ export interface SwEvent {
   /** A push payload or a page message, depending on the event. */
   data?: unknown
   /** The notification a click landed on. */
-  notification?: { close(): void }
+  notification?: { close(): void; data?: unknown }
   waitUntil(promise: Promise<unknown>): void
   respondWith(response: Promise<unknown>): void
 }
@@ -77,6 +77,7 @@ export interface SwEvent {
 export interface FakeWindowClient {
   focused: boolean
   focus(): Promise<void>
+  postMessage?(message: unknown): void
 }
 
 /**
@@ -90,14 +91,16 @@ export class FakeWorker {
   /** Every notification shown, in order. */
   shown: { title: string; body: string }[] = []
   /** Whether the page explicitly asked this installed worker to take over. */
+  notificationData: unknown[] = []
   skipped = false
   /** What the page side sees: open windows, and URLs opened fresh. */
   windows: FakeWindowClient[] = []
   opened: string[] = []
 
   readonly registration = {
-    showNotification: async (title: string, options?: { body?: string }): Promise<void> => {
+    showNotification: async (title: string, options?: { body?: string; data?: unknown }): Promise<void> => {
       this.shown.push({ title, body: options?.body ?? '' })
+      this.notificationData.push(options?.data)
     },
   }
 
@@ -154,10 +157,11 @@ export class FakeWorker {
   }
 
   /** A tap on a shown notification. Returns whether it was closed. */
-  async clickNotification(): Promise<boolean> {
+  async clickNotification(data?: unknown): Promise<boolean> {
     let closed = false
     await this.fire('notificationclick', undefined, {
       notification: {
+        data,
         close: () => {
           closed = true
         },

@@ -1,6 +1,6 @@
 /* Building the carrier stack for a paired site.
  *
- *   Session  →  NoiseCarrier  →  RelayCarrier  →  the relay
+ *   Session → NoiseCarrier → CloudTunnelCarrier → FTW Cloud
  *
  * Everything above the session sees state; everything below the Noise carrier
  * sees opaque bytes. This file is the one place the three are wired together,
@@ -8,8 +8,11 @@
  */
 
 import { NoiseCarrier } from '$lib/carrier/noise'
-import { RelayCarrier } from '$lib/carrier/relay'
+import { CloudTunnelCarrier, type CloudOptions } from '$lib/carrier/cloud'
 import type { Carrier } from '$lib/carrier/carrier'
+import { validHome } from '$lib/protocol/cloud'
+import { CAP_CLOUD_TUN } from '$lib/protocol/contract'
+import { decodeFrame } from '$lib/protocol/frame'
 import {
   openVaultStore,
   silentWrappingKey,
@@ -19,16 +22,11 @@ import {
   isEnrolled,
 } from '$lib/identity/vault'
 import { db, type StoredSite } from '$lib/store/db'
-import { RELAY_URL as DEFAULT_RELAY_URL } from '$lib/identity/origin'
 import { markLinkPhase } from '$lib/perf/link'
 
-/** Overridable only for development against a local relay. */
-export const RELAY_URL = import.meta.env['VITE_RELAY_URL'] ?? DEFAULT_RELAY_URL
-
 export interface ConnectOptions {
-  /** Injected by tests. Defaults to a real relay carrier. */
-  makeInner?: (opts: { url: string; secret: Uint8Array }) => Carrier
-  relayUrl?: string
+  /** Injected by tests. Production always opens FTW Cloud. */
+  makeCloud?: (opts: CloudOptions) => Carrier
 }
 
 /**
@@ -82,15 +80,10 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     throw new ConnectError('not_enrolled', 'This device has no key for that home.')
   }
 
-  // Read from the QR, never derived. A handle derived from the box's public
-  // key would be stable for the life of the box, which hands the relay
-  // operator one household identifier good for years — the exact thing the
-  // hourly rotation exists to deny it.
-  const secret = site.rendezvousSecret
-  if (!secret) {
+  if (!validHome(site.cloudHome)) {
     throw new ConnectError(
       'stale_pairing',
-      'This home was paired before this app could reach it privately.'
+      'Pair this home again. Open your box’s local dashboard, then Settings → FTW app → Show pairing code, and scan the new QR.'
     )
   }
 
@@ -104,12 +97,13 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
   const device = await deviceKey(vault, wrapping)
   markLinkPhase('keys-ready')
 
-  const relayUrl = opts.relayUrl ?? RELAY_URL
-  const inner = opts.makeInner
-    ? opts.makeInner({ url: relayUrl, secret })
-    : new RelayCarrier({ url: relayUrl, secret })
+  const cloudOptions: CloudOptions = {
+    home: site.cloudHome ?? '', staticKey: device,
+    ...(site.pairingCode ? { pairingCode: site.pairingCode } : {}),
+  }
+  const inner = opts.makeCloud ? opts.makeCloud(cloudOptions) : new CloudTunnelCarrier(cloudOptions)
 
-  return new NoiseCarrier({
+  const noise = new NoiseCarrier({
     inner,
     // The non-extractable handle, not raw bytes. Its scalar is never readable
     // by script where the browser has X25519.
@@ -126,6 +120,34 @@ export async function connectToSite(siteId: string, opts: ConnectOptions = {}): 
     // is ignored.
     ...(site.pairingCode ? { handshakePayload: site.pairingCode } : {}),
   })
+  // Only the authenticated box session may supply the box's signing key.
+  noise.onFrame(bytes => {
+    try {
+      const frame = decodeFrame(bytes)
+      if (frame.envelope.t !== 'hello_ok') return
+      void rememberCloudKey(siteId, frame.envelope.b).catch(() => {
+        // A failed cache write leaves the existing route usable.
+      })
+    } catch { /* Session owns malformed box frames. */ }
+  })
+  return noise
+}
+
+async function rememberCloudKey(siteId: string, hello: unknown): Promise<void> {
+  if (!hello || typeof hello !== 'object') return
+  const value = hello as { caps?: unknown; cloud?: { home?: unknown; pk?: unknown } }
+  if (!Array.isArray(value.caps) || !value.caps.includes(CAP_CLOUD_TUN)) return
+  const home = value.cloud?.home
+  const pk = value.cloud?.pk
+  if (!validHome(home) || !(pk instanceof Uint8Array) || pk.length !== 65 || pk[0] !== 4) return
+  const database = await db()
+  const tx = database.transaction('sites', 'readwrite')
+  const row = await tx.store.get(siteId)
+  if (row?.cloudHome === home) {
+    const { pairingCode: _spent, ...kept } = row
+    await tx.store.put({ ...kept, cloudKey: pk })
+  }
+  await tx.done
 }
 
 function prologueFor(boxStaticKey: Uint8Array): Uint8Array {

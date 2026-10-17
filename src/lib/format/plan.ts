@@ -116,6 +116,147 @@ export function planHeadline(plan: Plan | null, nowMs: number): PlanHeadline {
   }
 }
 
+export type PlanBriefTone = 'active' | 'warn' | 'idle'
+
+export interface PlanBrief {
+  /** Short badge, the box page's "Plan active" / "Fallback active". */
+  state: { label: string; tone: PlanBriefTone }
+  /** The next act, as a command, never "the battery is charging". */
+  action: string
+  /** When that act holds, or null when there is no clock to name. */
+  time: string | null
+  reason: string | null
+  /** Safety, or the honest "nothing is clamping". */
+  constraint: string
+}
+
+/**
+ * The Overview card on the box page, from the plan this app already has.
+ *
+ * The full Plan screen keeps the longer sentence. This card is a glance:
+ * what, until when, why — the same four lines the LAN page uses, so a
+ * phone and a laptop in the hall do not tell two stories.
+ */
+export function planBrief(
+  plan: Plan | null,
+  nowMs: number,
+  opts: { mode?: string | null; dispatchBlockedBy?: readonly string[] } = {}
+): PlanBrief {
+  const mode = opts.mode ?? null
+  const blocked = opts.dispatchBlockedBy ?? []
+  const planner = !!mode && mode.startsWith('planner_')
+
+  if (!plan) {
+    return {
+      state: { label: mode && !planner ? 'Manual' : 'Checking…', tone: 'idle' },
+      action: planner || !mode ? 'Reading the current plan' : 'Manual control is active',
+      time: null,
+      reason: planner || !mode ? null : 'Planning is not controlling the battery',
+      constraint: constraintLine(plan, blocked, null),
+    }
+  }
+
+  if (plan.stale) {
+    return {
+      state: { label: 'Fallback active', tone: 'warn' },
+      action: "Your box couldn't plan ahead just now",
+      time: null,
+      reason: "It's running on safe defaults",
+      constraint: constraintLine(plan, blocked, null),
+    }
+  }
+
+  const current = plan.slots.findIndex(
+    (s) => nowMs >= s.startMs && nowMs < s.startMs + s.durationMs
+  )
+  if (current === -1) {
+    return {
+      state: stateFor(mode, false),
+      action: 'No plan for right now',
+      time: null,
+      reason: null,
+      constraint: constraintLine(plan, blocked, null),
+    }
+  }
+
+  const now = plan.slots[current]!
+  const nowAction = slotAction(now)
+  let runEnd = current
+  while (
+    runEnd + 1 < plan.slots.length &&
+    slotAction(plan.slots[runEnd + 1]!) === nowAction
+  ) {
+    runEnd++
+  }
+  const untilMs = plan.slots[runEnd]!.startMs + plan.slots[runEnd]!.durationMs
+
+  let shown = now
+  let time: string | null = `Now, until ${clock(untilMs)}`
+  if (nowAction === 'idle') {
+    const future = plan.slots.find(
+      (s, i) => i > current && slotAction(s) !== 'idle'
+    )
+    if (future) {
+      shown = future
+      time = `At ${clock(future.startMs)}`
+    } else {
+      time = null
+    }
+  }
+
+  return {
+    state: stateFor(mode, true),
+    action: actionLabel(shown),
+    time,
+    reason: reasonText(shown.reason),
+    constraint: constraintLine(plan, blocked, shown),
+  }
+}
+
+function stateFor(mode: string | null, hasPlan: boolean): PlanBrief['state'] {
+  if (mode && mode.startsWith('planner_')) {
+    return { label: hasPlan ? 'Plan active' : 'Checking…', tone: hasPlan ? 'active' : 'idle' }
+  }
+  if (mode) return { label: 'Manual', tone: 'idle' }
+  return { label: hasPlan ? 'Plan ready' : 'Checking…', tone: 'idle' }
+}
+
+/** Same verbs the box page uses on Overview, so the two cards read as one. */
+function actionLabel(slot: PlanSlot): string {
+  const action = slotAction(slot)
+  const power = formatPower(slot.batteryW)
+  const amount = `${power.text} ${power.unit}`
+  if (action === 'idle') return 'Keep the battery steady'
+  if (action === 'charge') return `Charge battery at ${amount}`
+  return `Use battery at ${amount}`
+}
+
+function clock(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function constraintLine(
+  plan: Plan | null,
+  blocked: readonly string[],
+  slot: PlanSlot | null
+): string {
+  if (blocked.length > 0) {
+    return 'Control is paused because a meter stopped reporting.'
+  }
+  if (plan?.stale) {
+    return 'The schedule is old, so FTW is using safe live balancing.'
+  }
+  if (slot && slot.reason === 'peak_shaving' && plan?.ceilingW) {
+    const cap = formatPower(plan.ceilingW)
+    return `Holding the grid limit at ${cap.text} ${cap.unit}.`
+  }
+  return 'No active safety adjustment.'
+}
+
 function describeSlot(slot: PlanSlot, when: 'now' | 'later'): string {
   const action = slotAction(slot)
   const power = formatPower(slot.batteryW)

@@ -44,7 +44,8 @@
   <h2>Notifications</h2>
   <p>
     An installed app can show useful events on the lock screen, such as a
-    finished EV charge, an installed box update or a box that went quiet.
+    finished EV charge, a device that stops answering, or a box that went
+    quiet.
   </p>
 
   <hr />

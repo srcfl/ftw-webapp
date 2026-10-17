@@ -75,6 +75,24 @@ describe('checking for an app update', () => {
     expect(parked.postMessage).toHaveBeenCalledWith({ type: 'skip-waiting' })
   })
 
+  it('checks for an update at launch, not only when hidden first', async () => {
+    vi.stubEnv('PROD', true)
+    const update = vi.fn(async () => {})
+    installNavigator({
+      waiting: null,
+      installing: null,
+      update,
+      addEventListener: vi.fn(),
+    })
+    const { registerServiceWorker } = await import('./service-worker.svelte')
+
+    await registerServiceWorker()
+
+    // A page left in the foreground never fires visibilitychange; without
+    // this check it would never learn a new build exists.
+    expect(update).toHaveBeenCalledOnce()
+  })
+
   it('lands a build already waiting at launch', async () => {
     vi.stubEnv('PROD', true)
     const parked = worker()
@@ -102,6 +120,8 @@ describe('checking for an app update', () => {
     const listen = vi.spyOn(document, 'addEventListener')
     const { registerServiceWorker } = await import('./service-worker.svelte')
     await registerServiceWorker()
+    // The launch already checked; only the foreground return is under test.
+    update.mockClear()
 
     const visibilityListener = listen.mock.calls.find(([type]) => type === 'visibilitychange')?.[1]
     expect(visibilityListener).toBeTypeOf('function')

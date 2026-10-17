@@ -16,6 +16,17 @@ an opinion without both, and the box's CI runs the same comparison the other
 way round. Never hand-write one of those names anywhere else in either
 language.
 
+## Product direction for agent clients
+
+[The shared vision](https://github.com/srcfl/ftw/blob/master/VISION.md) calls for structured
+analysis, durable schedule and goal changes, and proposed-plan submission by
+authorized agents, locally and through cloud MCP. These are targets. They do
+not imply that the operations below already implement them. Extend the registry
+and Core/client implementations together with authorization, expiry, replay,
+revocation and result tests. Core still owns admission and physical dispatch.
+Temporary external control must expire; a saved household goal must survive
+client disconnect. Relay and escrow remain unable to read session contents.
+
 ## Frames
 
 Each Noise transport message carries exactly one frame.
@@ -39,6 +50,13 @@ already covers it.
 fragments. Cadence changes only after an explicit visibility `sub`: 1 Hz while
 the document is visible and 0.2 Hz while it is hidden. It never changes with
 the telemetry it carries. If the box has nothing to say it sends `tick` anyway.
+
+Through FTW Cloud's tunnel the box sends a padded frame when a reading lands,
+plus a beat while quiet. The relay's fixed cadence applies only to the relay.
+The tunnel's envelope, limits and session ids follow Core's
+[Cloud protocol](https://github.com/srcfl/ftw/blob/master/docs/protocol-cloud.md#tunnel).
+The browser uses the same Noise and CBOR as iPhone over the service's existing
+WebSocket endpoint; its custom QUIC transport is not a WebTransport endpoint.
 
 This constancy is a privacy control, not a performance choice. A delta that
 does not fit sends the highest-priority fields and sets `TRUNC`; the rest
@@ -114,6 +132,12 @@ Field ids 1–9 are frozen permanently as of v1: mode, grid power, PV power,
 battery power, battery state of charge, load power, and their source ids. Any
 app, however old, can draw the core view. Freezing them now is free; doing it
 later is not.
+
+Ids after the frozen set live in the registry's `extra_fields`: depth for a
+node's own view, such as the grid's phase currents and the main fuse. They
+travel in the same `delta` and follow the same rules, but an app draws the
+core view without them and a box may stop sending one. A delta that does not
+fit drops the highest id first, so they give way before the core view.
 
 ## Freshness
 
@@ -247,7 +271,8 @@ about the method.** Ask what the code on the other side does:
 1. **read** — answers a question, changes nothing, and hands back nothing that
    could be replayed as authority. A shared viewer may ask for it.
 2. **configure** — changes a setting. A late execution is the same
-   instruction, only later. Owner, with a step-up.
+   instruction, only later. Owner. Most of these also need a step-up;
+   a few household settings skip the ceremony.
 3. **actuate** — moves energy, or takes control of what is moving it. A late
    execution here is a *different* instruction.
 4. **local** — served only on the box's own page, at home. Either the answer
@@ -287,11 +312,15 @@ is a different instruction than the one given, it is a `cmd`; if it is merely a
 late setting, it is a passthrough.*
 
 The refusal carries an `op` argument **only when a command for that route
-exists**. Today exactly one does — `POST /api/mode`, which names
-`site.mode.set`. Every other actuating route names nothing, and the honest
-reading of an absent `op` is that the box has no command for it yet, so that
-control is not available over the session at all. An app that assumed `op` was
-always there would draw a button leading nowhere.
+exists**. Today four do: `POST /api/mode` names `site.mode.set`,
+`POST /api/planner/prefs` names `planner.prefs.set`,
+`POST /api/loadpoints/{id}/soc` names `loadpoint.soc.set`, and
+`POST /api/loadpoints/{id}/target` names `loadpoint.surplus_only.set` — the
+one field of that route's body the session can set; the target and its
+deadline still have no command. Every other actuating route names nothing, and
+the honest reading of an absent `op` is that the box has no command for it
+yet, so that control is not available over the session at all. An app that
+assumed `op` was always there would draw a button leading nowhere.
 
 A route whose body replaces a whole document rather than editing part of one —
 `POST /api/config` is the one — is refused with `E_WHOLE_DOCUMENT` even for an
@@ -303,16 +332,17 @@ has no such guarantee.
 A `local` route is refused with `E_LOCAL_ONLY`, before the role and before the
 ceremony, because neither of them changes it.
 
-`configure` needs role `owner` and a `stepUp` flag. The app carries no list of
-tiers — it asks, is refused with `E_NEEDS_STEP_UP`, runs the passkey ceremony
-and replays the identical request once.
+`configure` needs role `owner`. Most configure routes also need a `stepUp`
+flag. A few household settings — the charging schedule today — skip the
+ceremony: the session already proved who is asking, and a second Face ID is
+more friction than the table-phone risk is worth. The box names those routes
+beside the handler. The app still carries no list of tiers — it asks without
+the flag, and a route that still needs a ceremony answers `E_NEEDS_STEP_UP`.
 
-That cost is per write, not per session. The box refuses on the flag alone and
-keeps nothing about a ceremony that already ran, so the second write of a
-session is refused exactly as the first was: a round trip, a face or a
-fingerprint, and a replay, every time. The app could avoid the round trip only
-by sending `stepUp` before the ceremony, which would be the app claiming
-something that had not happened.
+For routes that still need the flag, the box remembers a genuine ceremony for
+a few minutes on that session, so a settings screen that writes several things
+in a row prompts once. The app does not earn that by sending `stepUp` before a
+ceremony; that would be claiming something that had not happened.
 
 The order the box refuses in is fixed, and the app depends on it: whole
 document, then role, then ceremony. A viewer who posts a whole document hears

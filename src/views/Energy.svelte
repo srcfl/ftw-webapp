@@ -269,14 +269,6 @@
     flex-wrap: wrap;
   }
 
-  .label {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--fg-muted);
-  }
-
   .ranges {
     display: flex;
     gap: 2px;
@@ -287,7 +279,8 @@
   }
 
   .range {
-    min-height: 34px;
+    /* Height comes from base.css: 44px is the smallest reliably hittable
+       target on a phone held one-handed. */
     padding: 0 var(--space-3);
     border-radius: var(--radius-xs);
     font-family: var(--mono);

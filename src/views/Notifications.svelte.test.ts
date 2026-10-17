@@ -155,11 +155,15 @@ describe('the notifications section', () => {
     expect(box.api.pushEnabled, 'subscribed but the box stayed switched off').toBe(true)
     expect(box.api.pushRules['charging.session_complete']).toBe(true)
     expect(box.api.pushRules['charging.interrupted']).toBe(true)
+    expect(box.api.pushRules['driver.offline']).toBe(true)
+    expect(box.api.pushRules['fuse.over_limit']).toBe(true)
 
     // And the section now offers what an enabled phone can do.
     expect(buttonSaying(/Send a test/)).toBeDefined()
     expect(buttonSaying(/Turn off notifications/)).toBeDefined()
     expect(text()).toContain('When the car finishes charging')
+    expect(text()).toContain('If a device goes quiet')
+    expect(text()).toContain('If the house draws more than the fuse allows')
   })
 
   it('shows the box’s own record of what it has sent', async () => {
@@ -176,40 +180,28 @@ describe('the notifications section', () => {
     expect(text()).toContain('Your box updated itself')
   })
 
-  it('saves the toggles as one write, one ceremony', async () => {
+  it('saves released toggles directly and keeps later changes made during the first write', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOON)
     installPush({ subscribed: true })
     const { box, site } = open()
-    const stepup = await import('$lib/identity/stepup')
-
     render(Notifications, { props: { site } })
     await vi.advanceTimersByTimeAsync(500)
-
-    // Three switches: box.unreachable has none — the box cannot gate a
-    // message about its own absence, so it follows the subscription itself.
     const boxes = [...document.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[]
-    expect(boxes.length).toBe(3)
-
-    // Everything starts off, because the box seeds every rule disabled —
-    // sparse by design. Two edits, and no save yet: a toggle is an edit,
-    // not a request.
-    expect(boxes.every((b) => !b.checked)).toBe(true)
+    // Seven opt-in kinds, then the two FTW Cloud notices the box seeds on.
+    expect(boxes.length).toBe(9)
+    expect(boxes.slice(0, 7).every(b => !b.checked)).toBe(true)
+    expect(boxes.slice(7).every(b => b.checked)).toBe(true)
     boxes[0]!.click()
-    await vi.advanceTimersByTimeAsync(10)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(text()).toContain('Saving…')
     boxes[1]!.click()
-    await vi.advanceTimersByTimeAsync(10)
-    expect(box.api.pushRules['charging.session_complete'], 'a toggle wrote on its own').toBe(false)
-
-    // Counted from here: the module mock's history survives other tests.
-    vi.mocked(stepup.stepUp).mockClear()
-    buttonSaying(/^\s*Save\s*$/)!.click()
     await vi.advanceTimersByTimeAsync(500)
-
+    expect(box.api.pushRules['charging.connected']).toBe(true)
     expect(box.api.pushRules['charging.session_complete']).toBe(true)
-    expect(box.api.pushRules['charging.interrupted']).toBe(true)
-    expect(box.api.pushRules['update.installed']).toBe(false)
-    expect(vi.mocked(stepup.stepUp), 'the batch cost more than one ceremony').toHaveBeenCalledOnce()
+    expect(box.api.pushRules['charging.interrupted']).toBe(false)
+    expect(buttonSaying(/^\s*Save\s*$/)).toBeUndefined()
+    expect(text()).toContain('Saved')
   })
 
   it('asks the box to send a test through the whole pipe', async () => {

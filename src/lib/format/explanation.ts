@@ -92,6 +92,9 @@ export function explain(input: ExplainInput): Explanation {
   // happens once rather than at each site.
   const generating = pv === undefined ? 0 : Math.max(0, -pv)
   const bat = battery ?? 0
+  const ev = fields.get(FID.EV_W) ?? 0
+  const carCharging = ev > NOISE_W
+  const covered = carCharging ? 'the house and the car' : 'the house'
 
   // Exporting: more is being produced than the house and battery can absorb.
   if (grid < -NOISE_W) {
@@ -121,12 +124,14 @@ export function explain(input: ExplainInput): Explanation {
     if (grid < NOISE_W) {
       return {
         situation: 'battery_covering',
-        headline: `The battery is covering the house, so nothing is coming from the grid.`,
+        headline: `The battery is covering ${covered}, so nothing is coming from the grid.`,
       }
     }
     return {
       situation: 'battery_shaving',
-      headline: `The battery is supplying ${kw(bat)}, with ${kw(grid)} from the grid.`,
+      headline: carCharging
+        ? `The car is charging at ${kw(ev)}, with the battery supplying ${kw(bat)}.`
+        : `The battery is supplying ${kw(bat)}, with ${kw(grid)} from the grid.`,
     }
   }
 

@@ -36,10 +36,27 @@ describe('explain', () => {
     expect(r.headline).toBe('The battery is supplying 4.2 kW to keep grid import below 11 kW.')
   })
 
-  it('describes the battery carrying the house on its own', () => {
+  it('describes the battery covering the house on its own', () => {
     const r = explain(input(f({ [FID.GRID_W]: 0, [FID.PV_W]: 0, [FID.BATTERY_W]: -2100, [FID.LOAD_W]: 2100 })))
     expect(r.situation).toBe('battery_covering')
-    expect(r.headline).toMatch(/nothing is coming from the grid/)
+    expect(r.headline).toBe('The battery is covering the house, so nothing is coming from the grid.')
+  })
+
+  it('names the car when the battery is covering a charge', () => {
+    const r = explain(
+      input(
+        f({
+          [FID.GRID_W]: 0,
+          [FID.PV_W]: -3300,
+          [FID.BATTERY_W]: -9900,
+          [FID.LOAD_W]: 1800,
+          [FID.EV_W]: 11_400,
+        })
+      )
+    )
+    expect(r.situation).toBe('battery_covering')
+    expect(r.headline).toMatch(/house and the car/)
+    expect(r.headline).not.toContain('-')
   })
 
   it('describes export as sending back, not as a negative number', () => {

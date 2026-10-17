@@ -3,7 +3,8 @@
 /* The proof.
  *
  * docs/architecture.md makes one claim about the cloud that is architecture
- * rather than policy: "Sourceful's services cannot decrypt your energy data."
+ * rather than policy: "Sourceful's relay and escrow cannot decrypt your energy
+ * data." This file proves the relay half of it.
  * This file is what that sentence is worth. It runs a real box against a real
  * app across a real relay, collects everything the relay touched — every byte
  * routed, every line logged, everything held in memory — and fails if anything
@@ -16,10 +17,19 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { RelayServer } from '../relay/src/server.ts'
+import { EXCHANGE_ID_BYTES } from '../relay/src/protocol.ts'
 import { rendezvousHandle, currentEpoch } from '$lib/carrier/rendezvous'
 import { encode as cborEncode } from 'cbor2'
 import { encodeFrame } from '$lib/protocol/frame'
 import { sealedPair, waitFor } from './support/relay-harness.ts'
+import {
+  CHARGER,
+  ExchangeBox,
+  HOUSE_NOW,
+  HOUSE_READINGS,
+  Watch,
+  command,
+} from './support/exchange-harness.ts'
 
 /**
  * A secret the box and the app share optically. The relay never sees it.
@@ -163,9 +173,9 @@ function concat(parts: Uint8Array[]): Uint8Array {
 }
 
 /** Which of the known strings and readings the dump gives away. */
-function leaks(dump: Uint8Array, readings: number[]): string[] {
+function leaks(dump: Uint8Array, readings: number[], strings: string[] = KNOWN_STRINGS): string[] {
   const found: string[] = []
-  for (const s of KNOWN_STRINGS) {
+  for (const s of strings) {
     const bytes = new TextEncoder().encode(s)
     const occurrences = countBytes(dump, bytes)
     if (occurrences >= (bytes.length >= MIN_NEEDLE_BYTES ? 1 : 2)) found.push(`string:${s}`)
@@ -339,5 +349,142 @@ describe('the relay cannot read what it carries', () => {
     // outputs, never the secret.
     const other = new Uint8Array(32).fill(9)
     expect(rendezvousHandle(other, now)).not.toBe(rendezvousHandle(SECRET, now))
+  })
+})
+
+/**
+ * What a watch exchange would give away if the relay could read it: the
+ * message types, every op a command may name, how it turned out, the
+ * charger, and the pairing code that rides in message 1.
+ */
+const EXCHANGE_STRINGS = [
+  'hello',
+  'hello_ok',
+  'watch-code-7f3a9c',
+  'ftw.dispatch.write',
+  'cmd',
+  'cmd.ack',
+  'cmd.result',
+  'now',
+  'tick',
+  'site.mode.set',
+  'planner.prefs.set',
+  'battery.hold',
+  'loadpoint.hold',
+  'loadpoint.boost',
+  'loadpoint.soc.set',
+  'loadpoint.surplus_only.set',
+  'applied',
+  'rejected',
+  'unconfirmed',
+  'E_SCOPE_DENIED',
+  'observed',
+  CHARGER.src,
+  CHARGER.name,
+  'meter.p1',
+  'inverter.sungrow',
+]
+
+describe('the relay cannot read a watch exchange', () => {
+  it('dumps everything it saw and gives nothing away', async () => {
+    const logs: string[] = []
+    // The relay and both peers share this process, so a stall longer than
+    // one beat leaves a pong unread and the relay reaps the socket, and the
+    // exchange on it. A second's beat rides out a busy machine.
+    const relay = await RelayServer.start({
+      heartbeatMs: 1000,
+      exchangeAttemptLimit: 1000,
+      log: (line) => logs.push(line),
+    })
+
+    try {
+      const epoch = relay.epoch
+      const boxes: ExchangeBox[] = []
+      const watches: Watch[] = []
+      const handles: string[] = []
+
+      /** A house of its own: a room holds 30 exchanges a minute. */
+      async function house(): Promise<{ box: ExchangeBox; watch: Watch }> {
+        const handle = rendezvousHandle(secretFor(30 + boxes.length), epoch)
+        const box = new ExchangeBox(relay.url, epoch, handle)
+        await waitFor(() => box.peer.open, 'the exchange socket')
+        const watch = new Watch(relay.url, box.keys.publicKey, epoch, handle)
+        boxes.push(box)
+        watches.push(watch)
+        handles.push(handle)
+        return { box, watch }
+      }
+
+      // Every op the registry names, each way it can turn out, in one session
+      // of four exchanges per op. Then a read of Now.
+      const ops: [string, Record<string, unknown>][] = [
+        ['site.mode.set', { mode: 'planner_arbitrage' }],
+        ['planner.prefs.set', { style: 'balanced' }],
+        ['battery.hold', { w: -3000 }],
+        ['loadpoint.hold', { lp: CHARGER.src, amps: 16 }],
+        ['loadpoint.boost', { lp: CHARGER.src }],
+        ['loadpoint.soc.set', { lp: CHARGER.src, soc: 640 }],
+        ['loadpoint.surplus_only.set', { lp: CHARGER.src, on: true }],
+      ]
+      let n = 0
+      for (const [op, args] of ops) {
+        const { box, watch } = await house()
+        expect((await watch.open()).status).toBe(200)
+        for (const outcome of ['applied', 'rejected', 'unconfirmed', 'tick'] as const) {
+          box.outcome = outcome
+          expect((await watch.ask(command(op, args, n++))).status).toBe(200)
+        }
+      }
+      const { watch } = await house()
+      expect((await watch.open()).status).toBe(200)
+      const read = await watch.ask({ t: 'now' })
+      expect(read.envelopes[0]).toEqual({ t: 'now', b: HOUSE_NOW })
+
+      await waitFor(() => logs.length > 0, 'a log line')
+      const inspection = relay.inspect()
+
+      // Each sealed message once. The box got the watch's bytes behind the
+      // relay's id, and the watch got the box's answer as it was sent, so
+      // the two sides hold the same ciphertext. Counting both copies would
+      // count every chance match in random bytes twice, and a short word
+      // needs only two to count as a leak.
+      const hex = (b: Uint8Array) => Buffer.from(b).toString('hex')
+      const crossed = new Set(watches.flatMap((w) => w.wire.map(hex)))
+      const atTheBox = boxes.flatMap((b) => [...b.seen, ...b.answered])
+      for (const message of atTheBox) {
+        expect(crossed.has(hex(message.subarray(EXCHANGE_ID_BYTES))), 'bytes only the box saw').toBe(true)
+      }
+      const dump = concat([
+        ...watches.flatMap((w) => w.wire),
+        ...boxes.flatMap((b) => b.seen.map((m) => m.subarray(0, EXCHANGE_ID_BYTES))),
+        new TextEncoder().encode(logs.join('\n')),
+        new TextEncoder().encode(JSON.stringify(inspection)),
+      ])
+
+      // The control: the same exchanges unsealed trip every word, and two
+      // readings packed raw trip the numbers.
+      const plain = concat(watches.flatMap((w) => w.plain))
+      expect(leaks(plain, [], EXCHANGE_STRINGS)).toEqual(EXCHANGE_STRINGS.map((s) => `string:${s}`))
+      const packed = new DataView(new ArrayBuffer(8))
+      packed.setInt32(0, HOUSE_READINGS[0]!, true)
+      packed.setInt32(4, HOUSE_READINGS[1]!, true)
+      expect(leaks(new Uint8Array(packed.buffer), HOUSE_READINGS).some((f) => f.startsWith('reading:'))).toBe(
+        true
+      )
+
+      expect(leaks(dump, HOUSE_READINGS, [...KNOWN_STRINGS, ...EXCHANGE_STRINGS])).toEqual([])
+
+      // No log line names the handle, and none counts the exchanges, which
+      // in a small fleet would time each command.
+      expect(logs.length).toBeGreaterThan(0)
+      for (const handle of handles) expect(logs.join('\n')).not.toContain(handle)
+      expect(logs.join('\n')).not.toMatch(/exchange/i)
+      expect(inspection.framesRouted).toBe(0)
+      expect(inspection.bytesRouted).toBe(0)
+
+      for (const box of boxes) box.peer.close()
+    } finally {
+      await relay.stop()
+    }
   })
 })

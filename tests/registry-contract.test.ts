@@ -283,6 +283,85 @@ describe('frozen field ids', () => {
     const table = Object.entries(FID).map(([name, id]) => `${id}: ${name.toLowerCase()}`)
     expect(table.sort()).toEqual(declared.sort())
   })
+
+  /**
+   * extra_fields share the frozen set's id space on the wire: a delta and
+   * FTW Cloud's live body key both by id alone. An id or a name in both
+   * blocks would be two meanings for one number. They also sit above the
+   * frozen set, because lane 0 drops the highest id first when a delta does
+   * not fit, and the core view must be the last thing to go.
+   */
+  it('leave the extra fields above the frozen set, with ids and names of their own', () => {
+    const entries = (name: string) =>
+      block(name).map((line) => {
+        const m = /^ {2}(\d+): \{ name: ([a-z0-9_]+),/.exec(line)
+        expect(m, `unreadable ${name} line: ${line}`).not.toBeNull()
+        return { id: Number(m![1]), name: m![2]! }
+      })
+    const frozen = entries('frozen_fields')
+    const extra = entries('extra_fields')
+    expect(extra.length, 'no extra fields were found to check').toBeGreaterThan(0)
+
+    const highestFrozen = Math.max(...frozen.map((f) => f.id))
+    const ids = new Set(frozen.map((f) => f.id))
+    const names = new Set(frozen.map((f) => f.name))
+    for (const f of extra) {
+      expect(f.id, `${f.name} sits among the frozen ids`).toBeGreaterThan(highestFrozen)
+      expect(ids.has(f.id), `field id ${f.id} is declared twice`).toBe(false)
+      expect(names.has(f.name), `field name ${f.name} is declared twice`).toBe(false)
+      ids.add(f.id)
+      names.add(f.name)
+    }
+  })
+})
+
+describe('cars', () => {
+  /**
+   * The car's names are the box's and the phone's before this app draws a
+   * car, so the check here is the block's shape: one reading per line, one
+   * name per meaning, and a dotted name only under an object the block
+   * declares. Box and phone read the same lines back against their structs.
+   */
+  const fields = (name: string) =>
+    block(name).map((line) => {
+      const m = /^ {2}- \{ name: ([a-zA-Z.]+), kind: ([a-z_]+), unit: (\S+), desc: [^,:]+ \}$/.exec(
+        line
+      )
+      expect(m, `unreadable ${name} line: ${line}`).not.toBeNull()
+      return { name: m![1]!, kind: m![2]! }
+    })
+
+  /** An inline list such as `car_soc_sources: [vehicle, manual]`. */
+  const list = (name: string) => {
+    const m = new RegExp(`^${name}: \\[([a-z, ]+)\\]$`, 'm').exec(registry)
+    expect(m, `contract/registry.yaml has no ${name}: [ … ] line`).not.toBeNull()
+    return m![1]!.split(',').map((s) => s.trim())
+  }
+
+  it('name each car and charger field once, nested only under an object', () => {
+    for (const block of ['car_fields', 'charger_car_fields']) {
+      const declared = fields(block)
+      expect(declared.length, `no ${block} were found to check`).toBeGreaterThan(0)
+      const names = declared.map((f) => f.name)
+      expect(new Set(names).size, `a name in ${block} is declared twice`).toBe(names.length)
+      for (const { name } of declared) {
+        const parent = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : null
+        if (parent === null) continue
+        expect(
+          declared.find((f) => f.name === parent)?.kind,
+          `${name} sits under ${parent}, which is not an object in ${block}`
+        ).toBe('object')
+      }
+    }
+  })
+
+  it('give each enum a list of its own', () => {
+    for (const name of ['car_soc_sources', 'car_identified_by']) {
+      const values = list(name)
+      expect(values.length, `${name} is empty`).toBeGreaterThan(0)
+      expect(new Set(values).size, `${name} repeats a value`).toBe(values.length)
+    }
+  })
 })
 
 describe('capabilities the app gates on', () => {
@@ -343,7 +422,7 @@ describe('hand-written shared names', () => {
     // The scan can only ban a shape it recognises, so the shape is pinned to
     // the registry first: a declared scope it cannot match is a scope the
     // scan has gone blind to.
-    const shape = /^ftw\.[a-z_]+\.(?:read|write)$/
+    const shape = /^ftw\.[a-z_]+\.(?:read|write|run|hold|request)$/
     const declared = new Set(registryScopes())
     for (const scope of declared) {
       expect(scope, 'a registry scope the bare-name scan cannot recognise').toMatch(shape)

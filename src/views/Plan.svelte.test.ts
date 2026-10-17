@@ -172,9 +172,11 @@ describe('a viewer on the Plan screen', () => {
       new LoopbackCarrier(new SimBox({ now: () => MORNING, role: ROLE_VIEWER }), { latencyMs: 0 })
     )
     render(Plan, { props: { site } })
-    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull(), {
+    await vi.waitFor(() => expect(document.querySelector('button.more')).not.toBeNull(), {
       timeout: 2_000,
     })
+    ;(document.querySelector('button.more') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull())
 
     const modes = [...document.querySelectorAll('button.choice')] as HTMLButtonElement[]
     expect(modes.length).toBeGreaterThan(0)
@@ -182,6 +184,7 @@ describe('a viewer on the Plan screen', () => {
       modes.every((b) => b.disabled),
       'a viewer was offered a mode the box would refuse'
     ).toBe(true)
+    expect((document.querySelector('input[type="range"]') as HTMLInputElement).disabled).toBe(true)
 
     expect(document.body.textContent).toMatch(/view-only access/i)
     expect(document.body.textContent).not.toMatch(/box doesn't support/i)
@@ -205,9 +208,11 @@ describe('a viewer on the Plan screen', () => {
       )
     )
     render(Plan, { props: { site } })
-    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull(), {
+    await vi.waitFor(() => expect(document.querySelector('button.more')).not.toBeNull(), {
       timeout: 2_000,
     })
+    ;(document.querySelector('button.more') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull())
 
     const modes = [...document.querySelectorAll('button.choice')] as HTMLButtonElement[]
     expect(modes.length).toBeGreaterThan(0)
@@ -402,6 +407,10 @@ describe('a plan the box could not answer', () => {
     // already travelling, so what goes missing is the answer to it and every
     // answer after — the mode really did change, and the plan for it never
     // arrives.
+    const manual = document.querySelector('button.more') as HTMLButtonElement
+    expect(manual, 'manual modes were not offered').toBeTruthy()
+    manual.click()
+    await vi.waitFor(() => expect(document.querySelector('button.choice')).not.toBeNull())
     const mode = [...document.querySelectorAll('button.choice')].find(
       (b) => b.getAttribute('aria-pressed') === 'false' && !(b as HTMLButtonElement).disabled
     ) as HTMLButtonElement
@@ -888,5 +897,163 @@ describe('the notice under the price chart', () => {
     await show({ ...window(24, [0, 1, 2, 3, 4, 5]), stale: false })
 
     expect(document.body.textContent).toMatch(/some hours are missing their price/i)
+  })
+})
+
+/* Switching how the house is run.
+ *
+ * The catalogue split (primary plan vs manual drawer) hid the way back:
+ * once Self (manual) was on, nothing said "the plan" in words a person
+ * would tap, the selected card did not say it was selected, and every
+ * card greying out on send read as the tap having done nothing.
+ */
+describe('switching how the home is run', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+  })
+
+  function choice(label: string): HTMLButtonElement | undefined {
+    return [...document.querySelectorAll('button.choice')].find((b) =>
+      b.textContent?.includes(label)
+    ) as HTMLButtonElement | undefined
+  }
+
+  async function mount(opts: { mode?: string; latencyMs?: number } = {}) {
+    vi.spyOn(Date, 'now').mockReturnValue(MORNING)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+    const box = new SimBox({
+      now: () => MORNING,
+      ...(opts.mode ? { mode: opts.mode } : {}),
+    })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: opts.latencyMs ?? 0 }))
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(document.querySelector('[data-prefs]')).not.toBeNull(), {
+      timeout: 2_000,
+    })
+    return { box, site }
+  }
+
+  it('offers the box planning styles instead of Passive and Active buttons', async () => {
+    await mount()
+
+    expect(document.body.textContent).toMatch(/Planning style/)
+    expect(document.body.textContent).toMatch(/Keeps more in the battery/)
+    expect(document.body.textContent).toMatch(/Counts more on the forecast/)
+    const styles = [...document.querySelectorAll('.plan-styles button')]
+    expect(styles.map((button) => button.textContent)).toEqual([
+      'Very careful', 'Careful', 'Balanced', 'Bold', 'Very bold',
+    ])
+    expect(styles[2]!.getAttribute('aria-pressed')).toBe('true')
+    expect(document.body.textContent).toMatch(/FTW used to sell from the battery/)
+    expect(choice('Passive arbitrage')).toBeUndefined()
+    expect(choice('Active arbitrage')).toBeUndefined()
+    expect(choice('Planner (self)'), 'a hidden planner mode was rendered').toBeUndefined()
+    expect(document.body.textContent).not.toMatch(/use the plan/i)
+  })
+
+  it('saves a style without changing battery export', async () => {
+    const { box } = await mount()
+    const bold = [...document.querySelectorAll('.plan-styles button')].find((b) => b.textContent === 'Bold') as HTMLButtonElement
+    bold.click()
+    await vi.waitFor(() => expect(box.safetyK).toBe(0.15))
+    expect(box.batteryExport).toBe('unknown')
+    await vi.waitFor(() => expect(bold.getAttribute('aria-pressed')).toBe('true'))
+  })
+
+  it('keeps manual modes behind Manual…, and offers a way back', async () => {
+    const { box } = await mount({ mode: 'self_consumption' })
+
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
+    const self = choice('Self (manual)')!
+    expect(self.getAttribute('aria-pressed')).toBe('true')
+    expect(self.textContent).toMatch(/in use/i)
+    expect(choice('Passive arbitrage')).toBeUndefined()
+    expect(choice('Active arbitrage')).toBeUndefined()
+    const stop = choice('Stop batteries')
+    expect(stop, 'idle is labelled Stop batteries').toBeTruthy()
+    expect(stop!.textContent).toMatch(/Hold every battery at 0 W/)
+    expect(choice('Idle')).toBeUndefined()
+    expect(document.body.textContent).not.toMatch(/Do nothing/)
+
+    const back = document.querySelector('button.use-plan-btn') as HTMLButtonElement | null
+    expect(back, 'Use the plan was not offered').toBeTruthy()
+    back!.click()
+
+    await vi.waitFor(() => expect(box.mode).toBe('planner_passive_arbitrage'))
+    await vi.waitFor(() => expect(document.querySelector('button.use-plan-btn')).toBeNull())
+    expect(choice('Self (manual)')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('follows mapped_mode, including when the battery may sell', async () => {
+    const { box } = await mount({ mode: 'self_consumption' })
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
+
+    const allow = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Allow') as
+      | HTMLButtonElement
+      | undefined
+    expect(allow, 'the export banner was missing').toBeTruthy()
+    allow!.click()
+    await vi.waitFor(() => {
+      expect(box.batteryExport).toBe('allowed')
+      expect((document.querySelector('button.use-plan-btn') as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    })
+    expect(box.mode, 'allowing export must not leave the manual mode by itself').toBe(
+      'self_consumption'
+    )
+
+    ;(document.querySelector('button.use-plan-btn') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(box.mode).toBe('planner_arbitrage'))
+  })
+
+  it('marks a tap at once, before the box has confirmed', async () => {
+    const { box } = await mount({ latencyMs: 80 })
+
+    const more = document.querySelector('button.more') as HTMLButtonElement | null
+    expect(more, 'the manual drawer was not offered').toBeTruthy()
+    expect(more!.textContent).toMatch(/Manual…/)
+    more!.click()
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy())
+    choice('Self (manual)')!.click()
+
+    await Promise.resolve()
+    const self = choice('Self (manual)')!
+    expect(self.getAttribute('aria-pressed')).toBe('true')
+    expect(self.textContent).toMatch(/sending/i)
+    const back = document.querySelector('button.use-plan-btn') as HTMLButtonElement
+    expect(back.disabled).toBe(true)
+    back.click()
+
+    expect(box.mode, 'the box confirmed before the UI had anything to show').not.toBe(
+      'self_consumption'
+    )
+
+    await vi.waitFor(() => expect(box.mode).toBe('self_consumption'))
+    await vi.waitFor(() => expect(choice('Self (manual)')!.textContent).toMatch(/in use/i))
+    expect(back.disabled).toBe(false)
+  })
+
+  it('does not offer Use the plan to a viewer', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(MORNING)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
+    const site = new SiteStore('test')
+    site.connect(
+      new LoopbackCarrier(
+        new SimBox({ now: () => MORNING, role: ROLE_VIEWER, mode: 'self_consumption' }),
+        { latencyMs: 0 }
+      )
+    )
+    render(Plan, { props: { site } })
+    await vi.waitFor(() => expect(choice('Self (manual)')).toBeTruthy(), { timeout: 2_000 })
+
+    expect(document.body.textContent).not.toMatch(/use the plan/i)
+    expect(choice('Self (manual)')!.disabled).toBe(true)
+    const allow = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Allow') as
+      | HTMLButtonElement
+      | undefined
+    expect(allow?.disabled).toBe(true)
   })
 })

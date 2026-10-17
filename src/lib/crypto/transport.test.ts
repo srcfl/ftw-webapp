@@ -91,6 +91,13 @@ describe('tampering', () => {
 })
 
 describe('replay', () => {
+  it('accepts control overtaken by a hundred bulk frames on the box’s QUIC uplink', async () => {
+    const { app, box } = await connect()
+    const control = box.encrypt(tick())
+    for (let i = 0; i < 100; i++) app.decrypt(box.encrypt(delta({ 2: i })))
+    expect(app.decrypt(control)).toEqual(tick())
+    expect(() => app.decrypt(control)).toThrow(NoiseError)
+  })
   it('rejects a frame it has already accepted', async () => {
     const { app, box } = await connect()
     const wire = app.encrypt(tick())

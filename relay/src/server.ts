@@ -1,15 +1,19 @@
 /* The blind relay.
  *
  * It joins one box uplink to a handful of browser streams under a rendezvous
- * handle and moves bytes between them. That is the whole job, and the file is
- * short on purpose: an operator's promise that a service cannot read your data
- * is worth what an outsider can check in an afternoon.
+ * handle and moves bytes between them. For a watch, which can only speak
+ * HTTPS, it also joins one request to one answer on the box's exchange
+ * socket. That is the whole job, and the file is short on purpose: an
+ * operator's promise that a service cannot read your data is worth what an
+ * outsider can check in an afternoon.
  *
  * What it never does, and where you can see that it never does:
  *
  *   It does not decrypt. It has no keys and no code that would take one.
  *   It does not parse payloads. Binary messages are forwarded as received;
- *     the only property read off them is `.length`, for a memory bound.
+ *     the only property read off them is `.length`, for a memory bound. On
+ *     the exchange socket it also reads the first 16 bytes of an answer: the
+ *     id it wrote there itself.
  *   It does not derive handles. That needs the secret the box and the app
  *     swapped optically, which never comes near here. See relay/README.md.
  *   It does not pad or trim. Bytes out are byte-identical to bytes in, so
@@ -18,8 +22,9 @@
  *     compressed frame's size depends on its content, which would undo the
  *     padding that keeps the household's load pattern off the wire.
  *   It does not store routed traffic. Rooms live in memory and are deleted
- *     when the last socket leaves. A separate /fleet HTTP door reduces the
- *     fixed anonymous report to daily totals and drops the request body.
+ *     when the last socket leaves. An open exchange lives in its room until
+ *     its answer goes or its timer fires. A separate /fleet HTTP door reduces
+ *     the fixed anonymous report to daily totals and drops the request body.
  *   It does not write down who was here. The log carries counts only.
  *
  * Its clock is the one thing peers do trust it for: it announces the epoch,
@@ -27,6 +32,8 @@
  */
 
 import { WebSocketServer, type WebSocket, type RawData } from 'ws'
+import { randomBytes } from 'node:crypto'
+import { createReadStream, existsSync } from 'node:fs'
 import {
   createServer,
   type IncomingMessage,
@@ -41,7 +48,7 @@ import {
   type FleetReport,
   type FleetStatsView,
 } from './fleet.ts'
-import { AttemptCounter, TokenBucket } from './limits.ts'
+import { AttemptCounter, EXCHANGE, TokenBucket } from './limits.ts'
 import {
   CLOSE_BAD_JOIN,
   CLOSE_EPOCH,
@@ -49,6 +56,7 @@ import {
   CLOSE_BUSY,
   CTRL_READY,
   CTRL_GONE,
+  EXCHANGE_ID_BYTES,
   HANDLE_CHARS,
 } from './protocol.ts'
 
@@ -106,12 +114,22 @@ export interface RelayOptions {
   /** Fleet-report requests allowed per address per window. */
   fleetAttemptLimit?: number
   fleetAttemptWindowMs?: number
+  /** Exchange requests allowed per address per window. */
+  exchangeAttemptLimit?: number
+  exchangeAttemptWindowMs?: number
+  /** Open exchanges in the whole process. */
+  maxOpenExchanges?: number
+  /** How long an exchange waits for the box. */
+  exchangeTimeoutMs?: number
 }
 
 export interface RoomInspection {
   handle: string
   hasUplink: boolean
   streams: number
+  hasExchange: boolean
+  /** Exchanges waiting for the box's answer now. */
+  exchanges: number
 }
 
 export interface RelayInspection {
@@ -121,6 +139,8 @@ export interface RelayInspection {
   framesRouted: number
   bytesRouted: number
   heartbeats: number
+  /** Exchanges waiting for an answer now, in every room. */
+  exchanges: number
   /** Counts only. The rows themselves never appear on any surface. */
   deadman: { rows: number; claimed: number; armed: number }
   /** Counts only. Detailed daily totals stay on the local operator route. */
@@ -140,7 +160,8 @@ export interface RelayAggregateStats {
   fleet: FleetStatsView
 }
 
-type Role = 'box' | 'app'
+/** The box's uplink, a browser stream, or the box's exchange socket. */
+type Role = 'box' | 'app' | 'exchange'
 
 interface Peer {
   socket: WebSocket
@@ -156,9 +177,25 @@ interface Peer {
   claims?: Set<string>
 }
 
+/** One watch request waiting for the box. */
+interface OpenExchange {
+  res: ServerResponse
+  timer: ReturnType<typeof setTimeout>
+}
+
 interface Room {
   uplink: Peer | null
   streams: Set<Peer>
+  /**
+   * The box's second socket, for exchanges. Never a stream: nothing routed
+   * between the uplink and the streams reaches it, and nothing it sends
+   * reaches them.
+   */
+  exchange: Peer | null
+  /** Keyed by the relay's own id, in hex. Nothing else names an exchange. */
+  open: Map<string, OpenExchange>
+  /** Exchanges allowed in this room. Lives on the room and dies with it. */
+  exchangeRate: TokenBucket
   /**
    * The epoch this room's handle belongs to.
    *
@@ -193,6 +230,10 @@ const DEFAULTS = {
   rotateSpreadMs: 300_000,
   fleetAttemptLimit: 120,
   fleetAttemptWindowMs: 60 * 60_000,
+  exchangeAttemptLimit: EXCHANGE.attemptsPerMinute,
+  exchangeAttemptWindowMs: 60_000,
+  maxOpenExchanges: EXCHANGE.openPerProcess,
+  exchangeTimeoutMs: EXCHANGE.timeoutMs,
 } as const
 
 /**
@@ -242,6 +283,7 @@ export class RelayServer {
   #rooms = new Map<string, Room>()
   #attempts: AttemptCounter
   #fleetAttempts: AttemptCounter
+  #exchangeAttempts: AttemptCounter
   #timer: ReturnType<typeof setInterval>
   #opts: Required<
     Omit<RelayOptions, 'port' | 'host' | 'deadmanPath' | 'deadmanPost' | 'fleetStatsPath'>
@@ -255,6 +297,8 @@ export class RelayServer {
   #framesRouted = 0
   #bytesRouted = 0
   #heartbeats = 0
+  /** Open exchanges in every room, for the process cap. */
+  #openExchanges = 0
   #deadman: Deadman
   #fleet: FleetStats
 
@@ -276,6 +320,10 @@ export class RelayServer {
       maxSocketsPerAddress: opts.maxSocketsPerAddress ?? DEFAULTS.maxSocketsPerAddress,
       fleetAttemptLimit: opts.fleetAttemptLimit ?? DEFAULTS.fleetAttemptLimit,
       fleetAttemptWindowMs: opts.fleetAttemptWindowMs ?? DEFAULTS.fleetAttemptWindowMs,
+      exchangeAttemptLimit: opts.exchangeAttemptLimit ?? DEFAULTS.exchangeAttemptLimit,
+      exchangeAttemptWindowMs: opts.exchangeAttemptWindowMs ?? DEFAULTS.exchangeAttemptWindowMs,
+      maxOpenExchanges: opts.maxOpenExchanges ?? DEFAULTS.maxOpenExchanges,
+      exchangeTimeoutMs: opts.exchangeTimeoutMs ?? DEFAULTS.exchangeTimeoutMs,
     }
 
     const now = this.#opts.now()
@@ -287,6 +335,10 @@ export class RelayServer {
     )
     this.#fleetAttempts = new AttemptCounter(
       { limit: this.#opts.fleetAttemptLimit, windowMs: this.#opts.fleetAttemptWindowMs },
+      now
+    )
+    this.#exchangeAttempts = new AttemptCounter(
+      { limit: this.#opts.exchangeAttemptLimit, windowMs: this.#opts.exchangeAttemptWindowMs },
       now
     )
     this.#deadman = new Deadman({
@@ -323,6 +375,18 @@ export class RelayServer {
     let relayRoutes: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null
 
     const http = createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/source') {
+        const source = '/usr/share/ftw/source.tar.gz'
+        if (existsSync(source)) {
+          res.writeHead(200, { 'content-type': 'application/gzip', 'content-disposition': 'attachment; filename="ftw-relay-source.tar.gz"' })
+          createReadStream(source).on('error', () => res.destroy()).pipe(res)
+        } else {
+          res.writeHead(503, { 'content-type': 'text/plain' })
+          res.end('Development build: matching source must be supplied by the operator. https://github.com/srcfl/ftw-webapp\n')
+        }
+        return
+      }
+      res.setHeader('Link', '</source>; rel="copyright"; title="AGPLv3 source"')
       if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/healthz/')) {
         res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
         res.end('ok\n')
@@ -341,6 +405,10 @@ export class RelayServer {
       maxPayload: opts.maxFrameBytes ?? DEFAULTS.maxFrameBytes,
     })
 
+    wss.on('headers', (headers) => {
+      headers.push('Link: </source>; rel="copyright"; title="AGPLv3 source"')
+    })
+
     return new Promise((resolve, reject) => {
       http.once('error', reject)
       http.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', () => {
@@ -356,7 +424,10 @@ export class RelayServer {
         http.on('error', (err) => log(`relay: http error after start: ${String(err)}`))
 
         const relay = new RelayServer(wss, opts, http)
-        relayRoutes = (req, res) => relay.#serveFleet(req, res) || relay.#serveDeadman(req, res)
+        relayRoutes = (req, res) =>
+          relay.#serveFleet(req, res) ||
+          relay.#serveDeadman(req, res) ||
+          relay.#serveExchange(req, res)
         resolve(relay)
       })
     })
@@ -391,10 +462,13 @@ export class RelayServer {
         handle,
         hasUplink: room.uplink !== null,
         streams: room.streams.size,
+        hasExchange: room.exchange !== null,
+        exchanges: room.open.size,
       })),
       framesRouted: this.#framesRouted,
       bytesRouted: this.#bytesRouted,
       heartbeats: this.#heartbeats,
+      exchanges: this.#openExchanges,
       deadman: this.#deadman.inspect(),
       fleet: this.#fleet.inspect(),
     }
@@ -427,6 +501,7 @@ export class RelayServer {
 
   stop(): Promise<void> {
     clearInterval(this.#timer)
+    for (const room of this.#rooms.values()) this.#failOpen(room)
     for (const socket of this.#wss.clients) socket.terminate()
     this.#rooms.clear()
     // Both, and the HTTP server last: it owns the listening socket now, so
@@ -486,8 +561,14 @@ export class RelayServer {
       return
     }
 
-    const room =
-      this.#rooms.get(join.handle) ?? { uplink: null, streams: new Set<Peer>(), epoch: join.epoch }
+    const room = this.#rooms.get(join.handle) ?? {
+      uplink: null,
+      streams: new Set<Peer>(),
+      exchange: null,
+      open: new Map<string, OpenExchange>(),
+      exchangeRate: new TokenBucket(EXCHANGE.perRoomPerMinute, EXCHANGE.perRoomPerMinute / 60, now),
+      epoch: join.epoch,
+    }
 
     if (join.role === 'box' && room.uplink) {
       // The incumbent uplink keeps the room. A box whose socket died silently
@@ -495,6 +576,11 @@ export class RelayServer {
       // rejoin then; letting a newcomer evict it would make that a way to cut
       // a household off.
       socket.close(CLOSE_BUSY, 'uplink')
+      return
+    }
+    if (join.role === 'exchange' && room.exchange) {
+      // The same rule for the exchange socket, for the same reason.
+      socket.close(CLOSE_BUSY, 'exchange')
       return
     }
     if (join.role === 'app' && room.streams.size >= this.#opts.maxStreamsPerHandle) {
@@ -512,6 +598,7 @@ export class RelayServer {
     }
 
     if (join.role === 'box') room.uplink = peer
+    else if (join.role === 'exchange') room.exchange = peer
     else room.streams.add(peer)
     this.#rooms.set(join.handle, room)
     this.#sockets += 1
@@ -562,6 +649,13 @@ export class RelayServer {
       return
     }
 
+    // An exchange answer is not room traffic. It goes to one waiting request
+    // and is counted nowhere, so the log's totals cannot time a command.
+    if (peer.role === 'exchange') {
+      this.#onAnswer(peer, room, frame)
+      return
+    }
+
     this.#framesRouted += 1
     this.#bytesRouted += frame.length
 
@@ -590,9 +684,14 @@ export class RelayServer {
       else this.#perAddress.delete(peer.address)
     }
     if (room.uplink === peer) room.uplink = null
-    else room.streams.delete(peer)
+    else if (room.exchange === peer) {
+      room.exchange = null
+      // Nothing can answer them now. Saying so at once is kinder to a watch
+      // than letting it wait out the timer.
+      this.#failOpen(room)
+    } else room.streams.delete(peer)
 
-    if (!room.uplink && room.streams.size === 0) {
+    if (!room.uplink && !room.exchange && room.streams.size === 0) {
       // The room and its handle go with the last socket. This is what makes
       // "which boxes exist" unanswerable rather than merely unanswered.
       this.#rooms.delete(handle)
@@ -795,6 +894,160 @@ export class RelayServer {
 
     return false
   }
+
+  /**
+   * POST /x/<epoch>/<handle>: one sealed message from a watch to its box.
+   *
+   * watchOS gives an app HTTPS and nothing lower, so a watch cannot hold a
+   * stream. The box keeps a second socket for this. The relay puts an id of
+   * its own in front of the body, sends both down that socket, and returns
+   * the answer that comes back behind the same id. It reads the id and
+   * nothing else. See docs/watch-exchange.md.
+   *
+   * The answers are statuses, never words, and no CORS header is ever sent,
+   * so a web page cannot read one.
+   */
+  #serveExchange(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = req.url ?? ''
+    if (!url.startsWith('/x/')) return false
+
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST', 'cache-control': 'no-store' })
+      res.end()
+      return true
+    }
+    if (!this.#exchangeAttempts.allow(clientAddress(req, this.#opts.trustProxy), this.#opts.now())) {
+      answer(res, 429)
+      return true
+    }
+
+    const target = parseExchange(url)
+    const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
+    if (!target || type !== 'application/octet-stream') {
+      answer(res, 400)
+      return true
+    }
+    if (!this.#takesEpoch(target.epoch)) {
+      // As on a join: the right number, so the watch can derive this epoch's
+      // handle and ask again at once.
+      answer(res, 409, String(this.#epoch))
+      return true
+    }
+
+    const declared = req.headers['content-length']
+    if (declared !== undefined && !EXCHANGE.requestBytes.includes(Number(declared))) {
+      answer(res, 400)
+      return true
+    }
+
+    collectBody(req, Math.max(...EXCHANGE.requestBytes))
+      .then((body) => {
+        if (!EXCHANGE.requestBytes.includes(body.length)) {
+          answer(res, 400)
+          return
+        }
+        this.#forward(target, body, res)
+      })
+      .catch(() => answer(res, 400))
+    return true
+  }
+
+  /**
+   * The current epoch, and during a rotation the one before it.
+   *
+   * A box moves to the new handle only when its turn in the spread comes, so
+   * for those minutes a watch on the new handle may find no box. It tries the
+   * previous handle once; this is what lets that try land.
+   */
+  #takesEpoch(epoch: number): boolean {
+    if (epoch === this.#epoch) return true
+    return this.#rotateStartedAtMs !== null && epoch === this.#epoch - 1
+  }
+
+  #forward(target: ExchangeTarget, body: Buffer, res: ServerResponse): void {
+    // Gone while its body was read: nobody to answer, so nothing to hold.
+    if (!res.socket || res.socket.destroyed) return
+
+    const room = this.#rooms.get(target.handle)
+    if (!room || room.epoch !== target.epoch || (!room.uplink && !room.exchange)) {
+      answer(res, 404)
+      return
+    }
+    if (!room.exchange) {
+      // A box is here, but one too old to open the exchange socket.
+      answer(res, 501)
+      return
+    }
+    if (
+      this.#openExchanges >= this.#opts.maxOpenExchanges ||
+      room.open.size >= EXCHANGE.openPerRoom ||
+      !room.exchangeRate.take(1, this.#opts.now())
+    ) {
+      answer(res, 429)
+      return
+    }
+
+    const id = randomBytes(EXCHANGE_ID_BYTES)
+    const key = id.toString('hex')
+    const timer = setTimeout(() => this.#settle(room, key, 504), this.#opts.exchangeTimeoutMs)
+    timer.unref?.()
+    room.open.set(key, { res, timer })
+    this.#openExchanges += 1
+
+    // A watch that hangs up first is forgotten. A late answer for it finds no
+    // id and goes nowhere.
+    res.on('close', () => this.#settle(room, key))
+
+    send(room.exchange, Buffer.concat([id, body]), this.#opts.maxBufferedBytes)
+  }
+
+  /** An answer on the exchange socket: the relay's id, then the box's bytes. */
+  #onAnswer(peer: Peer, room: Room, frame: Buffer): void {
+    if (frame.length <= EXCHANGE_ID_BYTES || frame.length > EXCHANGE_ID_BYTES + EXCHANGE.maxReplyBytes) {
+      peer.socket.close(CLOSE_BAD_JOIN, 'size')
+      return
+    }
+    // An id this room is not waiting for is dropped. That covers a late
+    // answer, a repeated one, and an id from another room: a reply reaches
+    // only its own request.
+    const key = frame.subarray(0, EXCHANGE_ID_BYTES).toString('hex')
+    this.#settle(room, key, 200, frame.subarray(EXCHANGE_ID_BYTES))
+  }
+
+  /**
+   * End one open exchange. No status means the watch hung up and nobody is
+   * left to answer.
+   */
+  #settle(room: Room, key: string, status?: number, reply?: Buffer): void {
+    const open = room.open.get(key)
+    if (!open) return
+    room.open.delete(key)
+    this.#openExchanges -= 1
+    clearTimeout(open.timer)
+
+    if (status === undefined) return
+    if (reply) {
+      open.res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'cache-control': 'no-store',
+      })
+      open.res.end(reply)
+      return
+    }
+    answer(open.res, status)
+  }
+
+  /** Every open exchange in a room, answered 504: no box will answer now. */
+  #failOpen(room: Room): void {
+    for (const key of [...room.open.keys()]) this.#settle(room, key, 504)
+  }
+}
+
+/** A status and, for 409, the epoch. The relay's only words over HTTP. */
+function answer(res: ServerResponse, status: number, body = ''): void {
+  if (res.headersSent || res.destroyed) return
+  res.writeHead(status, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
+  res.end(body)
 }
 
 /** Read a request body, bounded. Rejects past the cap instead of buffering. */
@@ -817,7 +1070,10 @@ function collectBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
 }
 
 function peers(room: Room): Peer[] {
-  return room.uplink ? [room.uplink, ...room.streams] : [...room.streams]
+  const out = [...room.streams]
+  if (room.uplink) out.unshift(room.uplink)
+  if (room.exchange) out.push(room.exchange)
+  return out
 }
 
 function send(peer: Peer, frame: Buffer, maxBufferedBytes: number): void {
@@ -838,7 +1094,7 @@ interface Join {
   role: Role
 }
 
-/** `/r/<epoch>/<handle>/<role>` and nothing else. */
+/** `/r/<epoch>/<handle>/<box|app|exchange>` and nothing else. */
 export function parseJoin(url: string): Join | null {
   const path = url.split('?')[0] ?? ''
   const parts = path.split('/').filter((p) => p.length > 0)
@@ -851,7 +1107,26 @@ export function parseJoin(url: string): Join | null {
   if (handle.length !== HANDLE_CHARS || !/^[0-9a-f]+$/.test(handle)) return null
 
   const role = parts[3]
-  if (role !== 'box' && role !== 'app') return null
+  if (role !== 'box' && role !== 'app' && role !== 'exchange') return null
 
   return { epoch, handle, role }
+}
+
+export interface ExchangeTarget {
+  epoch: number
+  handle: string
+}
+
+/** `/x/<epoch>/<handle>` and nothing else. */
+export function parseExchange(url: string): ExchangeTarget | null {
+  const parts = url.split('/').filter((p) => p.length > 0)
+  if (parts.length !== 3 || parts[0] !== 'x') return null
+
+  const epoch = Number(parts[1])
+  if (!Number.isSafeInteger(epoch) || epoch < 0) return null
+
+  const handle = parts[2]!
+  if (handle.length !== HANDLE_CHARS || !/^[0-9a-f]+$/.test(handle)) return null
+
+  return { epoch, handle }
 }

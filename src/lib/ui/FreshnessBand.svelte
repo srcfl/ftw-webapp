@@ -70,16 +70,16 @@
   )
 
   const tone = $derived.by(() => {
-    if (carrier === 'relay' || carrier === 'webrtc') {
+    if (carrier === 'relay' || carrier === 'webrtc' || carrier === 'tunnel') {
       return srcState === 'live' ? 'live' : 'stale'
     }
     return reaching ? 'reaching' : 'lost'
   })
 
   const message = $derived.by(() => {
-    if (carrier === 'relay' || carrier === 'webrtc') {
-      const liveWhere = carrier === 'webrtc' ? 'Live at home' : 'Live via encrypted relay'
-      const connected = carrier === 'webrtc' ? 'Home link connected' : 'Encrypted relay connected'
+    if (carrier === 'relay' || carrier === 'webrtc' || carrier === 'tunnel') {
+      const liveWhere = carrier === 'webrtc' ? 'Live at home' : carrier === 'tunnel' ? 'Live, encrypted via FTW Cloud' : 'Live via encrypted relay'
+      const connected = carrier === 'webrtc' ? 'Home link connected' : carrier === 'tunnel' ? 'Encrypted link connected' : 'Encrypted relay connected'
       switch (srcState) {
         case 'live':
           return liveWhere
@@ -110,6 +110,7 @@
       if (phase === 'subscribing') return 'Waiting for live readings'
       if (phase === 'handshaking' && transport === 'relay') return 'Securing encrypted relay'
       if (phase === 'handshaking' && transport === 'webrtc') return 'Securing home link'
+      if (phase === 'handshaking' && transport === 'tunnel') return 'Securing your box connection'
       return 'Connecting to your box'
     }
     return "Can't reach your box"
@@ -131,7 +132,7 @@
    * whole design is built to avoid.
    */
   const ageText = $derived.by(() => {
-    if (carrier === 'relay' || carrier === 'webrtc') {
+    if (carrier === 'relay' || carrier === 'webrtc' || carrier === 'tunnel') {
       if (srcState === 'live') return null
       if (srcState === 'never') return null
     }
@@ -165,9 +166,9 @@
 
 <style>
   .band {
-    position: sticky;
-    top: 0;
-    z-index: 5;
+    /* Sits above the scroller as an .app sibling, so it never scrolls and
+         needs no sticky of its own. */
+    z-index: var(--z-band);
     display: flex;
     align-items: center;
     gap: var(--space-2);

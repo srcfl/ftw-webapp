@@ -12,6 +12,8 @@ import Now from './Now.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
+import { FID } from '$lib/format/explanation'
+import { planetColor } from '$lib/state/flow'
 
 // jsdom has no canvas 2d context; the panel's chrome is what is under test,
 // not its pixels, so a quiet stub keeps the chart's effect from throwing.
@@ -69,6 +71,10 @@ describe('a live line behind a bubble', () => {
   })
 
   it('opens a live line with only the stream — no box API needed', async () => {
+    // Resolve the parent's lazy chunks before timing the tap. A late import
+    // belongs to Now's startup, not to the panel being opened.
+    await import('$lib/state/now-status')
+    await import('$lib/state/now-ev-overlay')
     vi.useFakeTimers()
     vi.setSystemTime(NOON)
     const site = await streaming()
@@ -76,13 +82,20 @@ describe('a live line behind a bubble', () => {
     // spying that no api call is made when a bubble is tapped.
     const api = vi.spyOn(site, 'api')
     render(Now, { props: { site } })
-    await vi.advanceTimersByTimeAsync(50)
+    // Now's own background asks — chargers for the house/car split, the
+    // box-page snapshot the hero reads — land in chunks after mount. Let
+    // them settle, so what is judged next is what the tap alone adds.
+    await vi.advanceTimersByTimeAsync(500)
+    api.mockClear()
 
     openBubble('pv')
     await vi.advanceTimersByTimeAsync(200)
 
     expect(document.querySelector('[role="dialog"]')!.getAttribute('aria-label')).toBe('Solar')
-    expect(api, 'the live panel reached for the box API it does not need').not.toHaveBeenCalled()
+    const besidesChargers = api.mock.calls.filter(
+      (c) => (c[0] as { path?: string } | undefined)?.path !== '/api/loadpoints'
+    )
+    expect(besidesChargers, 'the live panel reached for the box API it does not need').toEqual([])
   })
 
   it('does not open a live line over retained readings after the wire drops', async () => {
@@ -120,5 +133,32 @@ describe('a live line behind a bubble', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await vi.advanceTimersByTimeAsync(50)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('wears the bubble colour, and does not sit inside the scrolling house', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOON)
+    const site = await streaming()
+
+    const scroller = document.createElement('main')
+    document.body.append(scroller)
+    render(Now, { target: scroller, props: { site } })
+    await vi.advanceTimersByTimeAsync(50)
+
+    scroller.scrollTop = 280
+    openBubble('battery')
+    await vi.advanceTimersByTimeAsync(50)
+
+    const sheet = document.querySelector('[role="dialog"]')
+    expect(sheet, 'the battery bubble opened nothing').not.toBeNull()
+    expect(
+      scroller.contains(sheet),
+      'the sheet stayed in the scroller, so a tap walks the house off screen'
+    ).toBe(false)
+    expect(scroller.scrollTop, 'opening the line scrolled the house away').toBe(280)
+
+    const watts = site.session.fields.get(FID.BATTERY_W)
+    const reading = sheet!.querySelector('.reading')
+    expect(reading?.getAttribute('style') ?? '').toContain(planetColor('battery', watts))
   })
 })

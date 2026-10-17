@@ -7,16 +7,18 @@
   The readings sit underneath for anyone who wants them.
 -->
 <script lang="ts">
+  import { controlForPlanet, type ControlScope } from '$vendor/ftw/control-feedback.js'
   // The box's own hero component, vendored verbatim. Importing registers
   // <ftw-energy-flow>; the app and the on-box dashboard render one file.
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import '$vendor/ftw/ftw-energy-flow.js'
   import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
-  import { flowReadings } from '$lib/state/flow'
+  import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
+  import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
-  import EvPanel from './EvPanel.svelte'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
   import type { SiteStore } from '$lib/state/site.svelte'
+  import type { Component } from 'svelte'
 
   interface Props {
     site: SiteStore
@@ -61,9 +63,72 @@
     site.session.phase === 'streaming' && site.carrier !== 'cache' && site.srcState === 'live'
   )
 
+  // Charger watts from /api/loadpoints, for a box whose 1 Hz stream still
+  // folds the car into the house. Fetched in a later chunk so callBox does
+  // not sit in the first frame.
+  let evFromLp = $state(0)
+  $effect(() => {
+    if (!active) return
+    const s = untrack(() => site)
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void import('$lib/state/now-ev-overlay').then((m) => {
+      if (cancelled) return
+      stop = m.watchLoadpointCharge(s, (w) => {
+        evFromLp = w
+      })
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  })
+
+  // The box page's own snapshot. Same later-chunk rule as the charger
+  // overlay: callBox is not on the path to the first frame. Frozen fields
+  // keep drawing until one lands, and after a drop.
+  let status = $state<SiteStatus | null>(null)
+  let statusFresh = $state(false)
+  let statusReceivedAt = $state<number | null>(null)
+  const watchStatusNow = $derived(active && site.documentVisible &&
+    site.session.phase === 'streaming' && site.session.caps.has(CAP_API_PASSTHROUGH))
+  $effect(() => {
+    if (!watchStatusNow) return
+    const s = untrack(() => site)
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void import('$lib/state/now-status').then((m) => {
+      if (cancelled) return
+      stop = m.watchStatus(s, (next) => {
+        if (next.status) {
+          status = next.status
+          statusReceivedAt = next.receivedAt
+        }
+        statusFresh = next.fresh
+      })
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
+  })
+  const statusLive = $derived(statusFresh && live && watchStatusNow)
+
+  const flowFields = $derived(withLoadpointEv(site.session.fields, evFromLp))
+  const headline = $derived(
+    explain({
+      fields: flowFields,
+      dispatchBlockedBy: site.session.dispatchBlockedBy,
+      ceilingW: site.ceilingW,
+    }).headline
+  )
+  const liveReadings = $derived(
+    status && (statusLive || !live) ? flowReadingsFromStatus(status, statusLive) : flowReadings(flowFields)
+  )
+
   let flow = $state<FtwEnergyFlowElement | null>(null)
   let lastFlow: FtwEnergyFlowElement | null = null
-  let lastFlowFields: ReadonlyMap<number, number> | null = null
+  let lastReadings: typeof liveReadings | null = null
 
   // The component takes data by method, the way the dashboard feeds it.
   // An effect rather than an attribute because setReadings() is the
@@ -72,38 +137,112 @@
   // nobody can see — and because the effect reads the fields as they are
   // when `active` returns, coming back starts from the present.
   $effect(() => {
-    const fields = site.session.fields
-    if (!active || !flow || (flow === lastFlow && fields === lastFlowFields)) return
-    flow.setReadings(flowReadings(fields))
+    const readings = liveReadings
+    if (!active || !flow || (flow === lastFlow && readings === lastReadings)) return
+    // The component retains an omitted daily share. Clear it when only
+    // telemetry totals remain, so old status details cannot survive fallback.
+    flow.setReadings({ ...readings, selfPoweredPctToday: readings.selfPoweredPctToday ?? null })
     lastFlow = flow
-    lastFlowFields = fields
+    lastReadings = readings
   })
 
-  /** The charger's sheet, opened by a tap on its bubble. */
+  /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
+   *  so callBox and the loadpoint store stay out of the first frame. */
   let evOpen = $state(false)
+  let selectedCharger = $state<string | null>(null)
+  let requestedCharger = $state<string | null>(null)
+  onMount(() => {
+    const read = () => {
+      const hash = location.hash
+      requestedCharger = hash.startsWith('#/now?') ? new URLSearchParams(hash.split('?')[1]).get('charger') : null
+    }
+    const message = (e: MessageEvent) => {
+      if (e.data?.type === 'ftw-open-charger' && typeof e.data.loadpointId === 'string') {
+        location.hash = '#/now?charger=' + encodeURIComponent(e.data.loadpointId)
+        requestedCharger = e.data.loadpointId
+      }
+    }
+    read(); window.addEventListener('hashchange', read)
+    navigator.serviceWorker?.addEventListener('message', message)
+    return () => { window.removeEventListener('hashchange', read); navigator.serviceWorker?.removeEventListener('message', message) }
+  })
+  $effect(() => {
+    if (active && requestedCharger) {
+      selectedCharger = requestedCharger
+      selectedDriver = null
+      evOpen = true
+      requestedCharger = null
+    }
+  })
+  function closeEv() {
+    evOpen = false
+    selectedCharger = null
+    selectedDriver = null
+    proofScope = null
+    if (location.hash.startsWith('#/now?charger=')) history.replaceState(null, '', location.pathname + location.search + '#/now')
+  }
+  let selectedDriver = $state<string | null>(null)
+  let EvPanel = $state<Component<{ site: SiteStore; onclose: () => void; loadpointId?: string | null; driverName?: string | null }> | null>(null)
+  $effect(() => {
+    if (!evOpen || EvPanel) return
+    void import('./EvPanel.svelte').then((m) => {
+      EvPanel = m.default
+    })
+  })
+
+  /** Price, plan, today, fuse — the rest of Overview. Same later-chunk
+   *  rule: none of it sits on the path to the first reading. */
+  let Outlook = $state<Component<{
+    site: SiteStore
+    status: SiteStatus | null
+    statusFresh: boolean
+    statusReceivedAt: number | null
+    active?: boolean
+  }> | null>(null)
+  $effect(() => {
+    if (!active || site.session.fields.size === 0 || Outlook) return
+    void import('./NowOutlook.svelte').then((m) => {
+      Outlook = m.default
+    })
+  })
 
   /** The live-line sheet for one part of the house, or null. */
   let liveRole = $state<LiveRole | null>(null)
+  let proofScope = $state<ControlScope | null>(null)
+  const proofRows = $derived(controlForPlanet(status?.control_feedback, proofScope ?? {}))
 
   const LIVE_ROLES = new Set<string>(['grid', 'pv', 'battery', 'load'])
 
-  // The hero says which bubble was tapped. The charger opens its own panel of
-  // controls — but only when the box's API is actually reachable, or the
-  // panel would be a door painted on a wall. Every other bubble opens its
-  // live line, which needs nothing but the stream already on screen.
+  function openPlanetControls(scope: ControlScope) {
+    proofScope = scope
+    if (scope.role === 'ev') { selectedCharger = null; selectedDriver = scope.id?.startsWith('agg-') ? null : scope.name ?? null; evOpen = true }
+    else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
+  }
+
+  // Preserve a charger tap while the saved home reconnects. The panel shows
+  // connection progress, then checks the capabilities the box reports.
   $effect(() => {
     const el = flow
     if (!el) return
     const onPlanet = (e: Event) => {
-      const role = (e as CustomEvent<{ role?: string }>).detail?.role
-      if (role === 'ev') {
-        if (untrack(() => site).session.caps.has(CAP_API_PASSTHROUGH)) evOpen = true
-      } else if (role && LIVE_ROLES.has(role) && untrack(() => live)) {
-        liveRole = role as LiveRole
-      }
+      const scope = (e as CustomEvent<ControlScope>).detail ?? {}
+      openPlanetControls(scope)
     }
     el.addEventListener('ftw-planet-click', onPlanet)
     return () => el.removeEventListener('ftw-planet-click', onPlanet)
+  })
+
+  // A newly mounted dialog can still pull the scroller to itself on some
+  // WebKits. Hold the house where it was for that frame.
+  $effect(() => {
+    if (liveRole === null && !evOpen) return
+    const pane = document.querySelector('main')
+    if (!pane) return
+    const top = pane.scrollTop
+    const id = requestAnimationFrame(() => {
+      if (pane.scrollTop !== top) pane.scrollTop = top
+    })
+    return () => cancelAnimationFrame(id)
   })
 
   /**
@@ -210,7 +349,7 @@
   {/if}
 
   <section class="explanation">
-    <p class="headline">{site.explanation.headline}</p>
+    <p class="headline">{headline}</p>
   </section>
 
   <div class="flow">
@@ -218,14 +357,21 @@
          moving particle claims power is flowing at this very moment. -->
     <ftw-energy-flow bind:this={flow} embedded static={live && active ? undefined : true}
     ></ftw-energy-flow>
+    {#if status && !statusLive}
+      <p class="note" role="status">Device details are out of date.{live ? ' Showing live totals.' : ''}</p>
+    {/if}
   </div>
 
-  {#if evOpen}
-    <EvPanel {site} onclose={() => (evOpen = false)} />
+  {#if Outlook}
+    <Outlook {site} {status} {active} statusFresh={statusLive} {statusReceivedAt} />
+  {/if}
+
+  {#if evOpen && EvPanel}
+    <EvPanel {site} loadpointId={selectedCharger} driverName={selectedDriver} onclose={closeEv} />
   {/if}
 
   {#if liveRole}
-    <LivePanel {site} role={liveRole} onclose={() => (liveRole = null)} />
+    <LivePanel {site} role={liveRole} fields={flowFields} feedback={proofRows} feedbackLive={statusLive} onclose={() => { liveRole = null; proofScope = null }} />
   {/if}
 {/if}
 

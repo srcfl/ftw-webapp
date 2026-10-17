@@ -109,6 +109,9 @@ function chunkWith(marker: string): string {
 }
 
 describe('what a cold start downloads before it can paint', () => {
+  it('ships no Frankfurt relay connection or fallback', () => {
+    for (const code of chunks.values()) expect(code).not.toContain('relay.ftw.energy')
+  })
   it('is really the launch path and not the whole build', () => {
     // The control. Every rule below is an absence, and an absence proves
     // nothing if the thing being searched is empty or is everything.
@@ -129,6 +132,16 @@ describe('what a cold start downloads before it can paint', () => {
     expect(launchPath, 'the QR encoder is on the launch path').not.toContain(ENCODER)
     // It is in the build, in one place — not merely missing.
     expect(chunkWith(ENCODER)).toContain(ENCODER)
+  })
+
+  it('does not carry the Overview cards under Now', () => {
+    // Price, plan, today and the fuse are the rest of a glance, and they
+    // wait until the house has painted. A plain import from Now would put
+    // the price chart on every cold start.
+    expect(launchPath, 'Overview cards entered the static launch closure').not.toContain(
+      'What FTW does next',
+    )
+    expect(chunkWith('What FTW does next')).toContain('What FTW does next')
   })
 
   it('does not carry the QR decoder', () => {

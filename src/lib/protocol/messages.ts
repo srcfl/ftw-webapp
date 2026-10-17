@@ -51,6 +51,8 @@ export const ROLE_OWNER: Role = 'owner'
 export const ROLE_VIEWER: Role = 'viewer'
 
 export interface HelloOk {
+  /** Box-signed copy identity, learned only inside the box's Noise session. */
+  cloud?: { home: string; pk: Uint8Array; boot: Uint8Array; sources: Record<string, string>; loadpoints: Record<string, string> }
   /** Negotiated version. PROTO_FLOOR means the app is too old for full mode. */
   proto: number
   mode: BoxMode
@@ -483,9 +485,19 @@ export function carriesOverSession(contentType: string | undefined): boolean {
  * reads both back.
  */
 export const OP_SET_MODE = 'site.mode.set'
+export const OP_PLANNER_PREFS_SET = 'planner.prefs.set'
 export const OP_BATTERY_HOLD = 'battery.hold'
 export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
 export const OP_LOADPOINT_BOOST = 'loadpoint.boost'
+export const OP_LOADPOINT_SOC_SET = 'loadpoint.soc.set'
+export const OP_LOADPOINT_SURPLUS_ONLY_SET = 'loadpoint.surplus_only.set'
+/** Cars (docs/cars.md in srcfl/ftw). A box offers them with `der.car`. */
+export const OP_CAR_GOAL_SET = 'car.goal.set'
+export const OP_CAR_SOC_SET = 'car.soc.set'
+export const OP_SESSION_CAR_SET = 'session.car.set'
+export const OP_CAR_ADD = 'car.add'
+export const OP_CAR_UPDATE = 'car.update'
+export const OP_CAR_REMOVE = 'car.remove'
 
 export interface Guard {
   fid: Fid
@@ -571,6 +583,22 @@ const RETRYABLE: Record<string, boolean> = {
   // no role and no ceremony changes it.
   E_WHOLE_DOCUMENT: false,
   E_LOCAL_ONLY: false,
+  // Agents' refusals (docs/agents.md in srcfl/ftw). A rate limit clears once
+  // the grant's minute has room; every other one gets the same answer again.
+  E_GRANT_EXPIRED: false,
+  E_OP_NOT_GRANTED: false,
+  E_CAP_EXCEEDED: false,
+  E_RATE_LIMITED: true,
+  E_NEEDS_OWNER: false,
+  E_BAD_SIGNATURE: false,
+  E_NO_APPROVAL_KEY: false,
+  E_NOT_FOUND: false,
+  // The approval's atMs is too far from the box's clock; the phone signs
+  // again with args.boxMs, so asking again can succeed.
+  E_CLOCK_SKEW: true,
+  // Cars' refusals (docs/cars.md in srcfl/ftw): asking again gets the same
+  // answer. E_NOT_FOUND is above.
+  E_DUPLICATE: false,
   // Not from the box. The session layer raises this one itself out of
   // api.end{truncated: true} — see contract/registry.yaml, client_errors.
   E_RESPONSE_TOO_LARGE: false,

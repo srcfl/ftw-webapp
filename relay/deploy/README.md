@@ -75,7 +75,8 @@ The relay logs one line every fifteen seconds with aggregate counts — epoch,
 rooms, sockets, frames, bytes and today's fleet reports. Deliberately no handles: a log line naming one
 is the household identifier this design exists to withhold, and logs are the
 least guarded thing in any deployment. The Caddy config strips the request URI
-for the same reason, since the join path carries the handle.
+for the same reason, since the join path carries the handle. It writes no line
+at all for `/x/`, where a line per request would be a line per watch command.
 
 Read the detailed fleet totals from the host or an SSM session:
 
