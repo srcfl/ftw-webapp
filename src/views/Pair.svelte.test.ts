@@ -174,6 +174,7 @@ describe('a home already saved on this phone', () => {
     await database.put('sites', {
       siteId: SITE,
       label: 'Home',
+      cloudHome: 'fjzyr67buzpyncqmjliwgezvde',
       boxStaticKey: new Uint8Array(32).fill(7),
       rendezvousSecret: new Uint8Array(32).fill(9),
       addedAtMs: 1,

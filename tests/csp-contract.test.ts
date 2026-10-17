@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { ESCROW_ORIGIN } from '../src/lib/identity/escrow'
-import { RELAY_HOST } from '../src/lib/identity/origin'
+import { CLOUD_URL } from '../src/lib/protocol/cloud'
 
 function connectSrc(): string {
   const headers = readFileSync('public/_headers', 'utf8')
@@ -26,7 +26,8 @@ describe('the connect-src list', () => {
   it('carries every origin the code calls', () => {
     const list = connectSrc()
     expect(list, 'the escrow is unreachable from a browser').toContain(ESCROW_ORIGIN)
-    expect(list, 'the relay is unreachable from a browser').toContain(RELAY_HOST)
+    expect(list).not.toContain('relay.ftw.energy')
+    expect(list, 'FTW Cloud is unreachable from a browser').toContain(new URL(CLOUD_URL).origin)
   })
 
   it('never grows a wildcard', () => {

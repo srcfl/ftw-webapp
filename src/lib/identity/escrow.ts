@@ -145,6 +145,7 @@ export async function escrowedHomes(): Promise<RecoverableHome[]> {
     .map((row) => ({
       siteId: row.siteId,
       label: row.label,
+      ...(row.cloudHome ? { cloudHome: row.cloudHome } : {}),
       boxStaticKey: row.boxStaticKey,
       rendezvousSecret: row.rendezvousSecret,
     }))
@@ -441,6 +442,7 @@ export async function adoptRecoveredHome(home: RecoveredHome): Promise<string> {
     await database.put('sites', {
       siteId: each.siteId,
       label: each.label,
+      ...(each.cloudHome ? { cloudHome: each.cloudHome } : {}),
       boxStaticKey: each.boxStaticKey,
       rendezvousSecret: each.rendezvousSecret,
       escrow: true,

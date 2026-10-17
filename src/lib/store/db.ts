@@ -44,6 +44,10 @@ export interface StoredSite {
   label: string
   /** Box's static Noise key, pinned optically at enrollment. */
   boxStaticKey: Uint8Array
+  /** From QR v3 or the box's authenticated hello, never from Cloud. */
+  cloudHome?: string
+  /** The box's P-256 signing key, learned over its own Noise session. */
+  cloudKey?: Uint8Array
   /**
    * The rendezvous secret from the QR fragment. Optional only because rows
    * written before the v2 payload existed do not have one; a site without it

@@ -27,6 +27,16 @@ import { ESCROW_BLOB_BYTES } from '../../../escrow/src/escrow.ts'
 
 const SCALAR = new Uint8Array(32).fill(0x44)
 
+it('restores the Cloud route from a fixed-size sealed copy', async () => {
+  const key = await sealingKey()
+  const original = blob(1)
+  original.homes[0]!.cloudHome = 'fjzyr67buzpyncqmjliwgezvde'
+  const sealed = await sealRecoveryBlob(key, original, 7)
+  expect(sealed).toHaveLength(512)
+  expect((await openRecoveryBlob(key, sealed, 7)).homes[0]!.cloudHome).toBe(original.homes[0]!.cloudHome)
+})
+
+
 function blob(homes: number): RecoveryBlob {
   return {
     deviceScalar: SCALAR,

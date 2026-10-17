@@ -58,7 +58,7 @@ import {
 } from '$lib/protocol/messages'
 import { SAFETY_K_DEFAULT, clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
 import { SimApi, evPluggedIn } from './api'
-import { roleHasScope, ROLE_SCOPES } from '$lib/protocol/contract'
+import { roleHasScope, ROLE_SCOPES, CAP_CLOUD_TUN } from '$lib/protocol/contract'
 import { buildPlan, priceAt, importTotalMinor } from './planner'
 import {
   RESOLUTIONS,
@@ -329,6 +329,7 @@ export interface SimBoxOptions {
   scopes?: string[]
   /** False models a box from before hello could carry a subscription. */
   inlineSubscribe?: boolean
+  cloud?: HelloOk['cloud']
   /**
    * Starting dispatch mode. Defaults to FTW's own default (passive
    * arbitrage). Tests that open the Plan screen already on a manual
@@ -373,6 +374,7 @@ export class SimBox {
   #bucket: 256 | 512 = 512
   #hz: Sub['hz'] = 1
   #inlineSubscribe: boolean
+  #cloud: HelloOk['cloud']
   #lastReading: Reading | null = null
   #lastSent = new Map<number, number>()
   #lastSourcesJson = ''
@@ -408,6 +410,7 @@ export class SimBox {
     this.#role = opts.role ?? ROLE_OWNER
     this.#scopes = opts.scopes ?? null
     this.#inlineSubscribe = opts.inlineSubscribe ?? true
+    this.#cloud = opts.cloud
     if (opts.mode && MODE_KEYS.includes(opts.mode)) this.#mode = opts.mode
     this.#api = new SimApi({
       house: this.house,
@@ -634,7 +637,8 @@ export class SimBox {
       mode: this.faults.booting ? 'booting' : proto === PROTO_FLOOR ? 'floor' : 'full',
       box: { id: 'sim-0001', build: 'sim', tz: 'Europe/Stockholm' },
       clock: { source: 'ntp', syncedAtMs: this.#startedAtMs, uptimeMs: this.uptimeMs },
-      caps: proto === PROTO_FLOOR ? ['status.core'] : CAPS,
+      caps: proto === PROTO_FLOOR ? ['status.core'] : this.#cloud ? [...CAPS, CAP_CLOUD_TUN] : CAPS,
+      ...(this.#cloud ? { cloud: this.#cloud } : {}),
       capsHash: 'sim',
       // Sent so the app knows what to draw, and for nothing else. Hiding a
       // button is presentation; every refusal above is the box's.

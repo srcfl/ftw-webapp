@@ -57,6 +57,7 @@
    * may well come back to this screen more than once before they finish.
    */
   const inSafariTab = isIosSafariTab(currentEnvironment())
+  const cloudNotice = "FTW Cloud connects this app to your box. The connection stays encrypted. The service sees your home's id, internet addresses and when data passes."
 
   type Stage =
     | 'intro'
@@ -101,7 +102,7 @@
       ])
       if (!(await isEnrolled(openVaultStore()))) return
       const sites = await pairedSites()
-      const first = sites[0]
+      const first = sites.find(row => row.cloudHome)
       if (first) known = { siteId: first.siteId, label: first.label }
     })()
   })
@@ -374,6 +375,7 @@
       {/if}
     </p>
 
+    <p class="security-note">{cloudNotice}</p>
     {#if message}
       <p class="problem">{message}</p>
     {/if}
@@ -442,6 +444,7 @@
           copy that Sourceful cannot open. If not, pairing still works; a new
           Settings QR is the way back.
         </p>
+        <p class="security-note">{cloudNotice}</p>
         {#if canScan()}
           <button class="primary" onclick={startScan}>Scan the pairing QR</button>
         {/if}

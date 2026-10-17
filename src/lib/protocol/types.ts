@@ -8,7 +8,7 @@
  */
 
 /** How frames are reaching us. Orthogonal to SourceState — see FreshnessBand. */
-export type CarrierState = 'webrtc' | 'relay' | 'cloud' | 'cache' | 'none'
+export type CarrierState = 'webrtc' | 'relay' | 'tunnel' | 'cloud' | 'cache' | 'none'
 
 /** Whether a box-side source is answering. Orthogonal to CarrierState. */
 export type SourceState = 'live' | 'lagging' | 'stale' | 'down' | 'never'

@@ -34,6 +34,9 @@ export interface Carrier {
 
   send(frame: Uint8Array): void
 
+  /** Draw a new tunnel id before each box handshake. Other carriers need none. */
+  beginSession?(): void
+
   /** Returns an unsubscribe function. */
   onFrame(handler: (frame: Uint8Array) => void): () => void
   onStatus(handler: (status: CarrierStatus) => void): () => void

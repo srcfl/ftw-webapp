@@ -149,6 +149,7 @@ async function pairPhone(siteId: string) {
   const row: StoredSite = {
     siteId,
     label: 'Home',
+    cloudHome: 'fjzyr67buzpyncqmjliwgezvde',
     boxStaticKey: new Uint8Array(32).fill(7),
     rendezvousSecret: new Uint8Array(32).fill(9),
     addedAtMs: Date.UTC(2026, 6, 1),
@@ -222,6 +223,7 @@ describe('switching homes while the first carrier is still being built', () => {
     await pairPhone(HOME_A)
 
     const offered = buildEnrollmentUrl({
+      home: 'fjzyr67buzpyncqmjliwgezvde',
       boxStaticPublic: new Uint8Array(32).fill(8),
       pairingCode: new Uint8Array(16).fill(4),
       rendezvousSecret: new Uint8Array(32).fill(5),
@@ -708,7 +710,7 @@ describe('the way back, for a phone that cannot get in', () => {
       siteId: HOME_ID,
       label: 'Home',
       boxStaticKey: new Uint8Array(32).fill(7),
-      ...(opts.rendezvous === false ? {} : { rendezvousSecret: new Uint8Array(32).fill(9) }),
+      ...(opts.rendezvous === false ? {} : { cloudHome: 'fjzyr67buzpyncqmjliwgezvde', rendezvousSecret: new Uint8Array(32).fill(9) }),
       addedAtMs: Date.UTC(2026, 6, 1),
       lastSeenAtMs: Date.now(),
     }
@@ -850,13 +852,11 @@ describe('the way back, for a phone that cannot get in', () => {
   })
 
   it('reaches it from a row that cannot find its box at all', async () => {
-    // Paired before the rendezvous secret existed, so this phone cannot derive
-    // a handle and there is nothing to connect to. Only a fresh scan or the
-    // sealed copy carries the missing bytes.
+    // A row from before Cloud has no home id. The owner pairs again.
     await homeOnDisk({ rendezvous: false })
     render(App)
 
-    await vi.waitFor(() => expect(said()).toMatch(/before this app could reach it privately/i), {
+    await vi.waitFor(() => expect(said()).toMatch(/pair this home again/i), {
       timeout: 4_000,
     })
     await takeTheWayBack(/get this phone back in/i)

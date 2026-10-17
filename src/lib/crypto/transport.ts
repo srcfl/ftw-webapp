@@ -31,11 +31,10 @@ export const TRANSPORT_OVERHEAD = SEQ_BYTES + TAG_BYTES
 /**
  * How far out of order a frame may arrive and still be accepted.
  *
- * At 1 Hz on lane 0, 64 frames is a minute of tolerance — far beyond any
- * reordering a DataChannel produces, and small enough that the window is one
- * machine word.
+ * The box's Cloud uplink may use QUIC. Bulk can overtake control there even
+ * when this client uses WebSocket. Match Go and iOS's minimum of 1024.
  */
-export const REPLAY_WINDOW = 64
+export const REPLAY_WINDOW = 1024
 
 const WINDOW = BigInt(REPLAY_WINDOW)
 const WINDOW_MASK = (1n << WINDOW) - 1n

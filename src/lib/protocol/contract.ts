@@ -94,6 +94,9 @@ export const SCOPE_MODE_WRITE: Scope = 'ftw.mode.write'
 /** The capability a box offers when its optimizer accepts dispatch. */
 export const CAP_PLAN_DISPATCH = 'plan.dispatch'
 
+/** The box accepts its own session through FTW Cloud. */
+export const CAP_CLOUD_TUN = 'cloud.tun'
+
 /** The capability a box offers when a charger is among its resources. */
 export const CAP_DER_EV = 'der.ev'
 

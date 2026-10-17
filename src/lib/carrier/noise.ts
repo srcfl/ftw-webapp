@@ -214,6 +214,8 @@ export class NoiseCarrier extends CarrierBase implements Carrier {
   #beginHandshake(): void {
     if (this.#closed || this.#awaitingReply || this.#transport) return
 
+    this.#inner.beginSession?.()
+
     // A fresh handshake per connection. Reusing the old one would mint a
     // second cipher pair from the same chaining key — the same key at nonce
     // zero twice, which breaks ChaCha20-Poly1305 outright.
