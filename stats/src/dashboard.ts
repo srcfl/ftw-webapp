@@ -42,7 +42,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section aria-labelledby="overview-title">
       <div class="section-head">
         <div><p class="eyebrow">OVERVIEW</p><h2 id="overview-title">Project at a glance</h2></div>
-        <p class="section-copy">GitHub activity, a reporting-installation estimate and opted-in energy totals.</p>
+        <p class="section-copy">GitHub activity, a reporting-installation estimate and group energy totals.</p>
       </div>
       <div class="overview-grid">
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
@@ -64,14 +64,14 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
         <div><span>Battery charge / discharge</span><strong id="usage-battery-energy">—</strong><small>Recorded hours · kWh</small></div>
         <div><span>Vehicle charge / discharge</span><strong id="usage-vehicle-energy">—</strong><small>Recorded hours · kWh</small></div>
       </div>
-      <p id="usage-note" class="panel-copy">The Cloud usage source is not connected yet. Values appear after compatible boxes report with fresh consent.</p>
+      <p id="usage-note" class="panel-copy">The Cloud usage source is not connected yet. Values appear after privacy review, policy activation and updated owner terms.</p>
       <p class="footnote">Installation counts do not count people or all FTW boxes. Configured limits do not prove physical control. Energy sums the recorded hours in a 24-hour window; gaps reduce coverage. Withheld cells show no value.</p>
     </section>
 
     <section class="panel" aria-labelledby="coverage-title">
       <div class="panel-head"><div><p class="eyebrow">DATA SOURCES</p><h2 id="coverage-title">What this page covers</h2></div></div>
       <p id="coverage-repos" class="panel-copy">Six active public repositories. Private repositories and archived experiments are outside these totals.</p>
-      <p class="panel-copy">The separate relay is retired. Anonymous daily reports now come through FTW Cloud. Hourly energy needs the separate statistics choice. App Store installs are not collected. Native app development appears below.</p>
+      <p class="panel-copy">The separate relay is retired. Anonymous daily reports now come through FTW Cloud. The updated Cloud terms include statistics for all Cloud users. Local FTW users can choose to contribute without remote access. Hourly collection awaits privacy review. App Store installs are not collected. Native app development appears below.</p>
       <p class="footnote">Missing usage values stay unknown. Public energy cells need at least 20 contributing installations. Historical relay reports remain in the archive below.</p>
     </section>
 
@@ -283,7 +283,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('usage-battery-energy', format(m.battery_charge_wh, 1000) + ' / ' + format(m.battery_discharge_wh, 1000));
     setText('usage-vehicle-energy', format(m.vehicle_charge_wh, 1000) + ' / ' + format(m.vehicle_discharge_wh, 1000));
     setText('usage-age', u.state === 'paused' ? 'Waiting for review' : age(u.observed_at));
-    if (u.state === 'paused') setText('usage-note', 'Hourly energy collection is off pending privacy review and policy activation. It then needs a fresh owner choice. Any saved values are historical; no new household reports are collected.');
+    if (u.state === 'paused') setText('usage-note', 'Hourly energy collection is off pending privacy review and policy activation. The updated terms include statistics for all Cloud users; local users receive a separate Yes/No question. Any saved values are historical; no new household reports are collected.');
     if (u.state === 'connected') setText('usage-note', 'Window: ' + u.window_start + ' to ' + u.window_end + '. Each value needs at least 20 contributors; a household above 30% of a sum withholds that cell. ' + (Date.now() - Date.parse(u.observed_at) > 2 * 3600000 ? 'Source is stale; these are the last saved values.' : 'Source: FTW Cloud.'));
   }
 

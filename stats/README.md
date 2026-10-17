@@ -129,9 +129,11 @@ The hourly collector reads only public group cells from
 90 days. It never receives a home id, stats id or per-home reading. Missing,
 stale and privacy-withheld values remain distinct from zero.
 
-The paired Core and Cloud changes implement the separate policy
-`ftw-project-stats-2026-10-v1`. Owners must accept it before their box sends
-new fields; old consents do not enable them. Cloud must also advertise the exact
+The paired Core and Cloud changes implement policy
+`ftw-project-stats-2026-10-v2`. Statistics are included for all Cloud users
+under updated Cloud terms. Local users receive a separate Yes/No question,
+with Yes suggested and no upload before an answer. Earlier choices do not
+accept the new scope. Cloud must also advertise the exact
 policy after the C8 DPIA review. An HTTP 503 with `FTW-Statistics-State: disabled`
 is an expected waiting state, not a collector failure. Until those changes are deployed
 and boxes report, the page shows an awaiting-source state. The public view
