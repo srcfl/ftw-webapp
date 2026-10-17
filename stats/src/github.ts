@@ -258,9 +258,15 @@ async function githubSearchTotal(query: string, token: string): Promise<number> 
 }
 
 async function latestRelease(encodedRepo: string, token: string): Promise<ReleasePoint | null> {
-  const raw = await githubJson(`/repos/${encodedRepo}/releases/latest`, token, true)
-  if (raw === null) return null
-  const release = record(raw, 'release')
+  // /releases/latest excludes prereleases and can keep an old stable tag on
+  // screen while the active native line ships beta releases.
+  const raw = await githubJson(`/repos/${encodedRepo}/releases?per_page=100`, token)
+  if (!Array.isArray(raw) || raw.length > 100) throw new TypeError('releases were not a bounded array')
+  const releases = raw.map((value) => record(value, 'release'))
+    .filter((release) => release['draft'] !== true && release['published_at'])
+    .sort((a, b) => String(b['published_at']).localeCompare(String(a['published_at'])))
+  const release = releases[0]
+  if (!release) return null
   const tag = shortString(release['tag_name'], 'tag_name', 128)
   return { tag, publishedAt: optionalIso(release['published_at'], 'published_at') }
 }

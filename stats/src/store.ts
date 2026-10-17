@@ -1,5 +1,6 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
 import { retentionCutoffs, utcDayCutoff } from './retention.ts'
+import { parseRepos } from './github.ts'
 
 interface GitHubRow {
   repo: string
@@ -182,17 +183,18 @@ export async function dashboardData(
     ).all<CollectorRow>(),
     ])
 
-  const repoOrder = env.GITHUB_REPOS.split(',').map((repo) => repo.trim())
+  const repoOrder = parseRepos(env.GITHUB_REPOS)
   const repositories = [...latest.results]
+    .filter((row) => repoOrder.includes(row.repo))
     .sort((a, b) => repoOrder.indexOf(a.repo) - repoOrder.indexOf(b.repo))
     .map(githubRepository)
-  const githubHistory = history.results.map((row) => ({
+  const githubHistory = history.results.filter((row) => repoOrder.includes(row.repo)).map((row) => ({
     repo: row.repo,
     date: row.date,
     stars: row.stars,
     forks: row.forks,
   }))
-  const trafficDays = traffic.results.map((row) => ({
+  const trafficDays = traffic.results.filter((row) => repoOrder.includes(row.repo)).map((row) => ({
     repo: row.repo,
     date: row.date,
     views: row.views,
@@ -228,6 +230,13 @@ export async function dashboardData(
     schema: 'ftw.project-dashboard/1',
     mode: privateView ? 'private' : 'public',
     generated_at: new Date(nowMs).toISOString(),
+    coverage: {
+      repositories: repoOrder,
+      pending_repositories: repoOrder.filter((repo) => !repositories.some((row) => row['repo'] === repo)),
+      cloud: { hostname: 'cloud.ftw.energy', state: 'not_connected' },
+      native_app: { state: 'not_collected', meaning: 'App Store installs and app sessions are not collected' },
+      fleet: { source: 'relay.ftw.energy', state: 'legacy' },
+    },
     freshness,
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),

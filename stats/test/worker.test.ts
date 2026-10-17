@@ -6,7 +6,7 @@ import { collectGitHub } from '../src/github.ts'
 import { ingestRelay } from '../src/relay.ts'
 import { pruneStoredData, retentionCutoffs, utcDayCutoff } from '../src/retention.ts'
 import { collectSiteTraffic } from '../src/site.ts'
-import { publicFleet } from '../src/store.ts'
+import { dashboardData, publicFleet } from '../src/store.ts'
 import type { AppEnv, RelayIngestBody } from '../src/types.ts'
 
 interface TestEnv extends AppEnv {
@@ -34,7 +34,7 @@ describe('project stats Worker', () => {
     const html = await page.text()
     expect(html).toContain('Project growth, without user tracking.')
     expect(html).toContain('Project at a glance')
-    expect(html).toContain('Aggregate relay activity')
+    expect(html).toContain('What this page covers')
     expect(html).toContain('Daily counts stay hidden while the public sample is small.')
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
@@ -67,6 +67,27 @@ describe('project stats Worker', () => {
     const page = await worker.fetch(new Request('https://stats.ftw.energy/admin'), env)
     expect(api.status).toBe(403)
     expect(page.status).toBe(403)
+  })
+
+  it('names pending repositories and excludes removed repositories from current totals and history', async () => {
+    const now = new Date().toISOString()
+    await env.DB.batch(['ftw', 'ftwdb'].flatMap((repo) => [
+      env.DB.prepare(`INSERT INTO github_snapshots
+        (repo, captured_hour, captured_at, stars, forks, watchers, open_prs, draft_prs,
+         dependency_prs, open_issues, merged_prs_30d, closed_issues_30d, contributors)
+        VALUES (?, ?, ?, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0)`).bind(repo, now, now),
+      env.DB.prepare(`INSERT INTO github_traffic_daily
+        (repo, date, views, unique_visitors, clones, unique_cloners, observed_at)
+        VALUES (?, ?, 9, 0, 0, 0, ?)`).bind(repo, now.slice(0, 10), now),
+    ]))
+    const data = await dashboardData({ ...env, GITHUB_REPOS: 'ftw,ftw-cloud,ftw-app' }, false) as Record<string, any>
+    expect(data.coverage.repositories).toEqual(['ftw', 'ftw-cloud', 'ftw-app'])
+    expect(data.coverage.pending_repositories).toEqual(['ftw-cloud', 'ftw-app'])
+    expect(data.coverage.cloud.state).toBe('not_connected')
+    expect(data.coverage.fleet.source).toBe('relay.ftw.energy')
+    expect(data.github.totals.stars).toBe(7)
+    expect(data.github.totals.views_14d).toBe(9)
+    expect(JSON.stringify(data.github)).not.toContain('ftwdb')
   })
 
   it('opens the private API only after checking the Access signature, issuer and audience', async () => {
@@ -422,8 +443,12 @@ describe('project stats Worker', () => {
       if (url.pathname === '/search/issues') {
         return githubResponse({ total_count: url.searchParams.get('q')?.includes('is:merged') ? 8 : 5 })
       }
-      if (url.pathname === '/repos/srcfl/ftw/releases/latest') {
-        return githubResponse({ tag_name: 'v1.16.1-beta.22', published_at: '2026-08-13T18:00:00Z' })
+      if (url.pathname === '/repos/srcfl/ftw/releases') {
+        return githubResponse([
+          { tag_name: 'v2.3.2', published_at: '2026-08-01T18:00:00Z', draft: false, prerelease: false },
+          { tag_name: 'v1.16.1-beta.22', published_at: '2026-08-13T18:00:00Z', draft: false, prerelease: true },
+          { tag_name: 'unpublished', published_at: '2026-08-14T18:00:00Z', draft: true },
+        ])
       }
       return new Response(null, { status: 404 })
     })
@@ -567,7 +592,7 @@ describe('project stats Worker', () => {
         return githubResponse([])
       }
       if (url.pathname === '/search/issues') return githubResponse({ total_count: 0 })
-      if (url.pathname === '/repos/srcfl/ftw/releases/latest') return new Response(null, { status: 404 })
+      if (url.pathname === '/repos/srcfl/ftw/releases') return githubResponse([])
       return new Response(null, { status: 404 })
     })
 

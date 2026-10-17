@@ -32,7 +32,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <div>
         <p class="eyebrow">OPEN SOURCE ENERGY</p>
         <h1 id="page-title">Project growth, without user tracking.</h1>
-        <p class="lede">GitHub reach, site visits, project work, relay reporting and anonymous fleet reports in one place.</p>
+        <p class="lede">Development across FTW Core, device drivers, Cloud, the native app, the web app and the website. Public project data, with clear sources.</p>
       </div>
       <div id="freshness" class="freshness" aria-label="Data freshness"></div>
     </section>
@@ -42,15 +42,22 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     <section aria-labelledby="overview-title">
       <div class="section-head">
         <div><p class="eyebrow">OVERVIEW</p><h2 id="overview-title">Project at a glance</h2></div>
-        <p class="section-copy">Public figures are broad aggregates. Small fleet counts stay private; relay activity is shown only as ranges.</p>
+        <p class="section-copy">Public figures are aggregates. Daily reports count check-ins, not installations or people.</p>
       </div>
       <div class="overview-grid">
         <article class="metric-card overview-card"><span>Open source reach</span><strong id="overview-stars">—</strong><small id="overview-forks">— forks</small></article>
         <article class="metric-card overview-card"><span>Project work</span><strong id="overview-merges">—</strong><small id="overview-prs">Merged PRs in 30d</small></article>
-        <article class="metric-card overview-card"><span>Site visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 7 complete days</small></article>
-        <article class="metric-card overview-card"><span>Fleet</span><strong id="overview-fleet">—</strong><small id="overview-fleet-note">Daily reports in 30d</small></article>
-        <article class="metric-card overview-card status-card"><span>Relay activity</span><strong id="overview-relay">—</strong><small id="overview-relay-note">Aggregate ranges only</small></article>
+        <article class="metric-card overview-card"><span>Web app visits</span><strong id="overview-visits">—</strong><small id="overview-site-note">Last 7 complete days</small></article>
+        <article class="metric-card overview-card"><span>Daily reports / 30d</span><strong id="overview-fleet">—</strong><small id="overview-fleet-note">Check-ins, not unique boxes</small></article>
+        <article class="metric-card overview-card status-card"><span>Cloud usage</span><strong>Not collected</strong><small>cloud.ftw.energy statistics are not connected yet</small></article>
       </div>
+    </section>
+
+    <section class="panel" aria-labelledby="coverage-title">
+      <div class="panel-head"><div><p class="eyebrow">DATA SOURCES</p><h2 id="coverage-title">What this page covers</h2></div></div>
+      <p id="coverage-repos" class="panel-copy">Six active public repositories. Private repositories and archived experiments are outside these totals.</p>
+      <p class="panel-copy">FTW Cloud is replacing the separate relay. Cloud usage and App Store installs are not collected here. Native app development appears in the repository figures.</p>
+      <p class="footnote">Daily reports still arrive through relay.ftw.energy while it is phased out. They describe opted-in check-ins and do not measure the Cloud rollout.</p>
     </section>
 
     <section aria-labelledby="headline-title">
@@ -82,7 +89,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
 
     <section class="panel" aria-labelledby="site-title">
       <div class="panel-head">
-        <div><p class="eyebrow">FTW.ENERGY</p><h2 id="site-title">Server-side site traffic</h2></div>
+        <div><p id="site-hostname" class="eyebrow">WEB APP</p><h2 id="site-title">Server-side site traffic</h2></div>
         <span class="muted">Last 7 complete days</span>
       </div>
       <div class="mini-grid site-grid">
@@ -98,10 +105,11 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <div class="panel-head"><div><p class="eyebrow">REPOSITORIES</p><h2 id="repositories-title">Work and reach</h2></div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Repository</th><th>Stars</th><th>PRs</th><th>Issues</th><th>30d merged</th><th>Latest release</th><th>Updated</th></tr></thead>
+          <thead><tr><th>Repository</th><th>Stars</th><th>PRs</th><th>Issues</th><th>30d merged</th><th>Published release</th><th>Last push</th></tr></thead>
           <tbody id="repositories"></tbody>
         </table>
       </div>
+      <p class="footnote">The latest published release includes beta releases. New repositories build history from their first collection.</p>
     </section>
 
     <section class="panel" aria-labelledby="fleet-title">
@@ -110,13 +118,14 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
         <span id="fleet-total" class="big-inline">—</span>
       </div>
       <p id="fleet-note" class="panel-copy">A report is one daily check-in, not one user or one unique box.</p>
+      <p id="fleet-source" class="footnote">Source: the retiring relay. Cloud reports are not connected.</p>
       <div id="fleet-chart" class="bars compact" role="img" aria-label="Daily fleet reports"></div>
       <div id="fleet-dimensions" class="dimension-grid"></div>
       <p id="fleet-dimension-note" class="footnote">Versions and device integrations describe aggregate reports, not physical device counts.</p>
     </section>
 
     <section id="relay-section" class="panel" aria-labelledby="relay-title" hidden>
-      <div class="panel-head"><div><p class="eyebrow">RELAY</p><h2 id="relay-title">Relay activity</h2></div><span id="relay-age" class="muted"></span></div>
+      <div class="panel-head"><div><p class="eyebrow">LEGACY RELAY · PRIVATE</p><h2 id="relay-title">Relay activity</h2></div><span id="relay-age" class="muted"></span></div>
       <div class="mini-grid">
         <div><span id="relay-rooms-label">Rooms now</span><strong id="relay-rooms">—</strong></div>
         <div><span id="relay-sockets-label">Sockets now</span><strong id="relay-sockets">—</strong></div>
@@ -186,14 +195,15 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     return element;
   }
 
-  function renderFreshness(freshness) {
-    const labels = [['github', 'GitHub'], ['github_traffic', 'Repo traffic'], ['site', 'Site'], ['fleet', 'Fleet'], ['relay', 'Relay']];
+  function renderFreshness(freshness, privateMode) {
+    const labels = [['github', 'GitHub', 2], ['github_traffic', 'Repo traffic', 30], ['site', 'Web app', 2], ['fleet', 'Legacy report feed', 0.25]];
+    if (privateMode) labels.push(['relay', 'Legacy relay', 0.25]);
     const host = $('freshness');
     host.replaceChildren();
-    for (const [key, label] of labels) {
+    for (const [key, label, maxAgeHours] of labels) {
       const item = node('div', undefined, 'freshness-item');
       const timestamp = freshness && freshness[key];
-      const dot = node('span', '', 'dot ' + (!timestamp ? 'idle' : Date.now() - Date.parse(timestamp) > 2 * 3600000 ? 'warn' : 'ok'));
+      const dot = node('span', '', 'dot ' + (!timestamp ? 'idle' : Date.now() - Date.parse(timestamp) > maxAgeHours * 3600000 ? 'warn' : 'ok'));
       item.append(dot, node('span', label), node('strong', age(timestamp)));
       host.append(item);
     }
@@ -222,7 +232,12 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     const totals = github.totals || {};
     const repositories = github.repositories || [];
     setText('overview-stars', number(totals.stars));
-    setText('overview-forks', number(totals.forks) + ' forks across ' + number(repositories.length) + ' repos');
+    const configured = data.coverage && data.coverage.repositories || repositories.map((repo) => repo.repo);
+    const pending = data.coverage && data.coverage.pending_repositories || [];
+    setText('overview-forks', number(totals.forks) + ' forks · ' + number(repositories.length) + '/' + number(configured.length) + ' repos collected');
+    setText('coverage-repos', number(configured.length) + ' active public repositories: ' + configured.join(', ') + '.' +
+      (pending.length ? ' Awaiting first collection: ' + pending.join(', ') + '.' : '') +
+      ' Private repositories and archived experiments are outside these totals.');
     setText('overview-merges', number(totals.merged_prs_30d));
     setText('overview-prs', 'Merged PRs in 30d · ' + number(totals.open_prs) + ' open now');
 
@@ -241,40 +256,39 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       : null;
     if (data.mode !== 'private' && fleet.state === 'withheld') {
       setText('overview-fleet', '< ' + number(fleet.minimum));
-      setText('overview-fleet-note', fleetSignal || 'Reports in 30d · exact count private');
+      setText('overview-fleet-note', 'Exact count private · check-ins, not boxes');
     } else if (fleet.state === 'empty') {
       setText('overview-fleet', '0');
-      setText('overview-fleet-note', 'No daily reports yet');
+      setText('overview-fleet-note', 'No daily reports in 30d');
     } else {
       setText('overview-fleet', number(fleet.reports_30d));
-      setText('overview-fleet-note', fleetSignal || 'Daily reports in 30d · not unique boxes');
+      setText('overview-fleet-note', 'Check-ins, not unique boxes' + (fleetSignal ? ' · ' + fleetSignal : ''));
     }
-
-    const relay = data.relay_activity || data.relay_status || {};
-    if (relay.state === 'reporting' && relay.rooms_band) {
-      setText('overview-relay', relay.rooms_band + ' rooms');
-      setText('overview-relay-note', relay.frames_band + ' frames in window · ' + age(relay.observed_at));
-    } else {
-      const relayLabel = relay.state === 'delayed' ? 'Delayed' : 'Waiting';
-      setText('overview-relay', relayLabel);
-      setText(
-        'overview-relay-note',
-        relay.observed_at ? 'Last aggregate ' + age(relay.observed_at) : 'First aggregate pending'
-      );
-    }
+    setText('fleet-source', 'Source: the retiring relay. Last summary ' + age(data.freshness && data.freshness.fleet) + '. Cloud reports are not connected.');
   }
 
-  function renderRepositories(repositories) {
+  function renderRepositories(repositories, coverage) {
     const body = $('repositories');
     body.replaceChildren();
-    for (const repo of repositories || []) {
+    const saved = new Map((repositories || []).map((repo) => [repo.repo, repo]));
+    const roles = { ftw: 'Core', 'device-drivers': 'Device drivers', 'ftw-cloud': 'Cloud', 'ftw-app': 'Native app', 'ftw-webapp': 'Web app', 'ftw-web': 'Website' };
+    for (const repoName of coverage && coverage.repositories || [...saved.keys()]) {
+      const repo = saved.get(repoName);
       const row = document.createElement('tr');
       const name = document.createElement('td');
-      const link = node('a', repo.repo);
-      link.href = 'https://github.com/srcfl/' + encodeURIComponent(repo.repo);
+      const link = node('a', repoName);
+      link.href = 'https://github.com/srcfl/' + encodeURIComponent(repoName);
       link.rel = 'noreferrer';
       name.append(link);
+      if (roles[repoName]) name.append(node('small', roles[repoName], 'repo-role'));
       row.append(name);
+      if (!repo) {
+        const pending = node('td', 'Awaiting first collection', 'muted');
+        pending.colSpan = 6;
+        row.append(pending);
+        body.append(row);
+        continue;
+      }
       for (const value of [repo.stars, repo.open_prs, repo.open_issues, repo.merged_prs_30d]) {
         row.append(node('td', number(value), 'numeric'));
       }
@@ -379,6 +393,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
 
   function renderSite(site) {
     const totals = site && site.totals || {};
+    setText('site-hostname', site && site.hostname || 'WEB APP');
     setText('site-visits', number(totals.visits_7d));
     setText('site-requests', number(totals.requests_7d));
     setText('site-bytes', bytes(totals.response_bytes_7d));
@@ -463,34 +478,22 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     return names[label] || label.replaceAll('_', ' ');
   }
 
-  function renderRelay(relay, privateMode) {
+  function renderRelay(relay) {
     if (!relay) return;
     $('relay-section').hidden = false;
-    const chart = $('relay-chart');
-    chart.hidden = !privateMode;
-    if ((privateMode && (relay.state !== 'visible' || !relay.latest)) || (!privateMode && relay.state === 'empty')) {
+    if (relay.state !== 'visible' || !relay.latest) {
       setText('relay-age', 'not collected');
-      if (privateMode) renderBars('relay-chart', [], number);
+      renderBars('relay-chart', [], number);
       return;
     }
-    if (privateMode) {
-      setText('relay-title', 'Blind relay load');
-      setText('relay-age', age(relay.latest.observed_at));
-      setText('relay-rooms', number(relay.latest.rooms));
-      setText('relay-sockets', number(relay.latest.sockets));
-      setText('relay-frames', number(relay.window && relay.window.frames));
-      setText('relay-bytes', bytes(relay.window && relay.window.bytes));
-      setText('relay-note', 'Counts only. The stats service never receives handles, addresses or routed frames.');
-      renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
-      return;
-    }
-    setText('relay-title', 'Aggregate relay activity');
-    setText('relay-age', relay.state === 'delayed' ? 'delayed · ' + age(relay.observed_at) : age(relay.observed_at));
-    setText('relay-rooms', relay.rooms_band || '—');
-    setText('relay-sockets', relay.sockets_band || '—');
-    setText('relay-frames', relay.frames_band || '—');
-    setText('relay-bytes', relay.bytes_band || '—');
-    setText('relay-note', 'Coarse ranges cover the current relay process, up to the last 24 hours. They are activity bands, not user or household counts.');
+    setText('relay-title', 'Legacy relay load');
+    setText('relay-age', age(relay.latest.observed_at));
+    setText('relay-rooms', number(relay.latest.rooms));
+    setText('relay-sockets', number(relay.latest.sockets));
+    setText('relay-frames', number(relay.window && relay.window.frames));
+    setText('relay-bytes', bytes(relay.window && relay.window.bytes));
+    setText('relay-note', 'The separate relay is being phased out. These counters do not measure FTW Cloud. No handles, addresses or routed frames reach this dashboard.');
+    renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
   }
 
   function renderPrivate(data) {
@@ -519,15 +522,15 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const data = await response.json();
       setText('generated', 'Updated ' + age(data.generated_at));
-      renderFreshness(data.freshness || {});
+      renderFreshness(data.freshness || {}, data.mode === 'private');
       renderOverview(data);
       renderHeadline(data.github || {});
-      renderRepositories(data.github && data.github.repositories);
+      renderRepositories(data.github && data.github.repositories, data.coverage);
       renderLine('star-chart', aggregateStateHistory(data.github && data.github.history, 'stars', data.github && data.github.repositories));
       renderTraffic(data.github && data.github.traffic, data.github && data.github.repositories);
       renderSite(data.site);
       renderFleet(data.fleet, data.mode === 'private');
-      renderRelay(data.mode === 'private' ? data.relay : data.relay_activity, data.mode === 'private');
+      if (data.mode === 'private') renderRelay(data.relay);
       if (data.mode === 'private') renderPrivate(data);
     } catch (error) {
       const notice = $('notice');
@@ -554,7 +557,7 @@ function randomNonce(): string {
 const styles = `
 :root{--bg:#0b0c0b;--surface:#111311;--raised:#171917;--line:#2a2d2a;--fg:#f2f1ec;--dim:#9c9f9a;--accent:#ffab2e;--accent-soft:#3b2b13;--ok:#72d69b;--warn:#ffbf5f;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg);font-synthesis:none}
 [hidden]{display:none!important}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -20%,#252116 0,transparent 34rem),var(--bg);min-height:100vh}a{color:inherit}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,56px);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(16px);z-index:5}.brand{display:flex;gap:10px;align-items:center;text-decoration:none;font:700 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.18em}.brand-mark{color:var(--accent)}.brand-slash{color:#5e615d}.top-actions{display:flex;align-items:center;gap:16px;font:11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em}.mode{color:var(--accent);border:1px solid #59401c;padding:6px 8px;border-radius:2px}.muted{color:var(--dim)}main{width:min(1280px,calc(100% - 36px));margin:0 auto;padding:64px 0 72px}.hero{display:flex;justify-content:space-between;gap:48px;align-items:flex-end;margin-bottom:54px}.eyebrow{color:var(--accent);font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;margin:0 0 12px}h1{font-size:clamp(36px,5vw,72px);line-height:.98;letter-spacing:-.055em;max-width:800px;margin:0}h2{font-size:20px;letter-spacing:-.025em;margin:0}h3{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}.lede{color:var(--dim);font-size:17px;max-width:660px;line-height:1.5;margin:20px 0 0}.freshness{min-width:230px;display:grid;gap:8px}.freshness-item{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;font-size:12px;color:var(--dim)}.freshness-item strong{font-weight:500;color:var(--fg)}.dot{width:7px;height:7px;border-radius:50%;background:#555;display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 12px color-mix(in srgb,var(--ok) 50%,transparent)}.dot.warn{background:var(--warn)}.dot.idle{background:#555}.notice{border:1px solid #674a20;background:#21190e;color:#ffd48f;padding:14px 16px;margin-bottom:24px}.section-head,.panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.section-head{margin:0 0 16px}.section-copy{color:var(--dim);font-size:12px;line-height:1.5;max-width:560px;margin:0;text-align:right}.overview-grid,.metric-grid{display:grid;border-top:1px solid var(--line);border-left:1px solid var(--line);margin-bottom:28px}.overview-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}.metric-card{background:color-mix(in srgb,var(--surface) 92%,transparent);min-height:154px;padding:22px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column}.overview-card{min-height:142px}.metric-card>span,.mini-grid span{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.metric-card strong{font-size:42px;line-height:1;margin:auto 0 12px;letter-spacing:-.05em}.metric-card.status-card strong{font-size:30px;letter-spacing:-.035em}.metric-card small{color:var(--dim);font-size:12px;line-height:1.35}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.panel{background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line);padding:22px;margin:18px 0}.two-col>.panel{margin:0}.chart-panel{min-height:330px}.chart{height:235px;margin-top:24px}.chart svg{display:block;width:100%;height:100%;overflow:visible}.chart-area{fill:color-mix(in srgb,var(--accent) 9%,transparent)}.chart-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round}.bars{height:230px;display:flex;gap:4px;align-items:flex-end;margin-top:24px;border-bottom:1px solid var(--line);padding:0 2px}.bars.compact{height:150px}.bar-wrap{height:100%;flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px}.bar{width:100%;max-width:28px;background:linear-gradient(to top,#88520d,var(--accent));border-radius:2px 2px 0 0;min-height:2px}.bar.withheld{background:#4a4c49}.bar.h0{height:2%}.bar.h1{height:5%}.bar.h2{height:10%}.bar.h3{height:15%}.bar.h4{height:20%}.bar.h5{height:25%}.bar.h6{height:30%}.bar.h7{height:35%}.bar.h8{height:40%}.bar.h9{height:45%}.bar.h10{height:50%}.bar.h11{height:55%}.bar.h12{height:60%}.bar.h13{height:65%}.bar.h14{height:70%}.bar.h15{height:75%}.bar.h16{height:80%}.bar.h17{height:85%}.bar.h18{height:90%}.bar.h19{height:95%}.bar.h20{height:100%}.bar-wrap span{font-size:8px;color:var(--dim);height:12px;white-space:nowrap}.table-wrap{overflow-x:auto;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--dim);font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;padding:12px 14px;border-bottom:1px solid var(--line)}td{padding:15px 14px;border-bottom:1px solid #232523;white-space:nowrap}td:first-child{font-weight:650}td a{text-decoration-color:#51544f;text-underline-offset:3px}.numeric{font-variant-numeric:tabular-nums}.empty{color:var(--dim);padding:30px 4px;text-align:center}.panel-copy,.footnote{color:var(--dim);font-size:13px;line-height:1.5}.big-inline{font-size:28px;font-weight:700;letter-spacing:-.04em}.dimension-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:26px}.dimension{border-top:1px solid var(--line);padding-top:14px}.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d5d3cb;background:var(--raised);border:1px solid var(--line);padding:6px 8px;border-radius:2px}.mini-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);margin-top:22px}.mini-grid>div{background:var(--raised);padding:18px;display:flex;flex-direction:column;gap:12px}.mini-grid strong{font-size:26px}.ranked-list,.status-list{list-style:none;padding:0;margin:18px 0 0}.ranked-list li{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}.status-list li{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:12px}footer{border-top:1px solid var(--line);padding:24px clamp(18px,4vw,56px);display:flex;justify-content:space-between;gap:20px;color:var(--dim);font-size:12px}footer a{color:var(--fg);text-underline-offset:3px}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -20%,#252116 0,transparent 34rem),var(--bg);min-height:100vh}a{color:inherit}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,56px);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(16px);z-index:5}.brand{display:flex;gap:10px;align-items:center;text-decoration:none;font:700 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.18em}.brand-mark{color:var(--accent)}.brand-slash{color:#5e615d}.top-actions{display:flex;align-items:center;gap:16px;font:11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em}.mode{color:var(--accent);border:1px solid #59401c;padding:6px 8px;border-radius:2px}.muted{color:var(--dim)}main{width:min(1280px,calc(100% - 36px));margin:0 auto;padding:64px 0 72px}.hero{display:flex;justify-content:space-between;gap:48px;align-items:flex-end;margin-bottom:54px}.eyebrow{color:var(--accent);font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;margin:0 0 12px}h1{font-size:clamp(36px,5vw,72px);line-height:.98;letter-spacing:-.055em;max-width:800px;margin:0}h2{font-size:20px;letter-spacing:-.025em;margin:0}h3{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}.lede{color:var(--dim);font-size:17px;max-width:660px;line-height:1.5;margin:20px 0 0}.freshness{min-width:230px;display:grid;gap:8px}.freshness-item{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;font-size:12px;color:var(--dim)}.freshness-item strong{font-weight:500;color:var(--fg)}.dot{width:7px;height:7px;border-radius:50%;background:#555;display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 12px color-mix(in srgb,var(--ok) 50%,transparent)}.dot.warn{background:var(--warn)}.dot.idle{background:#555}.notice{border:1px solid #674a20;background:#21190e;color:#ffd48f;padding:14px 16px;margin-bottom:24px}.section-head,.panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.section-head{margin:0 0 16px}.section-copy{color:var(--dim);font-size:12px;line-height:1.5;max-width:560px;margin:0;text-align:right}.overview-grid,.metric-grid{display:grid;border-top:1px solid var(--line);border-left:1px solid var(--line);margin-bottom:28px}.overview-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}.metric-card{background:color-mix(in srgb,var(--surface) 92%,transparent);min-height:154px;padding:22px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column}.overview-card{min-height:142px}.metric-card>span,.mini-grid span{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.metric-card strong{font-size:42px;line-height:1;margin:auto 0 12px;letter-spacing:-.05em}.metric-card.status-card strong{font-size:30px;letter-spacing:-.035em}.metric-card small{color:var(--dim);font-size:12px;line-height:1.35}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.panel{background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line);padding:22px;margin:18px 0}.two-col>.panel{margin:0}.chart-panel{min-height:330px}.chart{height:235px;margin-top:24px}.chart svg{display:block;width:100%;height:100%;overflow:visible}.chart-area{fill:color-mix(in srgb,var(--accent) 9%,transparent)}.chart-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round}.bars{height:230px;display:flex;gap:4px;align-items:flex-end;margin-top:24px;border-bottom:1px solid var(--line);padding:0 2px}.bars.compact{height:150px}.bar-wrap{height:100%;flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px}.bar{width:100%;max-width:28px;background:linear-gradient(to top,#88520d,var(--accent));border-radius:2px 2px 0 0;min-height:2px}.bar.withheld{background:#4a4c49}.bar.h0{height:2%}.bar.h1{height:5%}.bar.h2{height:10%}.bar.h3{height:15%}.bar.h4{height:20%}.bar.h5{height:25%}.bar.h6{height:30%}.bar.h7{height:35%}.bar.h8{height:40%}.bar.h9{height:45%}.bar.h10{height:50%}.bar.h11{height:55%}.bar.h12{height:60%}.bar.h13{height:65%}.bar.h14{height:70%}.bar.h15{height:75%}.bar.h16{height:80%}.bar.h17{height:85%}.bar.h18{height:90%}.bar.h19{height:95%}.bar.h20{height:100%}.bar-wrap span{font-size:8px;color:var(--dim);height:12px;white-space:nowrap}.table-wrap{overflow-x:auto;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--dim);font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;padding:12px 14px;border-bottom:1px solid var(--line)}td{padding:15px 14px;border-bottom:1px solid #232523;white-space:nowrap}td:first-child{font-weight:650}td a{text-decoration-color:#51544f;text-underline-offset:3px}.repo-role{display:block;color:var(--dim);font-size:11px;font-weight:400;margin-top:4px}.numeric{font-variant-numeric:tabular-nums}.empty{color:var(--dim);padding:30px 4px;text-align:center}.panel-copy,.footnote{color:var(--dim);font-size:13px;line-height:1.5}.big-inline{font-size:28px;font-weight:700;letter-spacing:-.04em}.dimension-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:26px}.dimension{border-top:1px solid var(--line);padding-top:14px}.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d5d3cb;background:var(--raised);border:1px solid var(--line);padding:6px 8px;border-radius:2px}.mini-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);margin-top:22px}.mini-grid>div{background:var(--raised);padding:18px;display:flex;flex-direction:column;gap:12px}.mini-grid strong{font-size:26px}.ranked-list,.status-list{list-style:none;padding:0;margin:18px 0 0}.ranked-list li{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}.status-list li{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:12px}footer{border-top:1px solid var(--line);padding:24px clamp(18px,4vw,56px);display:flex;justify-content:space-between;gap:20px;color:var(--dim);font-size:12px}footer a{color:var(--fg);text-underline-offset:3px}
 .mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}
 @media(max-width:1100px){.overview-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.hero{align-items:flex-start;flex-direction:column}.freshness{width:100%;grid-template-columns:repeat(2,1fr)}.section-head{align-items:flex-start;flex-direction:column}.section-copy{text-align:left}.overview-grid,.metric-grid{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.dimension-grid{grid-template-columns:repeat(2,1fr)}.mini-grid{grid-template-columns:repeat(2,1fr)}.mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}}

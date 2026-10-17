@@ -5,13 +5,38 @@ configured GitHub repositories, reads server-side traffic counts for
 `app.ftw.energy`, accepts signed aggregate counts from the blind relay, and serves a
 public and a private dashboard at `stats.ftw.energy`.
 
-The public view shows repository data, site traffic, coarse relay activity and
-privacy-bounded fleet data. Relay rooms, sockets, frames and bytes appear only
-as ranges. Fleet totals stay hidden until at least `PUBLIC_MIN_REPORTS` reports
+The public view follows the six active public product repositories: `ftw`,
+`device-drivers`, `ftw-cloud`, `ftw-app`, `ftw-webapp` and `ftw-web`. Private
+repositories, the archived `ftwdb` experiment and the solver demo are outside
+these totals. Release labels name the newest published release among the
+latest 100 releases, including beta releases. A new repository appears as
+awaiting collection until its first snapshot arrives; missing data is not zero.
+
+The public view shows repository data, web app traffic and aggregate daily
+reports. Fleet totals stay hidden until at least `PUBLIC_MIN_REPORTS` reports
 exist in the chosen period. Each version, device integration and other
 dimension label also stays hidden until its own count reaches that threshold.
 A report is one daily check-in, not one user or one box. The private view may
 show smaller aggregate counts, but it requires a valid Cloudflare Access JWT.
+
+## FTW Cloud transition
+
+FTW Cloud is replacing the separate relay. This dashboard does not yet receive
+Cloud usage statistics or the Cloud statistics consent flow's reports. It also
+does not collect App Store installs or native app sessions. Native app and
+Cloud development appear in the repository figures; those figures do not
+measure use of either product.
+
+The existing daily reports still reach this Worker through the relay's signed
+export. Keep that ingest route until its replacement works. The public page
+names this source and shows its age. Relay load stays in the private view as
+migration diagnostics; it must never stand in for Cloud usage.
+
+Before retiring the relay, move both Core's daily-report destination and the
+aggregate export to an agreed replacement. FTW Cloud's statistics work needs
+its own consent, ingest and privacy checks in `srcfl/ftw-cloud` and Core; a URL
+change in this Worker cannot supply them. Do not combine legacy daily totals
+with a new feed without handling overlap and their different consent rules.
 
 The service never accepts routed frames, room handles, box ids, serials, IP
 addresses, site names, or raw fleet reports. The relay signs one body made from
@@ -94,6 +119,7 @@ windows are deleted, not only hidden from dashboard queries.
 - Fleet reports are daily reports, not users or unique installs. Public version
   and device integration names show which broad labels appeared in those
   reports. A device integration is a type, not a count of physical devices.
-- Public relay figures are coarse ranges over the current relay process, capped
-  to the last 24 hours of stored snapshots. The private view shows current room
-  and socket counts plus frame and byte deltas for the same window.
+- The API keeps its legacy relay activity bands for compatibility. The public
+  page does not render them. The private view shows current room and socket
+  counts plus frame and byte deltas over the current relay process, capped to
+  the last 24 hours. These counts do not measure FTW Cloud.
