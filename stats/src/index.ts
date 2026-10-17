@@ -72,30 +72,22 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: AppEnv): Promise<void> {
-    const daily = controller.cron === '17 0 * * *'
     const failures: string[] = []
-    try {
-      await collectGitHub(env, daily, controller.scheduledTime)
-    } catch (error) {
-      failures.push('github')
-      console.error('stats: scheduled GitHub collection failed', {
-        kind: error instanceof Error ? error.name : 'unknown',
-      })
-    }
-    try {
-      await collectSiteTraffic(env, controller.scheduledTime)
-    } catch (error) {
-      failures.push('site')
-      console.error('stats: scheduled site collection failed', {
-        kind: error instanceof Error ? error.name : 'unknown',
-        code: siteCollectorFailureCode(error),
-      })
-    }
-    try { await collectUsage(env) } catch {
- failures.push('cloud:usage'); console.error('stats: Cloud usage collection unavailable')
- }
- try {await collectFleet(env)} catch {failures.push('cloud:fleet')}
- await pruneStoredData(env.DB, controller.scheduledTime)
+    // Each schedule gets its own external-request budget. Six repository
+    // snapshots plus seven analytics queries can consume the 50-request cap.
+    if (controller.cron === '3 * * * *' || controller.cron === '17 0 * * *') {
+      try { await collectGitHub(env, controller.cron === '17 0 * * *', controller.scheduledTime) }
+      catch { failures.push('github') }
+    } else if (controller.cron === '23 * * * *') {
+      try { await collectSiteTraffic(env, controller.scheduledTime) }
+      catch (error) {
+        failures.push('site')
+        console.error('stats: scheduled site collection failed', { code: siteCollectorFailureCode(error) })
+      }
+      try { await collectUsage(env) } catch { failures.push('cloud:usage') }
+      try { await collectFleet(env) } catch { failures.push('cloud:fleet') }
+    } else { throw new Error('unknown collection schedule') }
+    await pruneStoredData(env.DB, controller.scheduledTime)
     if (failures.length > 0) throw new Error('one or more scheduled collectors failed')
   },
 } satisfies ExportedHandler<AppEnv>

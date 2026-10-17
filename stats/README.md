@@ -65,8 +65,11 @@ UTC days. It uses one aggregate query per day to fit the zone's one-day query
 limit. It sends no
 browser script and stores no request rows, IP addresses or visitor ids.
 
-The GitHub repository snapshot and site query run each hour. GitHub traffic
-runs once a day because GitHub exposes it as a rolling daily window. Cloud usage collection also runs hourly. The retired relay no longer
+Repository snapshots run at minute 3 each hour. Public Cloud feeds and site
+traffic run at minute 23 in a separate invocation. GitHub traffic runs alone
+at 00:17 UTC because GitHub exposes it as a rolling daily window. Keeping
+these schedules separate leaves each its own external-request budget; the
+combined six-repo snapshot and site queries can reach the 50-request limit. The retired relay no longer
 supplies an active source.
 
 Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` as Worker variables. Protect
