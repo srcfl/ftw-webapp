@@ -116,6 +116,8 @@ capabilities:
   # answers the agent.* messages and approval.key.set (docs/agents.md in
   # srcfl/ftw). Absent means the app offers no Access list.
   - access.agents
+  # Owner-created codes for one agent with its own rights and expiry.
+  - access.invites
   # The box keeps cars apart from chargers: each car has its own level, goal
   # and sources, and a charger names the car on it (docs/cars.md in
   # srcfl/ftw). The box answers the car ops and session.car.set. Absent
