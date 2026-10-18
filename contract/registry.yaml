@@ -141,7 +141,7 @@ scopes:
   - { name: ftw.members.write, desc: Invite and revoke }
   - { name: ftw.logs.read, desc: Log excerpts the box redacts }
   - { name: ftw.config.read, desc: Configuration the box redacts }
-  - { name: ftw.diag.run, desc: Checks that change nothing }
+  - { name: ftw.diag.run, desc: Full technical diagnostics and read API }
   - { name: ftw.dispatch.hold, desc: Hold energy assets for a capped time }
   - { name: ftw.goals.request, desc: Ask an owner to change a durable goal }
   # Reserved: no op asks for an update yet, and no role but owner carries it.
@@ -445,7 +445,7 @@ reads:
   - { msg: logs.get, scope: ftw.logs.read, desc: A log excerpt the box redacts }
   - { msg: config.get, scope: ftw.config.read, desc: A configuration section the box redacts }
   - { msg: diag.run, scope: ftw.diag.run, desc: A check that changes nothing }
-  - { msg: api.read, const: MsgAPIRead, scope: ftw.diag.run, desc: Read a diagnostic API route within its data scope }
+  - { msg: api.read, const: MsgAPIRead, scope: ftw.diag.run, desc: Read the full technical diagnostic API }
 
 # ---------------------------------------------------------------------------
 # Cars. A car belongs to its owner, not to the home, and visits chargers. The
