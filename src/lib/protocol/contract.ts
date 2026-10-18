@@ -31,6 +31,7 @@ export const SCOPES = [
   'ftw.logs.read',
   'ftw.config.read',
   'ftw.diag.run',
+  'ftw.setup.write',
   'ftw.dispatch.hold',
   'ftw.goals.request',
   'ftw.update.request',
@@ -50,6 +51,7 @@ const AGENT_SCOPES: readonly string[] = [
   'ftw.logs.read',
   'ftw.config.read',
   'ftw.diag.run',
+  'ftw.setup.write',
   'ftw.dispatch.hold',
   'ftw.goals.request',
 ]

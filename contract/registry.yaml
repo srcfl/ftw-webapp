@@ -142,6 +142,7 @@ scopes:
   - { name: ftw.logs.read, desc: Log excerpts the box redacts }
   - { name: ftw.config.read, desc: Configuration the box redacts }
   - { name: ftw.diag.run, desc: Full technical diagnostics and read API }
+  - { name: ftw.setup.write, desc: Save confirmed system setup and restart to apply it after user confirmation }
   - { name: ftw.dispatch.hold, desc: Hold energy assets for a capped time }
   - { name: ftw.goals.request, desc: Ask an owner to change a durable goal }
   # Reserved: no op asks for an update yet, and no role but owner carries it.
@@ -173,10 +174,10 @@ roles:
   # is the release check, which reads a health summary and nothing else.
   agent:
     label: Assistant
-    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.dispatch.hold, ftw.goals.request]
+    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.setup.write, ftw.dispatch.hold, ftw.goals.request]
   support:
     label: Sourceful support
-    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.dispatch.hold, ftw.goals.request]
+    scopes: [ftw.live.read, ftw.history.read, ftw.plan.read, ftw.health.read, ftw.events.read, ftw.logs.read, ftw.config.read, ftw.diag.run, ftw.setup.write, ftw.dispatch.hold, ftw.goals.request]
   release:
     label: Release check
     scopes: [ftw.health.read]
@@ -510,3 +511,14 @@ charger_car_fields:
   - { name: carCorrected, kind: bool, unit: null, desc: A better rule replaced the car the box first named }
   - { name: carCorrectedFrom, kind: text, unit: null, desc: The car the box named before that }
   - { name: choose, kind: text_list, unit: null, desc: While asking the cars a tap may pick. At most four }
+
+# Agent setup calls use the box's typed draft service. They do not carry an
+# HTTP path or grant general configuration or membership authority.
+agent_calls:
+  - { msg: setup.schema, const: MsgSetupSchema, scope: ftw.diag.run, desc: Read this build's complete setup schema }
+  - { msg: setup.status, const: MsgSetupStatus, scope: ftw.diag.run, desc: Resume the masked setup draft }
+  - { msg: setup.edit, const: MsgSetupEdit, scope: ftw.setup.write, desc: Patch the exact current setup draft }
+  - { msg: setup.reset, const: MsgSetupReset, scope: ftw.setup.write, desc: Start a new draft from current settings }
+  - { msg: setup.validate, const: MsgSetupValidate, scope: ftw.setup.write, desc: Check the exact setup draft without applying it }
+  - { msg: setup.commit, const: MsgSetupCommit, scope: ftw.setup.write, desc: Save the exact checked and confirmed draft }
+  - { msg: setup.restart, const: MsgSetupRestart, scope: ftw.setup.write, desc: Restart to apply the exact saved setup after user confirmation }
