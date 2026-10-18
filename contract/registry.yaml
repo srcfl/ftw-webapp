@@ -445,6 +445,7 @@ reads:
   - { msg: logs.get, scope: ftw.logs.read, desc: A log excerpt the box redacts }
   - { msg: config.get, scope: ftw.config.read, desc: A configuration section the box redacts }
   - { msg: diag.run, scope: ftw.diag.run, desc: A check that changes nothing }
+  - { msg: api.read, const: MsgAPIRead, scope: ftw.diag.run, desc: Read a diagnostic API route within its data scope }
 
 # ---------------------------------------------------------------------------
 # Cars. A car belongs to its owner, not to the home, and visits chargers. The
