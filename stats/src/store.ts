@@ -615,7 +615,7 @@ function byteCountBand(value: number): string {
 
 function publicMinimum(value: string): number {
   const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed >= 10 && parsed <= 1000 ? parsed : 10
+  return Number.isSafeInteger(parsed) && parsed >= 5 && parsed <= 1000 ? parsed : 10
 }
 
 function latestTimestamp(values: Array<string | null>): string | null {

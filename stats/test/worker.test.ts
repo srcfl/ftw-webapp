@@ -47,7 +47,7 @@ describe('project stats Worker', () => {
     expect(data.fleet).toMatchObject({
       state: 'empty',
       reports_30d: null,
-      minimum: 10,
+      minimum: 5,
       observed: { ftw_versions: [], drivers: [] },
     })
     expect(data.relay_status).toEqual({
@@ -140,7 +140,7 @@ describe('project stats Worker', () => {
 
     const publicResponse = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await publicResponse.json<Record<string, any>>()
-    expect(data.fleet).toMatchObject({ state: 'withheld', reports_30d: null, minimum: 10 })
+    expect(data.fleet).toMatchObject({ state: 'withheld', reports_30d: null, minimum: 5 })
     expect(data.fleet.observed).toEqual({ ftw_versions: [], drivers: [] })
     expect(data.fleet.dimensions).toEqual({})
     expect(JSON.stringify(data.fleet)).not.toContain('v1.16.1-beta.22')
@@ -164,21 +164,21 @@ describe('project stats Worker', () => {
     expect(data.freshness.fleet).toBe(now.toISOString())
   })
 
-  it('shows only version and driver labels whose own count reaches ten', async () => {
+  it('shows only version and driver labels whose own count reaches the minimum', async () => {
     const now = new Date()
     const payload = relayPayload(now, 20)
-    payload.fleet.days[0]!.channels = { beta: 9, unknown: 11 }
-    payload.fleet.days[0]!.ftw_versions = { 'common-version': 10, 'rare-version': 9, 'other-version': 1 }
-    payload.fleet.days[0]!.drivers = { easee_cloud: 10, solis: 9, modbus: 1 }
+    payload.fleet.days[0]!.channels = { beta: 4, unknown: 16 }
+    payload.fleet.days[0]!.ftw_versions = { 'common-version': 15, 'rare-version': 4, 'other-version': 1 }
+    payload.fleet.days[0]!.drivers = { easee_cloud: 15, solis: 4, modbus: 1 }
     await sendRelay(payload, now)
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await response.json<Record<string, any>>()
     expect(data.fleet.reports_30d).toBe(20)
     expect(data.fleet.days[0].reports).toBe(20)
-    expect(data.fleet.dimensions.channels).toEqual({ unknown: 11 })
-    expect(data.fleet.dimensions.ftw_versions).toEqual({ 'common-version': 10 })
-    expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 10 })
+    expect(data.fleet.dimensions.channels).toEqual({ unknown: 16 })
+    expect(data.fleet.dimensions.ftw_versions).toEqual({ 'common-version': 15 })
+    expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 15 })
     expect(data.fleet.observed).toEqual({
       ftw_versions: ['common-version'],
       drivers: ['easee_cloud'],
@@ -767,6 +767,16 @@ describe('installation estimates',()=>{
   v.days[0]!.drivers={privateDriver:1} as {}
   expect(()=>parseFleet(v,now)).toThrow()
   expect(()=>parseFleet({...fleetView(now),home:'secret'},now)).toThrow()
+ })
+ it('takes a Cloud group size of 5 and holds each day and label to it',()=>{
+  const now=Date.UTC(2026,9,23,13);const v={...fleetView(now),minimum:5}
+  v.days[0]!.reports=5;v.days[0]!.drivers={easee_cloud:5}
+  expect(parseFleet(v,now)).toEqual(v)
+  v.days[0]!.drivers={easee_cloud:4}
+  expect(()=>parseFleet(v,now)).toThrow('small fleet label')
+  v.days[0]!.drivers={};v.days[0]!.reports=4
+  expect(()=>parseFleet(v,now)).toThrow('small fleet count')
+  expect(()=>parseFleet({...fleetView(now),minimum:3},now)).toThrow('invalid public fleet')
  })
  it('collects the safe Cloud feed independently of hourly energy approval',async()=>{
   const now=Date.UTC(2026,9,17,13)
