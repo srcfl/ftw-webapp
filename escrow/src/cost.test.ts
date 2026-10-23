@@ -388,5 +388,7 @@ describe('and the clock agrees', () => {
       ratio,
       `medians in microseconds: ${medians.map((n) => (n / 1000).toFixed(1)).join(', ')} — a read tells the clock what its bucket holds`
     ).toBeLessThan(1.5)
-  })
+    // 800 timed reads take seconds on a busy runner; vitest's 5 s default cut
+    // it off on 23 October 2026 with the ratio still unmeasured.
+  }, 60_000)
 })
