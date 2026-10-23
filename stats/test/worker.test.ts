@@ -768,7 +768,7 @@ describe('installation estimates',()=>{
   expect(()=>parseFleet(v,now)).toThrow()
   expect(()=>parseFleet({...fleetView(now),home:'secret'},now)).toThrow()
  })
- it('takes FTW Cloud's group size of 5 and holds each day and label to it',()=>{
+ it('takes a Cloud group size of 5 and holds each day and label to it',()=>{
   const now=Date.UTC(2026,9,23,13);const v={...fleetView(now),minimum:5}
   v.days[0]!.reports=5;v.days[0]!.drivers={easee_cloud:5}
   expect(parseFleet(v,now)).toEqual(v)
