@@ -768,6 +768,16 @@ describe('installation estimates',()=>{
   expect(()=>parseFleet(v,now)).toThrow()
   expect(()=>parseFleet({...fleetView(now),home:'secret'},now)).toThrow()
  })
+ it('takes FTW Cloud's group size of 5 and holds each day and label to it',()=>{
+  const now=Date.UTC(2026,9,23,13);const v={...fleetView(now),minimum:5}
+  v.days[0]!.reports=5;v.days[0]!.drivers={easee_cloud:5}
+  expect(parseFleet(v,now)).toEqual(v)
+  v.days[0]!.drivers={easee_cloud:4}
+  expect(()=>parseFleet(v,now)).toThrow('small fleet label')
+  v.days[0]!.drivers={};v.days[0]!.reports=4
+  expect(()=>parseFleet(v,now)).toThrow('small fleet count')
+  expect(()=>parseFleet({...fleetView(now),minimum:3},now)).toThrow('invalid public fleet')
+ })
  it('collects the safe Cloud feed independently of hourly energy approval',async()=>{
   const now=Date.UTC(2026,9,17,13)
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(fleetView(now))))

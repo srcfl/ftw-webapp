@@ -1,25 +1,29 @@
 import { saveCollectorRun } from './collector.ts'
 import type { AppEnv } from './types.ts'
 
+// FTW Cloud's own group size for a public day. 5 since 23 October 2026;
+// 10 before, kept while an older Cloud may still answer.
+const PUBLIC_FLEET_MINIMUMS = [5, 10]
 const dimensions = ['ftw_versions', 'channels', 'drivers', 'battery_kwh', 'price_zones', 'install_age'] as const
 export interface PublicFleetDay { date: string; reports: number | null }
 export interface PublicFleetFeed { schema: 'ftw.fleet-public/1'; minimum: number; meaning: string; observed_at: string; days: PublicFleetDay[] }
 export function parseFleet(value: unknown, nowMs: number): PublicFleetFeed {
   const v = value as Record<string, unknown>
-  if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join() !== ['days','meaning','minimum','observed_at','schema'].join() || v['schema'] !== 'ftw.fleet-public/1' || v['minimum'] !== 10 || v['meaning'] !== 'reports, not unique boxes') throw new Error('invalid public fleet')
+  if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join() !== ['days','meaning','minimum','observed_at','schema'].join() || v['schema'] !== 'ftw.fleet-public/1' || !PUBLIC_FLEET_MINIMUMS.includes(v['minimum'] as number) || v['meaning'] !== 'reports, not unique boxes') throw new Error('invalid public fleet')
   const observed = Date.parse(String(v['observed_at']))
   if (!Number.isFinite(observed) || Math.abs(nowMs-observed)>2*3600_000 || !Array.isArray(v['days']) || v['days'].length>90) throw new Error('invalid fleet window')
+  const minimum = v['minimum'] as number
   const seen = new Set()
   for (const item of v['days']) {
     const d = item as Record<string, unknown>, date = String(d['date'])
     if (!d || Object.keys(d).sort().join() !== ['date','reports',...dimensions].sort().join() || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10)!==date || date>new Date(nowMs).toISOString().slice(0,10) || Date.parse(date)<nowMs-91*86400_000 || seen.has(date)) throw new Error('invalid fleet day')
     seen.add(date)
     const reports = d['reports']
-    if (reports !== null && (!Number.isSafeInteger(reports) || (reports as number)<10 || (reports as number)>100000)) throw new Error('small fleet count')
+    if (reports !== null && (!Number.isSafeInteger(reports) || (reports as number)<minimum || (reports as number)>100000)) throw new Error('small fleet count')
     for (const key of dimensions) {
       const labels=d[key] as Record<string,unknown>
       if (!labels || typeof labels!=='object' || Array.isArray(labels) || Object.keys(labels).length>128) throw new Error('invalid fleet labels')
-      for (const [name,n] of Object.entries(labels)) if (reports===null || !name || name.length>128 || /[\x00-\x1f\x7f]/.test(name) || !Number.isSafeInteger(n) || (n as number)<10 || (n as number)>(reports as number)) throw new Error('small fleet label')
+      for (const [name,n] of Object.entries(labels)) if (reports===null || !name || name.length>128 || /[\x00-\x1f\x7f]/.test(name) || !Number.isSafeInteger(n) || (n as number)<minimum || (n as number)>(reports as number)) throw new Error('small fleet label')
     }
   }
   return v as unknown as PublicFleetFeed
