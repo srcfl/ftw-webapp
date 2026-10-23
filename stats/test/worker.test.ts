@@ -167,18 +167,18 @@ describe('project stats Worker', () => {
   it('shows only version and driver labels whose own count reaches the minimum', async () => {
     const now = new Date()
     const payload = relayPayload(now, 20)
-    payload.fleet.days[0]!.channels = { beta: 4, unknown: 11 }
-    payload.fleet.days[0]!.ftw_versions = { 'common-version': 10, 'rare-version': 4, 'other-version': 1 }
-    payload.fleet.days[0]!.drivers = { easee_cloud: 10, solis: 4, modbus: 1 }
+    payload.fleet.days[0]!.channels = { beta: 4, unknown: 16 }
+    payload.fleet.days[0]!.ftw_versions = { 'common-version': 15, 'rare-version': 4, 'other-version': 1 }
+    payload.fleet.days[0]!.drivers = { easee_cloud: 15, solis: 4, modbus: 1 }
     await sendRelay(payload, now)
 
     const response = await worker.fetch(new Request('https://stats.ftw.energy/api/public'), env)
     const data = await response.json<Record<string, any>>()
     expect(data.fleet.reports_30d).toBe(20)
     expect(data.fleet.days[0].reports).toBe(20)
-    expect(data.fleet.dimensions.channels).toEqual({ unknown: 11 })
-    expect(data.fleet.dimensions.ftw_versions).toEqual({ 'common-version': 10 })
-    expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 10 })
+    expect(data.fleet.dimensions.channels).toEqual({ unknown: 16 })
+    expect(data.fleet.dimensions.ftw_versions).toEqual({ 'common-version': 15 })
+    expect(data.fleet.dimensions.drivers).toEqual({ easee_cloud: 15 })
     expect(data.fleet.observed).toEqual({
       ftw_versions: ['common-version'],
       drivers: ['easee_cloud'],
