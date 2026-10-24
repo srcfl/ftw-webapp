@@ -1,0 +1,401 @@
+{
+ "schema": "ftw.cloud-ops/1",
+ "meaning": "sums over the whole service, and closed daily totals over all reports; no home, device or address",
+ "shard": "s1",
+ "observed_at": "2026-10-24T06:14:05Z",
+ "hours": [
+  {
+   "hour": "2026-10-24T03:00:00Z",
+   "seconds": 3600,
+   "starts": 1,
+   "counters": {
+    "apns_alert_failed": 0,
+    "apns_alert_gone": 0,
+    "apns_alert_ok": 0,
+    "apns_alert_refused": 0,
+    "apns_alert_retry": 0,
+    "apns_breaker_open": 0,
+    "apns_widgets_failed": 0,
+    "apns_widgets_gone": 0,
+    "apns_widgets_ok": 0,
+    "apns_widgets_refused": 0,
+    "apns_widgets_retry": 0,
+    "bytes_out_app": 0,
+    "bytes_out_box": 0,
+    "drain_left_open": 0,
+    "drained_sockets": 0,
+    "drains": 0,
+    "drops_box_connect_rate": 0,
+    "drops_box_tile_of_no_shape": 0,
+    "drops_box_tile_too_large": 0,
+    "drops_box_unknown_type": 0,
+    "drops_phone_too_slow": 0,
+    "drops_phone_tun_queue_full": 0,
+    "drops_push_alert_queue_full": 0,
+    "drops_push_event_of_a_notice_kind": 0,
+    "drops_push_home_cap": 0,
+    "drops_push_notice_not_a_notice": 0,
+    "drops_push_payload_over_apns_limit": 0,
+    "drops_push_widgets_queue_full": 0,
+    "drops_tile_home_full": 0,
+    "drops_tile_memory_full": 0,
+    "drops_tile_older_than_held": 0,
+    "drops_tile_outside_48h": 0,
+    "drops_tile_piece_after_close": 0,
+    "drops_tile_too_many_pieces": 0,
+    "drops_tun_rate_down": 0,
+    "drops_tun_rate_up": 0,
+    "drops_x_in_flight": 0,
+    "drops_x_unknown": 0,
+    "drops_example": 1,
+    "mcp_busy": 0,
+    "mcp_failed": 0,
+    "mcp_ok": 0,
+    "mcp_rate_limited": 0,
+    "mcp_refused": 0,
+    "mcp_step_up": 0,
+    "mcp_tool_error": 0,
+    "mcp_unknown_tool": 0,
+    "mcp_unsupported": 0,
+    "push_coalesced": 0,
+    "tun_bytes_down": 0,
+    "tun_bytes_up": 0,
+    "tun_frames_down": 0,
+    "tun_frames_up": 0,
+    "webpush_ok": 0,
+    "webpush_refused": 0,
+    "webpush_retry": 0,
+    "wrong_shard_app": 0,
+    "wrong_shard_box": 0,
+    "wrong_shard_now": 0,
+    "wrong_shard_once": 0
+   },
+   "gauges": {
+    "boxes_following_shards": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "push_queued_alert": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "push_queued_widgets": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "sockets_app": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "sockets_box": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "tile_bytes": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_app_quic": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_app_websocket": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_box_quic": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_box_websocket": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "latency_ms": {
+    "forward_seconds_envelope": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "forward_seconds_tun_down": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "forward_seconds_tun_up": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_app": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_box": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_once": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "mcp_call_seconds": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "example_seconds": {
+     "n": 1,
+     "p50": 5,
+     "p95": 5,
+     "p99": 5
+    },
+    "example_slow_seconds": {
+     "n": 1,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    }
+   }
+  },
+  {
+   "hour": "2026-10-24T04:00:00Z",
+   "seconds": 3600,
+   "starts": 1,
+   "counters": {
+    "apns_alert_failed": 0,
+    "apns_alert_gone": 0,
+    "apns_alert_ok": 0,
+    "apns_alert_refused": 0,
+    "apns_alert_retry": 0,
+    "apns_breaker_open": 0,
+    "apns_widgets_failed": 0,
+    "apns_widgets_gone": 0,
+    "apns_widgets_ok": 0,
+    "apns_widgets_refused": 0,
+    "apns_widgets_retry": 0,
+    "bytes_out_app": 0,
+    "bytes_out_box": 0,
+    "drain_left_open": 0,
+    "drained_sockets": 0,
+    "drains": 0,
+    "drops_box_connect_rate": 0,
+    "drops_box_tile_of_no_shape": 0,
+    "drops_box_tile_too_large": 0,
+    "drops_box_unknown_type": 0,
+    "drops_phone_too_slow": 0,
+    "drops_phone_tun_queue_full": 0,
+    "drops_push_alert_queue_full": 0,
+    "drops_push_event_of_a_notice_kind": 0,
+    "drops_push_home_cap": 0,
+    "drops_push_notice_not_a_notice": 0,
+    "drops_push_payload_over_apns_limit": 0,
+    "drops_push_widgets_queue_full": 0,
+    "drops_tile_home_full": 0,
+    "drops_tile_memory_full": 0,
+    "drops_tile_older_than_held": 0,
+    "drops_tile_outside_48h": 0,
+    "drops_tile_piece_after_close": 0,
+    "drops_tile_too_many_pieces": 0,
+    "drops_tun_rate_down": 0,
+    "drops_tun_rate_up": 0,
+    "drops_x_in_flight": 0,
+    "drops_x_unknown": 0,
+    "drops_example": 1,
+    "mcp_busy": 0,
+    "mcp_failed": 0,
+    "mcp_ok": 0,
+    "mcp_rate_limited": 0,
+    "mcp_refused": 0,
+    "mcp_step_up": 0,
+    "mcp_tool_error": 0,
+    "mcp_unknown_tool": 0,
+    "mcp_unsupported": 0,
+    "push_coalesced": 0,
+    "tun_bytes_down": 0,
+    "tun_bytes_up": 0,
+    "tun_frames_down": 0,
+    "tun_frames_up": 0,
+    "webpush_ok": 0,
+    "webpush_refused": 0,
+    "webpush_retry": 0,
+    "wrong_shard_app": 0,
+    "wrong_shard_box": 0,
+    "wrong_shard_now": 0,
+    "wrong_shard_once": 0
+   },
+   "gauges": {
+    "boxes_following_shards": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "push_queued_alert": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "push_queued_widgets": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "sockets_app": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "sockets_box": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "tile_bytes": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_app_quic": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_app_websocket": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_box_quic": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    },
+    "transport_sockets_box_websocket": {
+     "min": 0,
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "latency_ms": {
+    "forward_seconds_envelope": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "forward_seconds_tun_down": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "forward_seconds_tun_up": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_app": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_box": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "handshake_seconds_once": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "mcp_call_seconds": {
+     "n": 0,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    },
+    "example_seconds": {
+     "n": 1,
+     "p50": 5,
+     "p95": 5,
+     "p99": 5
+    },
+    "example_slow_seconds": {
+     "n": 1,
+     "p50": null,
+     "p95": null,
+     "p99": null
+    }
+   }
+  }
+ ],
+ "fleet_days": [
+  {
+   "date": "2026-10-23",
+   "reports": 2,
+   "ftw_versions": {
+    "unknown": 1,
+    "v0.155.1-beta.1": 1
+   },
+   "channels": {
+    "beta": 1,
+    "unknown": 1
+   },
+   "drivers": {
+    "easee_cloud": 1,
+    "none": 1,
+    "sungrow": 1
+   },
+   "battery_kwh": {
+    "5-15": 1,
+    "none": 1
+   },
+   "price_zones": {
+    "SE3": 1,
+    "unknown": 1
+   },
+   "install_age": {
+    "1-6m": 1,
+    "unknown": 1
+   }
+  }
+ ],
+ "energy_days": [
+  {
+   "battery_charge_kwh": 9,
+   "battery_discharge_kwh": 8,
+   "date": "2026-10-19",
+   "grid_export_kwh": 4,
+   "grid_import_kwh": 40,
+   "pv_generation_kwh": 15,
+   "reports": 2,
+   "vehicle_charge_kwh": 7
+  }
+ ]
+}

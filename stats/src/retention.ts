@@ -8,6 +8,7 @@ export const RETENTION_DAYS = {
   relaySnapshots: 90,
   fleetDaily: 90,
   collectorRuns: 90,
+  cloudOps: 90,
 } as const
 
 export interface RetentionCutoffs {
@@ -18,6 +19,7 @@ export interface RetentionCutoffs {
   relaySnapshots: string
   fleetDaily: string
   collectorRuns: string
+  cloudOps: string
 }
 
 export function retentionCutoffs(nowMs: number): RetentionCutoffs {
@@ -29,6 +31,7 @@ export function retentionCutoffs(nowMs: number): RetentionCutoffs {
     relaySnapshots: rollingCutoff(nowMs, RETENTION_DAYS.relaySnapshots),
     fleetDaily: utcDayCutoff(nowMs, RETENTION_DAYS.fleetDaily, true),
     collectorRuns: rollingCutoff(nowMs, RETENTION_DAYS.collectorRuns),
+    cloudOps: rollingCutoff(nowMs, RETENTION_DAYS.cloudOps),
   }
 }
 
@@ -46,6 +49,8 @@ export async function pruneStoredData(db: D1Database, nowMs: number): Promise<vo
     db.prepare('DELETE FROM cloud_energy_view WHERE observed_at < ?').bind(cutoff.githubSnapshots),
     db.prepare('DELETE FROM usage_snapshots WHERE captured_hour < ?').bind(cutoff.githubSnapshots),
     db.prepare('DELETE FROM collector_runs WHERE finished_at < ?').bind(cutoff.collectorRuns),
+    db.prepare('DELETE FROM cloud_ops_hours WHERE hour < ?').bind(cutoff.cloudOps),
+    db.prepare('DELETE FROM cloud_ops_days WHERE observed_at < ?').bind(cutoff.cloudOps),
   ])
 }
 
