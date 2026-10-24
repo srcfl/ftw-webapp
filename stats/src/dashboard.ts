@@ -75,13 +75,13 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
         <div><span>Public days</span><strong id="energy-window">—</strong><small id="energy-window-note">Last 30 days</small></div>
       </div>
       <p id="energy-note" class="panel-copy">Daily energy reports appear once FTW Cloud publishes them.</p>
-      <p class="footnote">Installation counts do not count people or all FTW boxes. Configured limits do not prove physical control. Hourly energy sums the recorded hours in a 24-hour window; gaps reduce coverage. Withheld cells show no value. A daily report is one box's whole UTC day, sent without any id through an independent relay, so FTW Cloud cannot tell which box sent it; a box with a gap in its day sends none. Reports are not homes.</p>
+      <p class="footnote">Installation counts do not count people or all FTW boxes. Configured limits do not prove physical control. Hourly energy sums the recorded hours in a 24-hour window; gaps reduce coverage. Withheld cells show no value. A daily report is one box's whole UTC day. Through the relay it carries no box id, only a random number drawn new for each report so FTW Cloud counts it once, and FTW Cloud cannot tell which box sent it; a box with a gap in its day sends none. Reports are not homes.</p>
     </section>
 
     <section class="panel" aria-labelledby="coverage-title">
       <div class="panel-head"><div><p class="eyebrow">DATA SOURCES</p><h2 id="coverage-title">What this page covers</h2></div></div>
       <p id="coverage-repos" class="panel-copy">Six active public repositories. Private repositories and archived experiments are outside these totals.</p>
-      <p class="panel-copy">The separate relay is retired. Anonymous daily reports now come through FTW Cloud. The updated Cloud terms include statistics for all Cloud users. Local FTW users can choose to contribute without remote access. Hourly collection awaits privacy review. App Store installs are not collected. Native app development appears below.</p>
+      <p class="panel-copy">The old relay is retired. Anonymous daily reports go to FTW Cloud through an independent relay, which is not live yet; until it is, only boxes whose owner said yes send their fleet report, straight to FTW Cloud. Statistics are part of the updated Cloud terms, and boxes without Cloud take part unless their owner turns it off. Hourly collection awaits privacy review. App Store installs are not collected. Native app development appears below.</p>
       <p class="footnote">Missing usage values stay unknown. Public hourly energy cells need at least 20 contributing installations; a public day of energy reports needs at least 5 reports. Historical relay reports remain in the archive below.</p>
     </section>
 
