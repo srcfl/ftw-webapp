@@ -1,5 +1,6 @@
 import { accessIdentity } from './access.ts'
 import { dashboardDocument } from './dashboard.ts'
+import { collectEnergy } from './energy.ts'
 import { collectFleet } from './fleet.ts'
 import { collectUsage } from './usage.ts'
 import { collectGitHub } from './github.ts'
@@ -86,6 +87,7 @@ export default {
       }
       try { await collectUsage(env) } catch { failures.push('cloud:usage') }
       try { await collectFleet(env) } catch { failures.push('cloud:fleet') }
+      try { await collectEnergy(env) } catch { failures.push('cloud:energy') }
     } else { throw new Error('unknown collection schedule') }
     await pruneStoredData(env.DB, controller.scheduledTime)
     if (failures.length > 0) throw new Error('one or more scheduled collectors failed')

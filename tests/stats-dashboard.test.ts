@@ -66,7 +66,9 @@ describe('stats dashboard coverage', () => {
     const items = [...document.querySelectorAll('#freshness .freshness-item')]
     expect(items.find((item) => item.textContent!.startsWith('Repo traffic'))!.querySelector('.dot.ok')).not.toBeNull()
     expect(items.find((item) => item.textContent!.startsWith('GitHub'))!.querySelector('.dot.warn')).not.toBeNull()
-    expect(items.find((item) => item.textContent!.startsWith('Energy reports'))!.querySelector('.dot.idle')).not.toBeNull()
+    // The hourly usage feed and the daily energy feed each have their own dot.
+    expect(items.find((item) => item.textContent!.startsWith('Hourly energy'))!.querySelector('.dot.idle')).not.toBeNull()
+    expect(items.find((item) => item.textContent!.startsWith('Daily energy'))!.querySelector('.dot.idle')).not.toBeNull()
     expect(items.some(item => item.textContent!.includes('Legacy'))).toBe(false)
   })
 

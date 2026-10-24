@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
 import { collectUsage, parseUsage, usageKeys } from '../src/usage.ts'
 import { installationEstimate, parseFleet, collectFleet } from '../src/fleet.ts'
+import { collectEnergy, energyFields, parseEnergy, type EnergyDay, type PublicEnergyFeed } from '../src/energy.ts'
 import { collectGitHub } from '../src/github.ts'
 import { ingestRelay } from '../src/relay.ts'
 import { pruneStoredData, retentionCutoffs, utcDayCutoff } from '../src/retention.ts'
@@ -575,6 +576,7 @@ describe('project stats Worker', () => {
     vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url)
       if (url.hostname === 'cloud.ftw.energy' && url.pathname === '/v1/fleet/public') return Response.json(fleetView(Date.now()))
+      if (url.hostname === 'cloud.ftw.energy' && url.pathname === '/v1/energy/public') return Response.json(energyView(Date.now()))
       if (url.hostname === 'cloud.ftw.energy') return Response.json(usageView(Date.now()))
       if (url.hostname === 'api.cloudflare.com') {
         siteCalls += 1
@@ -625,7 +627,7 @@ it('keeps six-repo snapshots, daily traffic and public Cloud feeds within separa
     if(url.hostname==='api.cloudflare.com') return Response.json({data:{viewer:{zones:[{traffic:[]}]}},errors:null})
     if(url.hostname==='cloud.ftw.energy') return url.pathname==='/v1/stats'
       ? new Response(null,{status:503,headers:{'FTW-Statistics-State':'disabled'}})
-      : Response.json(fleetView(Date.now()))
+      : url.pathname==='/v1/energy/public' ? Response.json(energyView(Date.now())) : Response.json(fleetView(Date.now()))
     if(url.pathname==='/search/issues') return Response.json({total_count:0})
     if(url.pathname.endsWith('/traffic/views')) return Response.json({views:[]})
     if(url.pathname.endsWith('/traffic/clones')) return Response.json({clones:[]})
@@ -635,13 +637,13 @@ it('keeps six-repo snapshots, daily traffic and public Cloud feeds within separa
     return Response.json([])
   })
   const all={...env,GITHUB_REPOS:repos.join(',')}
-  for(const [cron,count] of [['3 * * * *',43],['23 * * * *',9],['17 0 * * *',24]] as const){
+  for(const [cron,count] of [['3 * * * *',43],['23 * * * *',10],['17 0 * * *',24]] as const){
     requests=0
     await worker.scheduled({cron,scheduledTime:Date.now(),noRetry(){}},all)
     expect(requests).toBe(count)
   }
   const runs=await env.DB.prepare('SELECT source,ok FROM collector_runs').all<{source:string;ok:number}>()
-  expect(runs.results).toHaveLength(15)
+  expect(runs.results).toHaveLength(16)
   expect(runs.results.every(r=>r.ok===1)).toBe(true)
 })
 
@@ -791,8 +793,94 @@ describe('installation estimates',()=>{
 })
 
 
+function energyView(now: number): PublicEnergyFeed {
+ const today=Math.floor(now/86400_000)*86400_000
+ const days:EnergyDay[]=Array.from({length:27},(_,i)=>{
+  const date=new Date(today-(4+i)*86400_000).toISOString().slice(0,10)
+  if (i===0) return {date,reports:7,pv_generation_kwh:84,grid_import_kwh:210,grid_export_kwh:30,battery_charge_kwh:63,battery_discharge_kwh:56,vehicle_charge_kwh:20}
+  if (i===1) return {date,reports:5,pv_generation_kwh:60,grid_import_kwh:150,grid_export_kwh:20,battery_charge_kwh:45,battery_discharge_kwh:40,vehicle_charge_kwh:0}
+  return {date,reports:null,...Object.fromEntries(energyFields.map(k=>[k,null]))} as EnergyDay
+ })
+ return {schema:'ftw.energy-public/1',meaning:'daily reports, not homes',minimum:5,observed_at:new Date(now).toISOString(),days}
+}
+describe('anonymous daily energy reports',()=>{
+ it('accepts only closed days with five or more reports and nothing else',()=>{
+  const now=Date.UTC(2026,9,24,9);const v=energyView(now)
+  expect(parseEnergy(v,now)).toEqual(v)
+  const bad=(f:(x:ReturnType<typeof energyView>)=>void,message:string)=>{const x=energyView(now);f(x);expect(()=>parseEnergy(x,now)).toThrow(message)}
+  bad(x=>{(x as unknown as Record<string,unknown>)['home']='secret'},'invalid public energy')
+  bad(x=>{x.minimum=3},'invalid public energy')
+  bad(x=>{x.meaning='homes'},'invalid public energy')
+  bad(x=>{x.observed_at=new Date(now-3*3600_000).toISOString()},'invalid energy window')
+  bad(x=>{x.days[0]!.reports=4},'small energy count')
+  bad(x=>{x.days[2]!.pv_generation_kwh=3},'small energy count')
+  bad(x=>{x.days[0]!.pv_generation_kwh=7001},'invalid energy sum')
+  bad(x=>{x.days[0]!.grid_export_kwh=-1},'invalid energy sum')
+  bad(x=>{x.days[0]!.grid_export_kwh=1.5},'invalid energy sum')
+  bad(x=>{(x.days[0] as Record<string,unknown>)['home']='a'},'invalid energy day')
+  bad(x=>{x.days[0]!.date=new Date(now-3*86400_000).toISOString().slice(0,10)},'invalid energy day')
+  bad(x=>{x.days[1]!.date=x.days[0]!.date},'invalid energy day')
+ })
+ it('takes the earlier clock, so a feed stamped ahead cannot close a day early',async()=>{
+  const now=Date.UTC(2026,9,24,22,30), ahead=Date.UTC(2026,9,25,0,30)
+  // Stamped ahead, Cloud lists 2026-10-21, which a box may still name here.
+  expect(energyView(ahead).days[0]!.date).toBe('2026-10-21')
+  expect(()=>parseEnergy(energyView(ahead),now)).toThrow('invalid energy day')
+  expect(parseEnergy(energyView(now),now).days[0]!.date).toBe('2026-10-20')
+ })
+ it('reads dates and the stamp only as strings',()=>{
+  const now=Date.UTC(2026,9,24,9)
+  const stamp=energyView(now); (stamp as unknown as Record<string,unknown>)['observed_at']=[stamp.observed_at]
+  expect(()=>parseEnergy(stamp,now)).toThrow('invalid energy window')
+  const date=energyView(now); (date.days[0] as Record<string,unknown>)['date']=[date.days[0]!.date]
+  expect(()=>parseEnergy(date,now)).toThrow('invalid energy day')
+ })
+ it('takes a sum Cloud withheld and leaves it out of the window',async()=>{
+  const now=Date.UTC(2026,9,24,9);const v=energyView(now)
+  v.days[0]!.vehicle_charge_kwh=null
+  expect(parseEnergy(v,now)).toEqual(v)
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(v)))
+  await collectEnergy(env,now)
+  const data=await dashboardData(env,false,now) as Record<string,any>
+  expect(data['energy_reports'].latest.vehicle_charge_kwh).toBeNull()
+  expect(data['energy_reports'].window).toMatchObject({days:2,vehicle_charge_kwh:0,vehicle_charge_days:1,pv_generation_kwh:144,pv_generation_days:2})
+ })
+ it('says a feed is stale after 48 hours, on its own clock',async()=>{
+  const now=Date.UTC(2026,9,24,9);const v=energyView(now)
+  for (const d of v.days){d.reports=null;for(const k of energyFields)d[k]=null}
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(v)))
+  await collectEnergy(env,now)
+  const fresh=await dashboardData(env,false,now+47*3600_000) as Record<string,any>
+  expect(fresh['energy_reports']).toMatchObject({state:'withheld',stale:false})
+  const later=await dashboardData(env,false,now+49*3600_000) as Record<string,any>
+  expect(later['energy_reports']).toMatchObject({state:'withheld',stale:true,observed_at:v.observed_at})
+  expect(later['freshness']['cloud_energy']).toBe(v.observed_at)
+ })
+ it('shows the newest public day and the window, labelled as reports',async()=>{
+  const now=Date.UTC(2026,9,24,9)
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json(energyView(now))))
+  await collectEnergy(env,now)
+  const data=await dashboardData(env,false,now) as Record<string,any>
+  expect(data['energy_reports']).toMatchObject({state:'connected',meaning:'daily reports, not homes',minimum:5,
+   latest:{date:'2026-10-20',reports:7,pv_generation_kwh:84},
+   window:{days:2,first:'2026-10-19',last:'2026-10-20',reports:12,pv_generation_kwh:144,vehicle_charge_kwh:20}})
+  const page=await worker.fetch(new Request('https://stats.ftw.energy/'),env)
+  expect(await page.text()).toContain('Daily energy reports')
+ })
+ it('waits for a Cloud that does not serve the route yet, and stores nothing invalid',async()=>{
+  const now=Date.UTC(2026,9,24,9)
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('not found',{status:404})))
+  await expect(collectEnergy(env,now)).resolves.toBeUndefined()
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(Response.json({...energyView(now),home:'secret'})))
+  await expect(collectEnergy(env,now)).rejects.toThrow()
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM cloud_energy_view').first('n')).toBe(0)
+  const data=await dashboardData(env,false,now) as Record<string,any>
+  expect(data['energy_reports']).toMatchObject({state:'pending',latest:null})
+ })
+})
+
 describe('Cloud collector redirects in the Workers runtime', () => {
-  it.each([['usage', collectUsage], ['fleet', collectFleet]] as const)(
+  it.each([['usage', collectUsage], ['fleet', collectFleet], ['energy', collectEnergy]] as const)(
     '%s uses a valid edge Request and rejects a redirect without storing it',
     async (_name, collect) => {
       const send = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -805,6 +893,7 @@ describe('Cloud collector redirects in the Workers runtime', () => {
       expect(send).toHaveBeenCalledTimes(1)
       expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM usage_snapshots').first('n')).toBe(0)
       expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM cloud_fleet_view').first('n')).toBe(0)
+      expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM cloud_energy_view').first('n')).toBe(0)
     }
   )
 })
