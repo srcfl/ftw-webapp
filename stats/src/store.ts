@@ -1,6 +1,7 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
 import { installationEstimate, type PublicFleetFeed } from './fleet.ts'
 import { energySummary, type PublicEnergyFeed } from './energy.ts'
+import { opsSummary } from './ops.ts'
 import { retentionCutoffs, utcDayCutoff } from './retention.ts'
 import { parseRepos } from './github.ts'
 
@@ -258,6 +259,7 @@ export async function dashboardData(
   }
 
   if (privateView) {
+    result['cloud_ops'] = await opsSummary(env.DB, nowMs)
     result['relay'] = relaySummary(relay.results)
     result['discovery'] = {
       referrers: referrers.results,

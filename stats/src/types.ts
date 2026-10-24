@@ -10,6 +10,7 @@ export interface AppEnv {
   RELAY_INGEST_SECRET?: string
   ACCESS_TEAM_DOMAIN?: string
   ACCESS_AUD?: string
+  CLOUD_OPS_KEY?: string
 }
 
 export interface GitHubSnapshot {

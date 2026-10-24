@@ -68,6 +68,10 @@ npx wrangler secret put CLOUDFLARE_ANALYTICS_TOKEN --config stats/wrangler.jsonc
 npx wrangler secret put RELAY_INGEST_SECRET --config stats/wrangler.jsonc
 ```
 
+A fourth, `CLOUD_OPS_KEY`, opens FTW Cloud's internal feed. FTW Cloud holds
+only its SHA-256; srcfl/ftw-cloud `deploy/README.md` ("Watching it") shows
+how to make both. Without the key the collector waits.
+
 Set `CLOUDFLARE_ZONE_ID` as a Worker variable. Give the Cloudflare token
 `Account > Account Analytics > Read` and make sure its resource scope includes
 the `ftw.energy` zone. The hourly collection asks for Cloudflare's server-side
@@ -109,6 +113,8 @@ The hourly cleanup keeps only the data each dashboard window needs:
 - 90 days of GitHub snapshots, relay snapshots, fleet daily totals and
   collector results;
 - only the latest thresholded Cloud daily-report view, removed if over 90 days old;
+- 90 days of FTW Cloud's service hours, and only the latest exact view of
+  closed fleet and energy report days, removed if over 90 days old;
 - 30 UTC days of GitHub traffic, referrers and popular paths;
 - the last 7 complete UTC days of site traffic.
 
@@ -158,3 +164,38 @@ check-ins, never unique users or installations. The legacy signed ingest
 route remains for compatibility and is not the Cloud usage source. GitHub
 charts keep saved subtotals with repo coverage; star lines break when the
 set changes, so adding repositories cannot look like organic growth.
+
+## FTW Cloud operations (private view)
+
+Sourceful runs FTW Cloud and the fleet from the private view. At minute 23
+each hour the Worker reads `https://cloud.ftw.energy/v1/ops` with
+`CLOUD_OPS_KEY` and keeps what it gets in D1:
+
+- **Service hours** (`cloud_ops_hours`, 90 days). Each hour sums over the
+  whole service: how much each counter rose, each gauge's low, mean and
+  high, each latency's p50, p95 and p99, how much of the hour a process ran
+  and how many started. The view shows boxes and phones connected, the share
+  on QUIC, data written this month against AWS's 100 GB of free data out,
+  drops by reason, push results, assistant calls by outcome, the slowest
+  p99 of the day, and each deploy's drain and the box handshakes that
+  followed.
+- **Exact daily reports** (`cloud_ops_days`, the latest view only). The
+  fleet and energy report totals as FTW Cloud holds them, below the public
+  group size of 5 too, but only for closed days: a fleet day once it ends,
+  an energy date four days after. Two pulls never differ by one report.
+  Fleet days from `ftw.fleet/2` reports also count how the boxes ran: the
+  slowest plan and fallback plans of each box's last day, the share of
+  failed driver reads, and the newest update of its last week, each a few
+  fixed words. The public view does not show these.
+
+Each pull asks from an hour before the newest hour kept, so a restart's late
+part of an hour replaces the row. A Cloud without a key answers 404, which
+the collector records as waiting. The parser takes only the fields
+`ftw.cloud-ops/1` names, at every level, and refuses the whole answer
+otherwise.
+
+None of it names a home, a device or an address. The limit, plainly: while
+the fleet is a handful of homes, a small count can still describe one of
+them to someone who knows them. Only people Access lets in see it.
+srcfl/ftw-cloud `privacy/internal-operations.md` has the full account.
+Per-home data stays in support access, opted in per ticket.

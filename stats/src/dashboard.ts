@@ -161,7 +161,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <p id="relay-note" class="footnote">Aggregate ranges only. The stats service never receives handles, addresses or routed frames.</p>
     </section>
 
-    <section id="private-grid" class="two-col" hidden>
+${privateView ? opsSection : ''}    <section id="private-grid" class="two-col" hidden>
       <article class="panel">
         <div class="panel-head"><div><p class="eyebrow">DISCOVERY</p><h2>Top referrers</h2></div></div>
         <ol id="referrers" class="ranked-list"></ol>
@@ -406,7 +406,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       const height = value === null ? 0 : Math.max(1, Math.ceil((value / max) * 20));
       bar.classList.add('h' + height);
       bar.classList.toggle('withheld', value === null);
-      wrap.title = shortDate(point.date) + ': ' + (value === null ? 'below public threshold' : formatter(value)) + (point.coverage ? ' · ' + point.coverage : '');
+      wrap.title = shortDate(point.date) + ': ' + (value === null ? point.gap || 'below public threshold' : formatter(value)) + (point.coverage ? ' · ' + point.coverage : '');
       wrap.append(bar, node('span', points.length <= 16 ? dayLabel(point.date) : ''));
       host.append(wrap);
     }
@@ -522,7 +522,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
   }
 
-  function renderPrivate(data) {
+${privateView ? opsScript : ''}  function renderPrivate(data) {
     $('private-grid').hidden = false;
     const refs = $('referrers');
     refs.replaceChildren();
@@ -559,6 +559,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       renderSite(data.site);
       renderFleet(data.fleet, data.mode === 'private');
       if (data.mode === 'private') renderRelay(data.relay);
+      ${privateView ? "if (data.mode === 'private') renderOps(data.cloud_ops);" : ''}
       if (data.mode === 'private') renderPrivate(data);
     } catch (error) {
       const notice = $('notice');
@@ -593,4 +594,124 @@ const styles = `
 @media(max-width:560px){main{width:min(100% - 24px,1280px);padding-top:38px}.topbar{padding:0 12px}.top-actions #generated{display:none}.hero{margin-bottom:36px;gap:28px}h1{font-size:40px}.freshness{grid-template-columns:1fr}.metric-card{min-height:130px;padding:16px}.metric-card strong{font-size:34px}.panel{padding:16px}.dimension-grid{grid-template-columns:1fr}.mini-grid{grid-template-columns:1fr 1fr}.bars{gap:2px}footer{flex-direction:column;padding:20px 12px}}
 @media(max-width:560px){.mini-grid.site-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+`
+
+// The private view's Service operations panel and its script. The public
+// page carries neither: its markup, copy and code stay as they were.
+const opsSection = `    <section id="ops-section" class="panel" aria-labelledby="ops-title" hidden>
+      <div class="panel-head"><div><p class="eyebrow">FTW CLOUD · PRIVATE</p><h2 id="ops-title">Service operations</h2></div><span id="ops-age" class="muted">not collected</span></div>
+      <p class="panel-copy">Each hour sums over the whole service. No home, device or address reaches this page. Cloud and this page keep the hours for 90 days.</p>
+      <div class="mini-grid">
+        <div><span>Boxes connected</span><strong id="ops-boxes">—</strong><small id="ops-boxes-note" class="muted"></small></div>
+        <div><span>Phones connected</span><strong id="ops-phones">—</strong><small id="ops-phones-note" class="muted"></small></div>
+        <div><span>Over QUIC</span><strong id="ops-quic">—</strong><small id="ops-quic-note" class="muted">boxes, last hour</small></div>
+        <div><span>Data out this month</span><strong id="ops-bytes">—</strong><small id="ops-budget" class="muted">of 100 GB free</small></div>
+      </div>
+      <div id="ops-chart" class="bars compact" role="img" aria-label="Most boxes connected each hour, last 48 hours"></div>
+      <div class="dimension-grid">
+        <div class="dimension"><h3>Drops, 7 days</h3><ul id="ops-drops" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Push, 7 days</h3><ul id="ops-push" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Assistant calls, 7 days</h3><ul id="ops-mcp" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Slowest p99, 24 hours</h3><ul id="ops-latency" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Deploys and drains, 30 days</h3><ul id="ops-deploys" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Daily reports, exact</h3><ul id="ops-fleet" class="ranked-list"></ul></div>
+      </div>
+      <p id="ops-fleet-note" class="footnote">Exact daily reports for closed UTC days, below the public group size of 5 too. A report is a daily check-in, not a user or a unique box. Health counts come only from reports that carry them: the slowest plan and fallback plans of the box's last day, the share of failed driver reads, and the newest update of its last week.</p>
+      <div id="ops-fleet-labels" class="dimension-grid"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Energy reports, exact</th><th class="numeric">Reports</th><th class="numeric">Solar kWh</th><th class="numeric">Import / export kWh</th><th class="numeric">Battery in / out kWh</th><th class="numeric">Vehicle kWh</th></tr></thead>
+          <tbody id="ops-energy"></tbody>
+        </table>
+      </div>
+      <p class="footnote">A date shows once no report may name it, four days after it ends. Each report is one box's whole UTC day, sent without an id through an independent relay. Reports are not homes.</p>
+    </section>
+
+`
+
+const opsScript = `  function listInto(id, rows, empty) {
+    const host = $(id);
+    host.replaceChildren();
+    for (const [label, value] of rows) {
+      const item = node('li');
+      item.append(node('span', label), node('strong', value));
+      host.append(item);
+    }
+    if (!host.children.length) host.append(node('li', empty, 'empty'));
+  }
+  function ms(value) {
+    if (value === 'over_10s') return 'over 10 s';
+    return typeof value === 'number' ? (value < 10 ? value.toFixed(2) : fmt.format(value)) + ' ms' : '—';
+  }
+  function renderOps(ops) {
+    if (!ops) return;
+    $('ops-section').hidden = false;
+    const fleet = ops.fleet || { days: [] };
+    const days = (fleet.days || []).slice(-14).reverse();
+    listInto('ops-fleet', days.map((day) => [day.date, number(day.reports)]), 'No daily reports yet.');
+    if (fleet.state === 'stale') setText('ops-fleet-note', 'Source is stale: the last saved daily totals came ' + age(fleet.observed_at) + '. These are the last saved values.');
+    const labels = $('ops-fleet-labels');
+    labels.replaceChildren();
+    const titles = { ftw_versions: 'FTW versions', drivers: 'Device integrations', channels: 'Channels', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age',
+      plan_solve: 'Slowest plan', plan_fallbacks: 'Fallback plans', driver_errors: 'Failed driver reads', update: 'Newest update' };
+    if (days[0]) {
+      for (const key of Object.keys(titles).filter((k) => days[0][k])) {
+        const block = node('div', undefined, 'dimension');
+        block.append(node('h3', titles[key] + ', ' + shortDate(days[0].date)));
+        const chips = node('div', undefined, 'chips');
+        for (const [label, count] of Object.entries(days[0][key] || {}).sort((a, b) => b[1] - a[1])) chips.append(node('span', dimensionLabel(key, label) + ' · ' + number(count), 'chip'));
+        block.append(chips);
+        labels.append(block);
+      }
+    }
+    const energy = $('ops-energy');
+    energy.replaceChildren();
+    for (const day of ((ops.energy && ops.energy.days) || []).slice(-14).reverse()) {
+      const row = node('tr');
+      row.append(node('td', day.date));
+      for (const value of [number(day.reports), number(day.pv_generation_kwh), number(day.grid_import_kwh) + ' / ' + number(day.grid_export_kwh),
+        number(day.battery_charge_kwh) + ' / ' + number(day.battery_discharge_kwh), number(day.vehicle_charge_kwh)]) row.append(node('td', value, 'numeric'));
+      energy.append(row);
+    }
+    if (!energy.children.length) {
+      const row = node('tr');
+      const cell = node('td', 'No closed energy dates yet.', 'empty');
+      cell.colSpan = 6;
+      row.append(cell);
+      energy.append(row);
+    }
+    if (ops.state === 'empty') {
+      setText('ops-age', 'not collected');
+      renderBars('ops-chart', [], number);
+      for (const id of ['ops-drops', 'ops-push', 'ops-mcp', 'ops-latency', 'ops-deploys']) listInto(id, [], 'No service hours yet.');
+      return;
+    }
+    setText('ops-age', (ops.state === 'stale' ? 'stale · ' : '') + 'hour of ' + new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(ops.latest_hour)));
+    const now = ops.now || {};
+    setText('ops-boxes', now.boxes ? number(now.boxes.max) : '—');
+    setText('ops-boxes-note', now.boxes ? 'mean ' + number(now.boxes.mean) + ', low ' + number(now.boxes.min) + ' in the hour' : '');
+    setText('ops-phones', now.phones ? number(now.phones.max) : '—');
+    setText('ops-phones-note', now.phones ? 'mean ' + number(now.phones.mean) + ' in the hour' : '');
+    setText('ops-quic', typeof now.box_quic_percent === 'number' ? now.box_quic_percent + ' %' : '—');
+    setText('ops-quic-note', 'boxes; phones ' + (typeof now.app_quic_percent === 'number' ? now.app_quic_percent + ' %' : '—'));
+    const month = ops.month || {};
+    setText('ops-bytes', bytes(month.bytes_out));
+    setText('ops-budget', (typeof month.budget_percent === 'number' ? month.budget_percent + ' % ' : '') + 'of ' + bytes(month.budget_bytes) + ' free; tunnel ' + bytes(month.tun_bytes) +
+      '; ' + number(month.hours_recorded) + ' of ' + number(month.hours_so_far) + ' hours recorded');
+    renderBars('ops-chart', (ops.hours || []).map((h) => ({ date: h.hour, value: h.missing ? null : h.boxes_max,
+      gap: 'no hour from Cloud', coverage: new Date(h.hour).toISOString().slice(11, 16) + ' UTC' + (h.starts ? ' · restart in the hour' : '') })), number);
+    const week = ops.week || {};
+    // A week without hours is a week without data, not a quiet week.
+    const quiet = (text) => week.hours_recorded ? text : 'No service hours in the last 7 days.';
+    listInto('ops-drops', (week.drops || []).slice(0, 10).map((d) => [d.name.replace(/_/g, ' '), number(d.count)]), quiet('Nothing dropped.'));
+    const push = week.push || {};
+    listInto('ops-push', [['Alerts', push.alert], ['Widgets', push.widgets], ['Browsers', push.browser]].filter((r) => r[1] && r[1].sent)
+      .map(([label, r]) => [label + ' · ' + number(r.sent), r.ok_percent + ' % ok']).concat(push.breaker_opened ? [['Breaker opened', number(push.breaker_opened)]] : []), quiet('No pushes sent.'));
+    listInto('ops-mcp', ((week.mcp && week.mcp.outcomes) || []).map((o) => [o.name.replace(/_/g, ' '), number(o.count)])
+      .concat(week.mcp && week.mcp.p99_ms_max !== null && week.mcp.p99_ms_max !== undefined ? [['slowest hour p99', ms(week.mcp.p99_ms_max)]] : []), quiet('No assistant calls.'));
+    listInto('ops-latency', (ops.latency_24h || []).filter((l) => l.n > 0).map((l) => [l.name.replace(/_seconds/, '').replace(/_/g, ' ') + ' · ' + number(l.n), ms(l.p99_ms_max)]), 'Nothing timed.');
+    listInto('ops-deploys', (ops.deploys || []).slice(0, 8).map((d) => [shortDate(d.hour) + ' ' + new Date(d.hour).toISOString().slice(11, 16) + ' UTC',
+      (d.starts ? number(d.starts) + ' start' : 'no start') + ' · ' + number(d.drained_sockets) + ' drained' + (d.left_open ? ', ' + number(d.left_open) + ' left open' : '') + ' · ' + number(d.box_handshakes) + ' box handshakes']), 'No deploys in 30 days.');
+  }
+
 `

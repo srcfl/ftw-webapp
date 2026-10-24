@@ -317,6 +317,7 @@ describe('project stats Worker', () => {
       relaySnapshots: '2026-05-18T12:00:00.000Z',
       fleetDaily: '2026-05-19',
       collectorRuns: '2026-05-18T12:00:00.000Z',
+      cloudOps: '2026-05-18T12:00:00.000Z',
     })
 
     await env.DB.batch([
@@ -389,6 +390,15 @@ describe('project stats Worker', () => {
           )
           .bind(`source:${finished}`, finished, finished)
       ),
+      ...['2026-05-18T11:00:00.000Z', '2026-05-18T12:00:00.000Z'].map((hour) =>
+        env.DB
+          .prepare(
+            `INSERT INTO cloud_ops_hours (shard, hour, seconds, starts, counters_json, gauges_json, latency_json, observed_at)
+             VALUES ('s1', ?, 3600, 0, '{}', '{}', '{}', ?)`
+          )
+          .bind(hour, hour)
+      ),
+      env.DB.prepare(`INSERT INTO cloud_ops_days (id, observed_at, fleet_json, energy_json) VALUES (1, '2026-05-18T11:00:00.000Z', '[]', '[]')`),
     ])
 
     await pruneStoredData(env.DB, nowMs)
@@ -402,9 +412,11 @@ describe('project stats Worker', () => {
       'relay_snapshots',
       'fleet_daily',
       'collector_runs',
+      'cloud_ops_hours',
     ]) {
       expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count')).toBe(1)
     }
+    expect(await env.DB.prepare('SELECT COUNT(*) AS count FROM cloud_ops_days').first('count')).toBe(0)
   })
 
   it('rejects fields that could turn an aggregate into an identity log', async () => {
@@ -643,7 +655,7 @@ it('keeps six-repo snapshots, daily traffic and public Cloud feeds within separa
     expect(requests).toBe(count)
   }
   const runs=await env.DB.prepare('SELECT source,ok FROM collector_runs').all<{source:string;ok:number}>()
-  expect(runs.results).toHaveLength(16)
+  expect(runs.results).toHaveLength(17)
   expect(runs.results.every(r=>r.ok===1)).toBe(true)
 })
 
