@@ -22,6 +22,15 @@ const ENERGY_OPEN_DAYS = 4
 export const EGRESS_BUDGET_BYTES = 100e9
 
 const dimensions = ['ftw_versions', 'channels', 'drivers', 'battery_kwh', 'price_zones', 'install_age'] as const
+// How the boxes ran, from ftw.fleet/2 reports only: each a few fixed words.
+// A day without such a report has none of these fields.
+export const healthBuckets = {
+  plan_solve: ['none', '0-1s', '1-5s', '5s+'],
+  plan_fallbacks: ['none', '0', '1-3', '4+'],
+  driver_errors: ['none', '0', '0-1%', '1%+'],
+  update: ['none', 'ok', 'failed'],
+} as const
+const health = Object.keys(healthBuckets) as (keyof typeof healthBuckets)[]
 
 export interface Gauge { min: number; mean: number; max: number }
 export interface Latency { n: number; p50: number | null; p95: number | null; p99: number | null }
@@ -96,7 +105,8 @@ export function parseOps(value: unknown, nowMs: number): OpsFeed {
   const seen = new Set<string>()
   for (const item of v['fleet_days']) {
     const d = record(item, 'day'), date = String(d['date'])
-    exact(d, ['date', 'reports', ...dimensions], 'day')
+    const withHealth = 'plan_solve' in d
+    exact(d, ['date', 'reports', ...dimensions, ...(withHealth ? health : [])], 'day')
     day(date, today, seen)
     const reports = d['reports']
     if (!int(reports, 0, 100_000)) throw new Error('invalid ops fleet count')
@@ -106,6 +116,15 @@ export function parseOps(value: unknown, nowMs: number): OpsFeed {
       for (const [label, n] of Object.entries(labels)) {
         if (!label || label.length > 128 || /[\x00-\x1f\x7f]/.test(label) || !int(n, 1, reports as number)) throw new Error('invalid ops fleet label')
       }
+    }
+    if (withHealth) for (const key of health) {
+      const labels = record(d[key], 'fleet health')
+      let total = 0
+      for (const [label, n] of Object.entries(labels)) {
+        if (!(healthBuckets[key] as readonly string[]).includes(label) || !int(n, 1, reports as number)) throw new Error('invalid ops fleet health')
+        total += n as number
+      }
+      if (total < 1 || total > (reports as number)) throw new Error('invalid ops fleet health total')
     }
   }
   const closed = new Date(Date.parse(today) - (ENERGY_OPEN_DAYS - 1) * DAY_MS).toISOString().slice(0, 10)

@@ -179,7 +179,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
         <div class="dimension"><h3>Deploys and drains, 30 days</h3><ul id="ops-deploys" class="ranked-list"></ul></div>
         <div class="dimension"><h3>Daily reports, exact</h3><ul id="ops-fleet" class="ranked-list"></ul></div>
       </div>
-      <p id="ops-fleet-note" class="footnote">Exact daily reports for closed UTC days, below the public group size of 5 too. A report is a daily check-in, not a user or a unique box.</p>
+      <p id="ops-fleet-note" class="footnote">Exact daily reports for closed UTC days, below the public group size of 5 too. A report is a daily check-in, not a user or a unique box. Health counts come only from reports that carry them: the slowest plan and fallback plans of the box's last day, the share of failed driver reads, and the newest update of its last week.</p>
       <div id="ops-fleet-labels" class="dimension-grid"></div>
       <div class="table-wrap">
         <table>
@@ -570,9 +570,10 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     listInto('ops-fleet', days.map((day) => [day.date, number(day.reports)]), 'No daily reports yet.');
     const labels = $('ops-fleet-labels');
     labels.replaceChildren();
-    const titles = { ftw_versions: 'FTW versions', drivers: 'Device integrations', channels: 'Channels', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age' };
+    const titles = { ftw_versions: 'FTW versions', drivers: 'Device integrations', channels: 'Channels', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age',
+      plan_solve: 'Slowest plan', plan_fallbacks: 'Fallback plans', driver_errors: 'Failed driver reads', update: 'Newest update' };
     if (days[0]) {
-      for (const key of Object.keys(titles)) {
+      for (const key of Object.keys(titles).filter((k) => days[0][k])) {
         const block = node('div', undefined, 'dimension');
         block.append(node('h3', titles[key] + ', ' + shortDate(days[0].date)));
         const chips = node('div', undefined, 'chips');

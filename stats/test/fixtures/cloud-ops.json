@@ -2,7 +2,7 @@
  "schema": "ftw.cloud-ops/1",
  "meaning": "sums over the whole service, and closed daily totals over all reports; no home, device or address",
  "shard": "s1",
- "observed_at": "2026-10-24T06:14:05Z",
+ "observed_at": "2026-10-24T06:35:14Z",
  "hours": [
   {
    "hour": "2026-10-24T03:00:00Z",
@@ -383,6 +383,18 @@
    "install_age": {
     "1-6m": 1,
     "unknown": 1
+   },
+   "plan_solve": {
+    "1-5s": 1
+   },
+   "plan_fallbacks": {
+    "0": 1
+   },
+   "driver_errors": {
+    "0-1%": 1
+   },
+   "update": {
+    "ok": 1
    }
   }
  ],

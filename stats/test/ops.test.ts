@@ -34,6 +34,7 @@ function hour(ms: number, over: Record<string, unknown> = {}) {
   }
 }
 
+const health = () => ({ plan_solve: { '0-1s': 1, '5s+': 1 }, plan_fallbacks: { '0': 2 }, driver_errors: { '0-1%': 2 }, update: { none: 1, failed: 1 } })
 const daysBack = (nowMs: number, n: number) => new Date(nowMs - n * 24 * HOUR).toISOString().slice(0, 10)
 function feed(nowMs: number, hours = [hour(nowMs - 3 * HOUR), hour(nowMs - 2 * HOUR)], over: Record<string, unknown> = {}) {
   return {
@@ -49,13 +50,14 @@ function feed(nowMs: number, hours = [hour(nowMs - 3 * HOUR), hour(nowMs - 2 * H
 
 describe('FTW Cloud ops feed', () => {
   // The fixture is ftwcloudd's own answer (srcfl/ftw-cloud internal/ops),
-  // with test series renamed: two hours, and a closed fleet day and energy
-  // date of two reports each.
+  // with test series renamed: two hours, a closed fleet day of two reports,
+  // one of them ftw.fleet/2 with health, and an energy date of two reports.
   it('takes a feed ftwcloudd wrote', () => {
     const now = Date.parse(written.observed_at)
     expect(parseOps(written, now)).toEqual(written)
     expect(written.hours[0]!.latency_ms['example_slow_seconds']).toEqual({ n: 1, p50: null, p95: null, p99: null })
     expect(written.fleet_days[0]!.reports).toBe(2)
+    expect((written.fleet_days[0] as Record<string, unknown>)['update']).toEqual({ ok: 1 })
     expect(written.energy_days[0]!.grid_import_kwh).toBe(40)
   })
 
@@ -95,12 +97,23 @@ describe('FTW Cloud ops feed', () => {
       ['an energy sum above a report\'s most', f => { f.energy_days[0].pv_generation_kwh = 2001 }],
       ['an energy day without reports', f => { f.energy_days[0].reports = 0 }],
       ['an array for counters', f => { f.hours[0].counters = [] }],
+      ['a health field alone', f => { f.fleet_days[0].plan_solve = { '0-1s': 2 } }],
+      ['health with a word off the list', f => { Object.assign(f.fleet_days[0], health(), { update: { 'v0.155.0': 1 } }) }],
+      ['health above the reports', f => { Object.assign(f.fleet_days[0], health(), { driver_errors: { '0': 2, '1%+': 1 } }) }],
+      ['health with a home', f => { Object.assign(f.fleet_days[0], health(), { home: 'x' }) }],
     ]
     for (const [what, change] of variants) {
       const f = structuredClone(good)
       change(f)
       expect(() => parseOps(f, now), what).toThrow()
     }
+  })
+
+  it('takes the health counts of reports that carry them', () => {
+    const now = Date.UTC(2026, 9, 24, 6, 23)
+    const f = feed(now)
+    Object.assign(f.fleet_days[0]!, health())
+    expect(parseOps(f, now)).toEqual(f)
   })
 
   it('waits without a key and asks with it, from the newest hour kept', async () => {

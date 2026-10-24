@@ -183,6 +183,10 @@ each hour the Worker reads `https://cloud.ftw.energy/v1/ops` with
   fleet and energy report totals as FTW Cloud holds them, below the public
   group size of 5 too, but only for closed days: a fleet day once it ends,
   an energy date four days after. Two pulls never differ by one report.
+  Fleet days from `ftw.fleet/2` reports also count how the boxes ran: the
+  slowest plan and fallback plans of each box's last day, the share of
+  failed driver reads, and the newest update of its last week, each a few
+  fixed words. The public view does not show these.
 
 Each pull asks from an hour before the newest hour kept, so a restart's late
 part of an hour replaces the row. A Cloud without a key answers 404, which
