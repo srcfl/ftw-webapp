@@ -187,6 +187,50 @@ export async function collectOps(env: AppEnv, nowMs = Date.now()): Promise<void>
 }
 
 interface HourRow { shard: string; hour: string; seconds: number; starts: number; counters_json: string; gauges_json: string; latency_json: string }
+interface Hour { hour: string; seconds: number; starts: number; counters: Record<string, number>; gauges: Record<string, Gauge>; latency: Record<string, Latency> }
+
+// A quantile past ftwcloudd's last bucket (10 s) comes as null beside a
+// count. It is the slowest case there is, never a missing one.
+export const OVER_LAST_BUCKET = 'over_10s' as const
+type Slowest = number | typeof OVER_LAST_BUCKET | null
+function quantileOf(l: Latency | undefined, q: 'p50' | 'p95' | 'p99'): Slowest {
+  if (!l || l.n === 0) return null
+  return l[q] ?? OVER_LAST_BUCKET
+}
+function slowest(values: Slowest[]): Slowest {
+  if (values.includes(OVER_LAST_BUCKET)) return OVER_LAST_BUCKET
+  const v = values.filter((x): x is number => typeof x === 'number')
+  return v.length ? Math.max(...v) : null
+}
+const slowestOf = (rows: Hour[], key: string, q: 'p50' | 'p99' = 'p99') => slowest(rows.map(r => quantileOf(r.latency[key], q)))
+
+// byHour adds the shards of each hour together: each holds its own homes, so
+// counts and gauges sum, and a latency keeps the slowest shard's quantile.
+function byHour(rows: HourRow[]): Hour[] {
+  const hours = new Map<string, Hour>()
+  for (const r of rows) {
+    const counters = JSON.parse(r.counters_json) as Record<string, number>
+    const gauges = JSON.parse(r.gauges_json) as Record<string, Gauge>
+    const latency = JSON.parse(r.latency_json) as Record<string, Latency>
+    const h = hours.get(r.hour)
+    if (!h) { hours.set(r.hour, { hour: r.hour, seconds: r.seconds, starts: r.starts, counters, gauges, latency }); continue }
+    h.seconds = Math.min(h.seconds, r.seconds)
+    h.starts += r.starts
+    for (const [k, n] of Object.entries(counters)) h.counters[k] = (h.counters[k] ?? 0) + n
+    for (const [k, g] of Object.entries(gauges)) {
+      const o = h.gauges[k]
+      h.gauges[k] = o ? { min: o.min + g.min, mean: o.mean + g.mean, max: o.max + g.max } : g
+    }
+    for (const [k, l] of Object.entries(latency)) {
+      const o = h.latency[k]
+      if (!o) { h.latency[k] = l; continue }
+      // A quantile of both is no slower than the slower shard's.
+      const merged = (q: 'p50' | 'p95' | 'p99') => { const w = slowest([quantileOf(o, q), quantileOf(l, q)]); return w === OVER_LAST_BUCKET ? null : w }
+      h.latency[k] = { n: o.n + l.n, p50: merged('p50'), p95: merged('p95'), p99: merged('p99') }
+    }
+  }
+  return [...hours.values()].sort((a, b) => a.hour.localeCompare(b.hour))
+}
 
 const sumOf = (rows: Record<string, number>[], key: string) => rows.reduce((n, c) => n + (c[key] ?? 0), 0)
 function prefixed(totals: Record<string, number>, prefix: string): { name: string; count: number }[] {
@@ -198,31 +242,35 @@ function share(a: number | undefined, b: number | undefined): number | null {
 }
 
 // opsSummary is what the private view shows: the service now, the last two
-// days hour by hour, a week of drops, pushes and assistant calls, deploys over
-// 30 days, data out this month against the free allowance, and the fleet's
-// exact days.
+// days hour by hour with missing hours as gaps, a week of drops, pushes and
+// assistant calls, deploys over 30 days, data out this month against the
+// free allowance, and the fleet's exact days. Old data reads as stale, never
+// as nothing happening.
 export async function opsSummary(db: D1Database, nowMs: number): Promise<Record<string, unknown>> {
-  const monthStart = new Date(Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), 1)).toISOString()
-  const since = new Date(Math.min(nowMs - 30 * DAY_MS, Date.parse(monthStart))).toISOString()
-  const [hours, days] = await Promise.all([
+  const monthStartMs = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), 1)
+  const monthStart = new Date(monthStartMs).toISOString()
+  const since = new Date(Math.min(nowMs - 30 * DAY_MS, monthStartMs)).toISOString()
+  const [stored, days] = await Promise.all([
     db.prepare('SELECT shard,hour,seconds,starts,counters_json,gauges_json,latency_json FROM cloud_ops_hours WHERE hour >= ? ORDER BY hour ASC').bind(since).all<HourRow>(),
     db.prepare('SELECT observed_at, fleet_json, energy_json FROM cloud_ops_days WHERE id=1').first<{ observed_at: string; fleet_json: string; energy_json: string }>(),
   ])
-  const rows = hours.results.map(r => ({ hour: r.hour, seconds: r.seconds, starts: r.starts,
-    counters: JSON.parse(r.counters_json) as Record<string, number>, gauges: JSON.parse(r.gauges_json) as Record<string, Gauge>, latency: JSON.parse(r.latency_json) as Record<string, Latency> }))
-  const fleetDays = days ? (JSON.parse(days.fleet_json) as FleetDay[]).sort((a, b) => a.date.localeCompare(b.date)) : []
-  const fleet = { state: days ? 'visible' : 'empty', observed_at: days?.observed_at ?? null, meaning: 'exact daily reports for closed UTC days, not users or unique boxes; private view only', days: fleetDays }
-  const energy = { state: days ? 'visible' : 'empty', observed_at: days?.observed_at ?? null, meaning: 'exact daily energy reports for closed dates, not homes; private view only',
+  const rows = byHour(stored.results)
+  const daysState = !days ? 'empty' : nowMs - Date.parse(days.observed_at) > 2 * DAY_MS ? 'stale' : 'visible'
+  const fleet = { state: daysState, observed_at: days?.observed_at ?? null, meaning: 'exact daily reports for closed UTC days, not users or unique boxes; private view only',
+    days: days ? (JSON.parse(days.fleet_json) as FleetDay[]).sort((a, b) => a.date.localeCompare(b.date)) : [] }
+  const energy = { state: daysState, observed_at: days?.observed_at ?? null, meaning: 'exact daily energy reports for closed dates, not homes; private view only',
     days: days ? (JSON.parse(days.energy_json) as ExactEnergyDay[]).sort((a, b) => a.date.localeCompare(b.date)) : [] }
   if (!rows.length) return { state: 'empty', hours: [], fleet, energy }
-  const week = rows.filter(r => Date.parse(r.hour) >= nowMs - 7 * DAY_MS).map(r => r.counters)
-  const month = rows.filter(r => r.hour >= monthStart).map(r => r.counters)
+  const weekRows = rows.filter(r => Date.parse(r.hour) >= nowMs - 7 * DAY_MS)
+  const monthRows = rows.filter(r => r.hour >= monthStart)
   const totals: Record<string, number> = {}
-  for (const c of week) for (const [k, n] of Object.entries(c)) totals[k] = (totals[k] ?? 0) + n
+  for (const r of weekRows) for (const [k, n] of Object.entries(r.counters)) totals[k] = (totals[k] ?? 0) + n
   const latest = rows.at(-1)!
   const g = (key: string) => latest.gauges[key]
-  const p99 = (r: typeof latest, key: string) => r.latency[key]?.p99 ?? null
+  const month = monthRows.map(r => r.counters)
   const bytesOut = sumOf(month, 'bytes_out_box') + sumOf(month, 'bytes_out_app')
+  const byStart = new Map(rows.map(r => [Date.parse(r.hour), r]))
+  const lastHour = Math.floor(nowMs / HOUR_MS) * HOUR_MS - HOUR_MS
   return {
     state: nowMs - Date.parse(latest.hour) <= 3 * HOUR_MS ? 'visible' : 'stale',
     meaning: 'sums over the whole service each hour; no home, device or address',
@@ -234,28 +282,38 @@ export async function opsSummary(db: D1Database, nowMs: number): Promise<Record<
     },
     month: { start: monthStart, bytes_out: bytesOut, tun_bytes: sumOf(month, 'tun_bytes_up') + sumOf(month, 'tun_bytes_down'),
       budget_bytes: EGRESS_BUDGET_BYTES, budget_percent: Math.round(bytesOut / EGRESS_BUDGET_BYTES * 1000) / 10,
-      note: 'Message bytes the service wrote to boxes and phones; TLS and framing come on top. The allowance is AWS\'s free data out across the account.' },
-    hours: rows.filter(r => Date.parse(r.hour) >= nowMs - 2 * DAY_MS).map(r => ({
-      hour: r.hour, seconds: r.seconds, starts: r.starts,
-      boxes_max: r.gauges['sockets_box']?.max ?? null, phones_max: r.gauges['sockets_app']?.max ?? null,
-      bytes_out: (r.counters['bytes_out_box'] ?? 0) + (r.counters['bytes_out_app'] ?? 0),
-      drops: Object.entries(r.counters).filter(([k]) => k.startsWith('drops_')).reduce((n, [, v]) => n + v, 0),
-      forward_p99_ms: Math.max(...['forward_seconds_envelope', 'forward_seconds_tun_up', 'forward_seconds_tun_down'].map(k => p99(r, k) ?? 0)),
-    })),
+      hours_recorded: monthRows.length, hours_so_far: Math.max(0, Math.floor((nowMs - monthStartMs) / HOUR_MS)),
+      note: 'Message bytes the service wrote to boxes and phones in the hours recorded; TLS and framing come on top. The allowance is AWS\'s free data out across the account.' },
+    // The last 48 hours, one slot each; an hour Cloud did not report is a gap.
+    hours: Array.from({ length: 48 }, (_, i) => lastHour - (47 - i) * HOUR_MS).map(start => {
+      const r = byStart.get(start)
+      if (!r) return { hour: new Date(start).toISOString(), missing: true }
+      return {
+        hour: r.hour, seconds: r.seconds, starts: r.starts,
+        boxes_max: r.gauges['sockets_box']?.max ?? null, phones_max: r.gauges['sockets_app']?.max ?? null,
+        bytes_out: (r.counters['bytes_out_box'] ?? 0) + (r.counters['bytes_out_app'] ?? 0),
+        drops: Object.entries(r.counters).filter(([k]) => k.startsWith('drops_')).reduce((n, [, v]) => n + v, 0),
+        forward_p99_ms: slowest(['forward_seconds_envelope', 'forward_seconds_tun_up', 'forward_seconds_tun_down'].map(k => quantileOf(r.latency[k], 'p99'))),
+      }
+    }),
     week: {
+      hours_recorded: weekRows.length,
       drops: prefixed(totals, 'drops_'),
       push: {
         alert: pushResults(totals, 'apns_alert_'), widgets: pushResults(totals, 'apns_widgets_'), browser: pushResults(totals, 'webpush_'),
         breaker_opened: totals['apns_breaker_open'] ?? 0, coalesced: totals['push_coalesced'] ?? 0,
       },
-      mcp: { outcomes: prefixed(totals, 'mcp_'), p99_ms_max: maxOf(rows, 'mcp_call_seconds') },
+      mcp: { outcomes: prefixed(totals, 'mcp_'), p99_ms_max: slowestOf(weekRows, 'mcp_call_seconds') },
       wrong_shard: prefixed(totals, 'wrong_shard_'),
     },
     latency_24h: ['forward_seconds_envelope', 'forward_seconds_tun_up', 'forward_seconds_tun_down', 'handshake_seconds_box', 'handshake_seconds_app', 'handshake_seconds_once', 'mcp_call_seconds']
-      .map(key => ({ name: key, ...latencyOver(rows.filter(r => Date.parse(r.hour) >= nowMs - DAY_MS), key) })),
+      .map(key => {
+        const day = rows.filter(r => Date.parse(r.hour) >= nowMs - DAY_MS)
+        return { name: key, n: day.reduce((t, r) => t + (r.latency[key]?.n ?? 0), 0), p99_ms_max: slowestOf(day, key), p50_ms_max: slowestOf(day, key, 'p50') }
+      }),
     deploys: rows.filter(r => r.starts > 0 || (r.counters['drains'] ?? 0) > 0).map(r => ({
       hour: r.hour, starts: r.starts, seconds: r.seconds, drains: r.counters['drains'] ?? 0, drained_sockets: r.counters['drained_sockets'] ?? 0,
-      left_open: r.counters['drain_left_open'] ?? 0, box_handshakes: r.latency['handshake_seconds_box']?.n ?? 0, box_handshake_p99_ms: p99(r, 'handshake_seconds_box'),
+      left_open: r.counters['drain_left_open'] ?? 0, box_handshakes: r.latency['handshake_seconds_box']?.n ?? 0, box_handshake_p99_ms: quantileOf(r.latency['handshake_seconds_box'], 'p99'),
     })).reverse(),
     fleet,
     energy,
@@ -266,12 +324,4 @@ function pushResults(totals: Record<string, number>, prefix: string) {
   const r = Object.fromEntries(prefixed(totals, prefix).map(x => [x.name, x.count]))
   const sent = Object.values(r).reduce((n, c) => n + c, 0)
   return { results: r, sent, ok_percent: sent > 0 ? Math.round((r['ok'] ?? 0) / sent * 1000) / 10 : null }
-}
-function maxOf(rows: { latency: Record<string, Latency> }[], key: string): number | null {
-  const v = rows.map(r => r.latency[key]?.p99).filter((p): p is number => typeof p === 'number')
-  return v.length ? Math.max(...v) : null
-}
-function latencyOver(rows: { latency: Record<string, Latency> }[], key: string) {
-  const n = rows.reduce((t, r) => t + (r.latency[key]?.n ?? 0), 0)
-  return { n, p99_ms_max: maxOf(rows, key), p50_ms_max: (() => { const v = rows.map(r => r.latency[key]?.p50).filter((p): p is number => typeof p === 'number'); return v.length ? Math.max(...v) : null })() }
 }

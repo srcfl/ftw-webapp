@@ -161,36 +161,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       <p id="relay-note" class="footnote">Aggregate ranges only. The stats service never receives handles, addresses or routed frames.</p>
     </section>
 
-    <section id="ops-section" class="panel" aria-labelledby="ops-title" hidden>
-      <div class="panel-head"><div><p class="eyebrow">FTW CLOUD · PRIVATE</p><h2 id="ops-title">Service operations</h2></div><span id="ops-age" class="muted">not collected</span></div>
-      <p class="panel-copy">Each hour sums over the whole service. No home, device or address reaches this page. Cloud and this page keep the hours for 90 days.</p>
-      <div class="mini-grid">
-        <div><span>Boxes connected</span><strong id="ops-boxes">—</strong><small id="ops-boxes-note" class="muted"></small></div>
-        <div><span>Phones connected</span><strong id="ops-phones">—</strong><small id="ops-phones-note" class="muted"></small></div>
-        <div><span>Over QUIC</span><strong id="ops-quic">—</strong><small id="ops-quic-note" class="muted">boxes, last hour</small></div>
-        <div><span>Data out this month</span><strong id="ops-bytes">—</strong><small id="ops-budget" class="muted">of 100 GB free</small></div>
-      </div>
-      <div id="ops-chart" class="bars compact" role="img" aria-label="Most boxes connected each hour, last 48 hours"></div>
-      <div class="dimension-grid">
-        <div class="dimension"><h3>Drops, 7 days</h3><ul id="ops-drops" class="ranked-list"></ul></div>
-        <div class="dimension"><h3>Push, 7 days</h3><ul id="ops-push" class="ranked-list"></ul></div>
-        <div class="dimension"><h3>Assistant calls, 7 days</h3><ul id="ops-mcp" class="ranked-list"></ul></div>
-        <div class="dimension"><h3>Slowest p99, 24 hours</h3><ul id="ops-latency" class="ranked-list"></ul></div>
-        <div class="dimension"><h3>Deploys and drains, 30 days</h3><ul id="ops-deploys" class="ranked-list"></ul></div>
-        <div class="dimension"><h3>Daily reports, exact</h3><ul id="ops-fleet" class="ranked-list"></ul></div>
-      </div>
-      <p id="ops-fleet-note" class="footnote">Exact daily reports for closed UTC days, below the public group size of 5 too. A report is a daily check-in, not a user or a unique box. Health counts come only from reports that carry them: the slowest plan and fallback plans of the box's last day, the share of failed driver reads, and the newest update of its last week.</p>
-      <div id="ops-fleet-labels" class="dimension-grid"></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Energy reports, exact</th><th class="numeric">Reports</th><th class="numeric">Solar kWh</th><th class="numeric">Import / export kWh</th><th class="numeric">Battery in / out kWh</th><th class="numeric">Vehicle kWh</th></tr></thead>
-          <tbody id="ops-energy"></tbody>
-        </table>
-      </div>
-      <p class="footnote">A date shows once no report may name it, four days after it ends. Each report is one box's whole UTC day, sent without an id through an independent relay. Reports are not homes.</p>
-    </section>
-
-    <section id="private-grid" class="two-col" hidden>
+${privateView ? opsSection : ''}    <section id="private-grid" class="two-col" hidden>
       <article class="panel">
         <div class="panel-head"><div><p class="eyebrow">DISCOVERY</p><h2>Top referrers</h2></div></div>
         <ol id="referrers" class="ranked-list"></ol>
@@ -435,7 +406,7 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
       const height = value === null ? 0 : Math.max(1, Math.ceil((value / max) * 20));
       bar.classList.add('h' + height);
       bar.classList.toggle('withheld', value === null);
-      wrap.title = shortDate(point.date) + ': ' + (value === null ? 'below public threshold' : formatter(value)) + (point.coverage ? ' · ' + point.coverage : '');
+      wrap.title = shortDate(point.date) + ': ' + (value === null ? point.gap || 'below public threshold' : formatter(value)) + (point.coverage ? ' · ' + point.coverage : '');
       wrap.append(bar, node('span', points.length <= 16 ? dayLabel(point.date) : ''));
       host.append(wrap);
     }
@@ -551,7 +522,114 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     renderBars('relay-chart', (relay.series || []).slice(-48).map((point) => ({ date: point.observed_at, value: point.rooms })), number);
   }
 
-  function listInto(id, rows, empty) {
+${privateView ? opsScript : ''}  function renderPrivate(data) {
+    $('private-grid').hidden = false;
+    const refs = $('referrers');
+    refs.replaceChildren();
+    for (const ref of (data.discovery && data.discovery.referrers || []).slice(0, 12)) {
+      const item = node('li');
+      item.append(node('span', ref.referrer), node('strong', number(ref.visits)));
+      refs.append(item);
+    }
+    if (!refs.children.length) refs.append(node('li', 'No referrer data yet.', 'empty'));
+    const collectors = $('collectors');
+    collectors.replaceChildren();
+    for (const collector of data.collectors || []) {
+      const item = node('li');
+      item.append(node('span', '', 'dot ' + (collector.ok ? 'ok' : 'warn')), node('strong', collector.source), node('span', age(collector.finished_at), 'muted'));
+      collectors.append(item);
+    }
+    if (!collectors.children.length) collectors.append(node('li', 'No collector runs yet.', 'empty'));
+  }
+
+  async function load() {
+    try {
+      const response = await fetch(endpoint, { headers: { accept: 'application/json' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      setText('generated', 'Updated ' + age(data.generated_at));
+      renderFreshness(data.freshness || {}, data.mode === 'private');
+      renderOverview(data);
+      renderUsage(data.usage, data.installation_estimate);
+      renderEnergyReports(data.energy_reports);
+      renderHeadline(data.github || {});
+      renderRepositories(data.github && data.github.repositories, data.coverage);
+      renderLine('star-chart', aggregateStateHistory(data.github && data.github.history, 'stars', data.github && data.github.repositories));
+      renderTraffic(data.github && data.github.traffic, data.github && data.github.repositories);
+      renderSite(data.site);
+      renderFleet(data.fleet, data.mode === 'private');
+      if (data.mode === 'private') renderRelay(data.relay);
+      ${privateView ? "if (data.mode === 'private') renderOps(data.cloud_ops);" : ''}
+      if (data.mode === 'private') renderPrivate(data);
+    } catch (error) {
+      const notice = $('notice');
+      notice.hidden = false;
+      notice.textContent = 'Stats could not load. The dashboard will try again on the next visit.';
+      setText('generated', 'Unavailable');
+      renderFreshness({});
+    }
+  }
+  void load();
+  </script>
+</body>
+</html>`
+  return { html, nonce }
+}
+
+function randomNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(18))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+const styles = `
+:root{--bg:#0b0c0b;--surface:#111311;--raised:#171917;--line:#2a2d2a;--fg:#f2f1ec;--dim:#9c9f9a;--accent:#ffab2e;--accent-soft:#3b2b13;--ok:#72d69b;--warn:#ffbf5f;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg);font-synthesis:none}
+[hidden]{display:none!important}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -20%,#252116 0,transparent 34rem),var(--bg);min-height:100vh}a{color:inherit}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,56px);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(16px);z-index:5}.brand{display:flex;gap:10px;align-items:center;text-decoration:none;font:700 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.18em}.brand-mark{color:var(--accent)}.brand-slash{color:#5e615d}.top-actions{display:flex;align-items:center;gap:16px;font:11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em}.mode{color:var(--accent);border:1px solid #59401c;padding:6px 8px;border-radius:2px}.muted{color:var(--dim)}main{width:min(1280px,calc(100% - 36px));margin:0 auto;padding:64px 0 72px}.hero{display:flex;justify-content:space-between;gap:48px;align-items:flex-end;margin-bottom:54px}.eyebrow{color:var(--accent);font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;margin:0 0 12px}h1{font-size:clamp(36px,5vw,72px);line-height:.98;letter-spacing:-.055em;max-width:800px;margin:0}h2{font-size:20px;letter-spacing:-.025em;margin:0}h3{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}.lede{color:var(--dim);font-size:17px;max-width:660px;line-height:1.5;margin:20px 0 0}.freshness{min-width:230px;display:grid;gap:8px}.freshness-item{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;font-size:12px;color:var(--dim)}.freshness-item strong{font-weight:500;color:var(--fg)}.dot{width:7px;height:7px;border-radius:50%;background:#555;display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 12px color-mix(in srgb,var(--ok) 50%,transparent)}.dot.warn{background:var(--warn)}.dot.idle{background:#555}.notice{border:1px solid #674a20;background:#21190e;color:#ffd48f;padding:14px 16px;margin-bottom:24px}.section-head,.panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.section-head{margin:0 0 16px}.section-copy{color:var(--dim);font-size:12px;line-height:1.5;max-width:560px;margin:0;text-align:right}.overview-grid,.metric-grid{display:grid;border-top:1px solid var(--line);border-left:1px solid var(--line);margin-bottom:28px}.overview-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}.metric-card{background:color-mix(in srgb,var(--surface) 92%,transparent);min-height:154px;padding:22px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column}.overview-card{min-height:142px}.metric-card>span,.mini-grid span{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.metric-card strong{font-size:42px;line-height:1;margin:auto 0 12px;letter-spacing:-.05em}.metric-card.status-card strong{font-size:30px;letter-spacing:-.035em}.metric-card small{color:var(--dim);font-size:12px;line-height:1.35}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.panel{background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line);padding:22px;margin:18px 0}.two-col>.panel{margin:0}.chart-panel{min-height:330px}.chart{height:235px;margin-top:24px}.chart svg{display:block;width:100%;height:100%;overflow:visible}h2{scroll-margin-top:90px}.mini-grid.usage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.chart-panel .muted{font-size:11px}.chart-area{fill:color-mix(in srgb,var(--accent) 9%,transparent)}.chart-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round}.bars{height:230px;display:flex;gap:4px;align-items:flex-end;margin-top:24px;border-bottom:1px solid var(--line);padding:0 2px}.bars.compact{height:150px}.bar-wrap{height:100%;flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px}.bar{width:100%;max-width:28px;background:linear-gradient(to top,#88520d,var(--accent));border-radius:2px 2px 0 0;min-height:2px}.bar.withheld{background:#4a4c49}.bar.h0{height:2%}.bar.h1{height:5%}.bar.h2{height:10%}.bar.h3{height:15%}.bar.h4{height:20%}.bar.h5{height:25%}.bar.h6{height:30%}.bar.h7{height:35%}.bar.h8{height:40%}.bar.h9{height:45%}.bar.h10{height:50%}.bar.h11{height:55%}.bar.h12{height:60%}.bar.h13{height:65%}.bar.h14{height:70%}.bar.h15{height:75%}.bar.h16{height:80%}.bar.h17{height:85%}.bar.h18{height:90%}.bar.h19{height:95%}.bar.h20{height:100%}.bar-wrap span{font-size:8px;color:var(--dim);height:12px;white-space:nowrap}.table-wrap{overflow-x:auto;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--dim);font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;padding:12px 14px;border-bottom:1px solid var(--line)}td{padding:15px 14px;border-bottom:1px solid #232523;white-space:nowrap}td:first-child{font-weight:650}td a{text-decoration-color:#51544f;text-underline-offset:3px}.repo-role{display:block;color:var(--dim);font-size:11px;font-weight:400;margin-top:4px}.numeric{font-variant-numeric:tabular-nums}.empty{color:var(--dim);padding:30px 4px;text-align:center}.panel-copy,.footnote{color:var(--dim);font-size:13px;line-height:1.5}.big-inline{font-size:28px;font-weight:700;letter-spacing:-.04em}.dimension-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:26px}.dimension{border-top:1px solid var(--line);padding-top:14px}.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d5d3cb;background:var(--raised);border:1px solid var(--line);padding:6px 8px;border-radius:2px}.mini-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);margin-top:22px}.mini-grid>div{background:var(--raised);padding:18px;display:flex;flex-direction:column;gap:12px}.mini-grid strong{font-size:26px}.ranked-list,.status-list{list-style:none;padding:0;margin:18px 0 0}.ranked-list li{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}.status-list li{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:12px}footer{border-top:1px solid var(--line);padding:24px clamp(18px,4vw,56px);display:flex;justify-content:space-between;gap:20px;color:var(--dim);font-size:12px}footer a{color:var(--fg);text-underline-offset:3px}
+.mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}
+.usage-subhead{margin:28px 0 0}
+@media(max-width:1100px){.overview-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:900px){.hero{align-items:flex-start;flex-direction:column}.freshness{width:100%;grid-template-columns:repeat(2,1fr)}.section-head{align-items:flex-start;flex-direction:column}.section-copy{text-align:left}.overview-grid,.metric-grid{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.dimension-grid{grid-template-columns:repeat(2,1fr)}.mini-grid,.mini-grid.usage-grid{grid-template-columns:repeat(2,1fr)}.mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:560px){main{width:min(100% - 24px,1280px);padding-top:38px}.topbar{padding:0 12px}.top-actions #generated{display:none}.hero{margin-bottom:36px;gap:28px}h1{font-size:40px}.freshness{grid-template-columns:1fr}.metric-card{min-height:130px;padding:16px}.metric-card strong{font-size:34px}.panel{padding:16px}.dimension-grid{grid-template-columns:1fr}.mini-grid{grid-template-columns:1fr 1fr}.bars{gap:2px}footer{flex-direction:column;padding:20px 12px}}
+@media(max-width:560px){.mini-grid.site-grid{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+`
+
+// The private view's Service operations panel and its script. The public
+// page carries neither: its markup, copy and code stay as they were.
+const opsSection = `    <section id="ops-section" class="panel" aria-labelledby="ops-title" hidden>
+      <div class="panel-head"><div><p class="eyebrow">FTW CLOUD · PRIVATE</p><h2 id="ops-title">Service operations</h2></div><span id="ops-age" class="muted">not collected</span></div>
+      <p class="panel-copy">Each hour sums over the whole service. No home, device or address reaches this page. Cloud and this page keep the hours for 90 days.</p>
+      <div class="mini-grid">
+        <div><span>Boxes connected</span><strong id="ops-boxes">—</strong><small id="ops-boxes-note" class="muted"></small></div>
+        <div><span>Phones connected</span><strong id="ops-phones">—</strong><small id="ops-phones-note" class="muted"></small></div>
+        <div><span>Over QUIC</span><strong id="ops-quic">—</strong><small id="ops-quic-note" class="muted">boxes, last hour</small></div>
+        <div><span>Data out this month</span><strong id="ops-bytes">—</strong><small id="ops-budget" class="muted">of 100 GB free</small></div>
+      </div>
+      <div id="ops-chart" class="bars compact" role="img" aria-label="Most boxes connected each hour, last 48 hours"></div>
+      <div class="dimension-grid">
+        <div class="dimension"><h3>Drops, 7 days</h3><ul id="ops-drops" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Push, 7 days</h3><ul id="ops-push" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Assistant calls, 7 days</h3><ul id="ops-mcp" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Slowest p99, 24 hours</h3><ul id="ops-latency" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Deploys and drains, 30 days</h3><ul id="ops-deploys" class="ranked-list"></ul></div>
+        <div class="dimension"><h3>Daily reports, exact</h3><ul id="ops-fleet" class="ranked-list"></ul></div>
+      </div>
+      <p id="ops-fleet-note" class="footnote">Exact daily reports for closed UTC days, below the public group size of 5 too. A report is a daily check-in, not a user or a unique box. Health counts come only from reports that carry them: the slowest plan and fallback plans of the box's last day, the share of failed driver reads, and the newest update of its last week.</p>
+      <div id="ops-fleet-labels" class="dimension-grid"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Energy reports, exact</th><th class="numeric">Reports</th><th class="numeric">Solar kWh</th><th class="numeric">Import / export kWh</th><th class="numeric">Battery in / out kWh</th><th class="numeric">Vehicle kWh</th></tr></thead>
+          <tbody id="ops-energy"></tbody>
+        </table>
+      </div>
+      <p class="footnote">A date shows once no report may name it, four days after it ends. Each report is one box's whole UTC day, sent without an id through an independent relay. Reports are not homes.</p>
+    </section>
+
+`
+
+const opsScript = `  function listInto(id, rows, empty) {
     const host = $(id);
     host.replaceChildren();
     for (const [label, value] of rows) {
@@ -561,13 +639,17 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     }
     if (!host.children.length) host.append(node('li', empty, 'empty'));
   }
-  function ms(value) { return typeof value === 'number' ? (value < 10 ? value.toFixed(2) : fmt.format(value)) + ' ms' : 'over 10 s'; }
+  function ms(value) {
+    if (value === 'over_10s') return 'over 10 s';
+    return typeof value === 'number' ? (value < 10 ? value.toFixed(2) : fmt.format(value)) + ' ms' : '—';
+  }
   function renderOps(ops) {
     if (!ops) return;
     $('ops-section').hidden = false;
     const fleet = ops.fleet || { days: [] };
     const days = (fleet.days || []).slice(-14).reverse();
     listInto('ops-fleet', days.map((day) => [day.date, number(day.reports)]), 'No daily reports yet.');
+    if (fleet.state === 'stale') setText('ops-fleet-note', 'Source is stale: the last saved daily totals came ' + age(fleet.observed_at) + '. These are the last saved values.');
     const labels = $('ops-fleet-labels');
     labels.replaceChildren();
     const titles = { ftw_versions: 'FTW versions', drivers: 'Device integrations', channels: 'Channels', battery_kwh: 'Battery', price_zones: 'Price zones', install_age: 'Install age',
@@ -614,90 +696,22 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     setText('ops-quic-note', 'boxes; phones ' + (typeof now.app_quic_percent === 'number' ? now.app_quic_percent + ' %' : '—'));
     const month = ops.month || {};
     setText('ops-bytes', bytes(month.bytes_out));
-    setText('ops-budget', (typeof month.budget_percent === 'number' ? month.budget_percent + ' % ' : '') + 'of ' + bytes(month.budget_bytes) + ' free; tunnel ' + bytes(month.tun_bytes));
-    renderBars('ops-chart', (ops.hours || []).map((h) => ({ date: h.hour, value: h.boxes_max, coverage: h.starts ? 'restart in the hour' : '' })), number);
+    setText('ops-budget', (typeof month.budget_percent === 'number' ? month.budget_percent + ' % ' : '') + 'of ' + bytes(month.budget_bytes) + ' free; tunnel ' + bytes(month.tun_bytes) +
+      '; ' + number(month.hours_recorded) + ' of ' + number(month.hours_so_far) + ' hours recorded');
+    renderBars('ops-chart', (ops.hours || []).map((h) => ({ date: h.hour, value: h.missing ? null : h.boxes_max,
+      gap: 'no hour from Cloud', coverage: new Date(h.hour).toISOString().slice(11, 16) + ' UTC' + (h.starts ? ' · restart in the hour' : '') })), number);
     const week = ops.week || {};
-    listInto('ops-drops', (week.drops || []).slice(0, 10).map((d) => [d.name.replace(/_/g, ' '), number(d.count)]), 'Nothing dropped.');
+    // A week without hours is a week without data, not a quiet week.
+    const quiet = (text) => week.hours_recorded ? text : 'No service hours in the last 7 days.';
+    listInto('ops-drops', (week.drops || []).slice(0, 10).map((d) => [d.name.replace(/_/g, ' '), number(d.count)]), quiet('Nothing dropped.'));
     const push = week.push || {};
     listInto('ops-push', [['Alerts', push.alert], ['Widgets', push.widgets], ['Browsers', push.browser]].filter((r) => r[1] && r[1].sent)
-      .map(([label, r]) => [label + ' · ' + number(r.sent), r.ok_percent + ' % ok']).concat(push.breaker_opened ? [['Breaker opened', number(push.breaker_opened)]] : []), 'No pushes sent.');
+      .map(([label, r]) => [label + ' · ' + number(r.sent), r.ok_percent + ' % ok']).concat(push.breaker_opened ? [['Breaker opened', number(push.breaker_opened)]] : []), quiet('No pushes sent.'));
     listInto('ops-mcp', ((week.mcp && week.mcp.outcomes) || []).map((o) => [o.name.replace(/_/g, ' '), number(o.count)])
-      .concat(week.mcp && typeof week.mcp.p99_ms_max === 'number' ? [['slowest hour p99', ms(week.mcp.p99_ms_max)]] : []), 'No assistant calls.');
+      .concat(week.mcp && week.mcp.p99_ms_max !== null && week.mcp.p99_ms_max !== undefined ? [['slowest hour p99', ms(week.mcp.p99_ms_max)]] : []), quiet('No assistant calls.'));
     listInto('ops-latency', (ops.latency_24h || []).filter((l) => l.n > 0).map((l) => [l.name.replace(/_seconds/, '').replace(/_/g, ' ') + ' · ' + number(l.n), ms(l.p99_ms_max)]), 'Nothing timed.');
     listInto('ops-deploys', (ops.deploys || []).slice(0, 8).map((d) => [shortDate(d.hour) + ' ' + new Date(d.hour).toISOString().slice(11, 16) + ' UTC',
       (d.starts ? number(d.starts) + ' start' : 'no start') + ' · ' + number(d.drained_sockets) + ' drained' + (d.left_open ? ', ' + number(d.left_open) + ' left open' : '') + ' · ' + number(d.box_handshakes) + ' box handshakes']), 'No deploys in 30 days.');
   }
 
-  function renderPrivate(data) {
-    $('private-grid').hidden = false;
-    const refs = $('referrers');
-    refs.replaceChildren();
-    for (const ref of (data.discovery && data.discovery.referrers || []).slice(0, 12)) {
-      const item = node('li');
-      item.append(node('span', ref.referrer), node('strong', number(ref.visits)));
-      refs.append(item);
-    }
-    if (!refs.children.length) refs.append(node('li', 'No referrer data yet.', 'empty'));
-    const collectors = $('collectors');
-    collectors.replaceChildren();
-    for (const collector of data.collectors || []) {
-      const item = node('li');
-      item.append(node('span', '', 'dot ' + (collector.ok ? 'ok' : 'warn')), node('strong', collector.source), node('span', age(collector.finished_at), 'muted'));
-      collectors.append(item);
-    }
-    if (!collectors.children.length) collectors.append(node('li', 'No collector runs yet.', 'empty'));
-  }
-
-  async function load() {
-    try {
-      const response = await fetch(endpoint, { headers: { accept: 'application/json' } });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const data = await response.json();
-      setText('generated', 'Updated ' + age(data.generated_at));
-      renderFreshness(data.freshness || {}, data.mode === 'private');
-      renderOverview(data);
-      renderUsage(data.usage, data.installation_estimate);
-      renderEnergyReports(data.energy_reports);
-      renderHeadline(data.github || {});
-      renderRepositories(data.github && data.github.repositories, data.coverage);
-      renderLine('star-chart', aggregateStateHistory(data.github && data.github.history, 'stars', data.github && data.github.repositories));
-      renderTraffic(data.github && data.github.traffic, data.github && data.github.repositories);
-      renderSite(data.site);
-      renderFleet(data.fleet, data.mode === 'private');
-      if (data.mode === 'private') renderRelay(data.relay);
-      if (data.mode === 'private') renderOps(data.cloud_ops);
-      if (data.mode === 'private') renderPrivate(data);
-    } catch (error) {
-      const notice = $('notice');
-      notice.hidden = false;
-      notice.textContent = 'Stats could not load. The dashboard will try again on the next visit.';
-      setText('generated', 'Unavailable');
-      renderFreshness({});
-    }
-  }
-  void load();
-  </script>
-</body>
-</html>`
-  return { html, nonce }
-}
-
-function randomNonce(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(18))
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
-const styles = `
-:root{--bg:#0b0c0b;--surface:#111311;--raised:#171917;--line:#2a2d2a;--fg:#f2f1ec;--dim:#9c9f9a;--accent:#ffab2e;--accent-soft:#3b2b13;--ok:#72d69b;--warn:#ffbf5f;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg);font-synthesis:none}
-[hidden]{display:none!important}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 80% -20%,#252116 0,transparent 34rem),var(--bg);min-height:100vh}a{color:inherit}.topbar{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,56px);position:sticky;top:0;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(16px);z-index:5}.brand{display:flex;gap:10px;align-items:center;text-decoration:none;font:700 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.18em}.brand-mark{color:var(--accent)}.brand-slash{color:#5e615d}.top-actions{display:flex;align-items:center;gap:16px;font:11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em}.mode{color:var(--accent);border:1px solid #59401c;padding:6px 8px;border-radius:2px}.muted{color:var(--dim)}main{width:min(1280px,calc(100% - 36px));margin:0 auto;padding:64px 0 72px}.hero{display:flex;justify-content:space-between;gap:48px;align-items:flex-end;margin-bottom:54px}.eyebrow{color:var(--accent);font:700 10px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.2em;margin:0 0 12px}h1{font-size:clamp(36px,5vw,72px);line-height:.98;letter-spacing:-.055em;max-width:800px;margin:0}h2{font-size:20px;letter-spacing:-.025em;margin:0}h3{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}.lede{color:var(--dim);font-size:17px;max-width:660px;line-height:1.5;margin:20px 0 0}.freshness{min-width:230px;display:grid;gap:8px}.freshness-item{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;font-size:12px;color:var(--dim)}.freshness-item strong{font-weight:500;color:var(--fg)}.dot{width:7px;height:7px;border-radius:50%;background:#555;display:inline-block}.dot.ok{background:var(--ok);box-shadow:0 0 12px color-mix(in srgb,var(--ok) 50%,transparent)}.dot.warn{background:var(--warn)}.dot.idle{background:#555}.notice{border:1px solid #674a20;background:#21190e;color:#ffd48f;padding:14px 16px;margin-bottom:24px}.section-head,.panel-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.section-head{margin:0 0 16px}.section-copy{color:var(--dim);font-size:12px;line-height:1.5;max-width:560px;margin:0;text-align:right}.overview-grid,.metric-grid{display:grid;border-top:1px solid var(--line);border-left:1px solid var(--line);margin-bottom:28px}.overview-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:18px}.metric-card{background:color-mix(in srgb,var(--surface) 92%,transparent);min-height:154px;padding:22px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column}.overview-card{min-height:142px}.metric-card>span,.mini-grid span{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}.metric-card strong{font-size:42px;line-height:1;margin:auto 0 12px;letter-spacing:-.05em}.metric-card.status-card strong{font-size:30px;letter-spacing:-.035em}.metric-card small{color:var(--dim);font-size:12px;line-height:1.35}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}.panel{background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line);padding:22px;margin:18px 0}.two-col>.panel{margin:0}.chart-panel{min-height:330px}.chart{height:235px;margin-top:24px}.chart svg{display:block;width:100%;height:100%;overflow:visible}h2{scroll-margin-top:90px}.mini-grid.usage-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.chart-panel .muted{font-size:11px}.chart-area{fill:color-mix(in srgb,var(--accent) 9%,transparent)}.chart-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round}.bars{height:230px;display:flex;gap:4px;align-items:flex-end;margin-top:24px;border-bottom:1px solid var(--line);padding:0 2px}.bars.compact{height:150px}.bar-wrap{height:100%;flex:1;min-width:3px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px}.bar{width:100%;max-width:28px;background:linear-gradient(to top,#88520d,var(--accent));border-radius:2px 2px 0 0;min-height:2px}.bar.withheld{background:#4a4c49}.bar.h0{height:2%}.bar.h1{height:5%}.bar.h2{height:10%}.bar.h3{height:15%}.bar.h4{height:20%}.bar.h5{height:25%}.bar.h6{height:30%}.bar.h7{height:35%}.bar.h8{height:40%}.bar.h9{height:45%}.bar.h10{height:50%}.bar.h11{height:55%}.bar.h12{height:60%}.bar.h13{height:65%}.bar.h14{height:70%}.bar.h15{height:75%}.bar.h16{height:80%}.bar.h17{height:85%}.bar.h18{height:90%}.bar.h19{height:95%}.bar.h20{height:100%}.bar-wrap span{font-size:8px;color:var(--dim);height:12px;white-space:nowrap}.table-wrap{overflow-x:auto;margin-top:20px}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--dim);font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;padding:12px 14px;border-bottom:1px solid var(--line)}td{padding:15px 14px;border-bottom:1px solid #232523;white-space:nowrap}td:first-child{font-weight:650}td a{text-decoration-color:#51544f;text-underline-offset:3px}.repo-role{display:block;color:var(--dim);font-size:11px;font-weight:400;margin-top:4px}.numeric{font-variant-numeric:tabular-nums}.empty{color:var(--dim);padding:30px 4px;text-align:center}.panel-copy,.footnote{color:var(--dim);font-size:13px;line-height:1.5}.big-inline{font-size:28px;font-weight:700;letter-spacing:-.04em}.dimension-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:26px}.dimension{border-top:1px solid var(--line);padding-top:14px}.chips{display:flex;gap:7px;flex-wrap:wrap}.chip{font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d5d3cb;background:var(--raised);border:1px solid var(--line);padding:6px 8px;border-radius:2px}.mini-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);margin-top:22px}.mini-grid>div{background:var(--raised);padding:18px;display:flex;flex-direction:column;gap:12px}.mini-grid strong{font-size:26px}.ranked-list,.status-list{list-style:none;padding:0;margin:18px 0 0}.ranked-list li{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid var(--line);font-size:13px}.status-list li{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:12px}footer{border-top:1px solid var(--line);padding:24px clamp(18px,4vw,56px);display:flex;justify-content:space-between;gap:20px;color:var(--dim);font-size:12px}footer a{color:var(--fg);text-underline-offset:3px}
-.mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}
-.usage-subhead{margin:28px 0 0}
-@media(max-width:1100px){.overview-grid{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:900px){.hero{align-items:flex-start;flex-direction:column}.freshness{width:100%;grid-template-columns:repeat(2,1fr)}.section-head{align-items:flex-start;flex-direction:column}.section-copy{text-align:left}.overview-grid,.metric-grid{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.dimension-grid{grid-template-columns:repeat(2,1fr)}.mini-grid,.mini-grid.usage-grid{grid-template-columns:repeat(2,1fr)}.mini-grid.site-grid{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:560px){main{width:min(100% - 24px,1280px);padding-top:38px}.topbar{padding:0 12px}.top-actions #generated{display:none}.hero{margin-bottom:36px;gap:28px}h1{font-size:40px}.freshness{grid-template-columns:1fr}.metric-card{min-height:130px;padding:16px}.metric-card strong{font-size:34px}.panel{padding:16px}.dimension-grid{grid-template-columns:1fr}.mini-grid{grid-template-columns:1fr 1fr}.bars{gap:2px}footer{flex-direction:column;padding:20px 12px}}
-@media(max-width:560px){.mini-grid.site-grid{grid-template-columns:1fr}}
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 `

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index.ts'
 import { collectOps, parseOps, OPS_URL } from '../src/ops.ts'
 import { dashboardData } from '../src/store.ts'
+import { dashboardDocument } from '../src/dashboard.ts'
 import type { AppEnv } from '../src/types.ts'
 import written from './fixtures/cloud-ops.json'
 
@@ -193,7 +194,10 @@ describe('FTW Cloud ops feed', () => {
     expect(ops.now.box_quic_percent).toBe(75)
     expect(ops.month.bytes_out).toBe(10_000_000)
     expect(ops.month.budget_bytes).toBe(100e9)
-    expect(ops.hours).toHaveLength(2)
+    expect(ops.hours).toHaveLength(48)
+    expect(ops.hours.filter((h: any) => !h.missing).map((h: any) => h.hour)).toEqual(['2026-10-24T03:00:00.000Z', '2026-10-24T04:00:00.000Z'])
+    expect(ops.hours.at(-1)).toEqual({ hour: '2026-10-24T05:00:00.000Z', missing: true })
+    expect(ops.month).toMatchObject({ hours_recorded: 2, hours_so_far: 558 })
     expect(ops.week.drops).toEqual([{ name: 'tun_rate_up', count: 4 }])
     expect(ops.week.push.alert).toEqual({ results: { ok: 18, gone: 2 }, sent: 20, ok_percent: 90 })
     expect(ops.week.mcp.outcomes).toEqual([{ name: 'ok', count: 60 }, { name: 'tool_error', count: 4 }, { name: 'refused', count: 2 }])
@@ -212,5 +216,65 @@ describe('FTW Cloud ops feed', () => {
 
     const page = await worker.fetch(new Request('https://stats.ftw.energy/admin', { headers: { 'cf-access-jwt-assertion': token } }), env)
     expect(await page.text()).toContain('Service operations')
+  })
+})
+
+describe('the private view of FTW Cloud', () => {
+  const now = Date.UTC(2026, 9, 24, 6, 23)
+  const keyed = () => ({ ...env, CLOUD_OPS_KEY: key })
+  async function store(hours: Record<string, unknown>[], over: Record<string, unknown> = {}, shard = 's1') {
+    vi.stubGlobal('fetch', async () => Response.json({ ...feed(now, hours as any, over), shard }))
+    await collectOps(keyed(), now)
+    return (await dashboardData(env, true, now))['cloud_ops'] as Record<string, any>
+  }
+  const slow = { n: 3, p50: 5, p95: null, p99: null }
+
+  it('reads a quantile past the last bucket as the slowest, not as missing', async () => {
+    const ops = await store([
+      hour(now - 3 * HOUR, { latency_ms: { mcp_call_seconds: slow, forward_seconds_tun_up: slow, handshake_seconds_box: slow } }),
+      hour(now - 2 * HOUR, { starts: 1, latency_ms: { mcp_call_seconds: { n: 1, p50: 50, p95: 50, p99: 50 }, handshake_seconds_box: { n: 2, p50: 1, p95: 5, p99: 5 } } }),
+    ])
+    expect(ops.week.mcp.p99_ms_max).toBe('over_10s')
+    expect(ops.latency_24h.find((l: any) => l.name === 'mcp_call_seconds')).toMatchObject({ n: 4, p99_ms_max: 'over_10s', p50_ms_max: 50 })
+    expect(ops.hours.find((h: any) => h.hour === '2026-10-24T03:00:00.000Z').forward_p99_ms).toBe('over_10s')
+    expect(ops.hours.find((h: any) => h.hour === '2026-10-24T04:00:00.000Z').forward_p99_ms).toBe(null)
+    expect(ops.deploys[0].box_handshake_p99_ms).toBe(5)
+  })
+
+  it('keeps the slowest assistant call to the week the panel names', async () => {
+    const ops = await store([
+      hour(now - 20 * 24 * HOUR, { latency_ms: { mcp_call_seconds: { n: 1, p50: 9000, p95: 9000, p99: 9000 } } }),
+      hour(now - 2 * HOUR, { latency_ms: { mcp_call_seconds: { n: 1, p50: 40, p95: 40, p99: 40 } } }),
+    ])
+    expect(ops.week.mcp.p99_ms_max).toBe(40)
+  })
+
+  it('says stale when the hours or the days are old, never that nothing happened', async () => {
+    const old = await store([hour(now - 9 * 24 * HOUR)])
+    expect(old.state).toBe('stale')
+    expect(old.week.hours_recorded).toBe(0)
+    expect(old.week.drops).toEqual([])
+    await env.DB.prepare("UPDATE cloud_ops_days SET observed_at='2026-10-20T00:00:00Z'").run()
+    const days = (await dashboardData(env, true, now))['cloud_ops'] as Record<string, any>
+    expect(days.fleet.state).toBe('stale')
+    expect(days.energy.state).toBe('stale')
+  })
+
+  it('adds the shards of an hour together', async () => {
+    await store([hour(now - 2 * HOUR)], {}, 's1')
+    const ops = await store([hour(now - 2 * HOUR, { latency_ms: { handshake_seconds_box: slow } })], {}, 's2')
+    expect(ops.now.boxes).toEqual({ min: 6, mean: 8, max: 10 })
+    expect(ops.week.drops).toEqual([{ name: 'tun_rate_up', count: 4 }])
+    expect(ops.deploys).toEqual([])
+    expect(ops.latency_24h.find((l: any) => l.name === 'handshake_seconds_box')).toMatchObject({ n: 7, p99_ms_max: 'over_10s' })
+  })
+
+  it('leaves the public page as it was: no panel, copy or script of it', async () => {
+    const html = await (await worker.fetch(new Request('https://stats.ftw.energy/'), env)).text()
+    for (const word of ['ops-section', 'Service operations', 'group size of 5 too', 'renderOps', 'listInto', 'Energy reports, exact', 'CLOUD_OPS']) {
+      expect(html, word).not.toContain(word)
+    }
+    const page = dashboardDocument(true).html
+    for (const word of ['ops-section', 'Service operations', 'renderOps(data.cloud_ops)']) expect(page).toContain(word)
   })
 })
