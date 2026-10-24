@@ -42,7 +42,9 @@ so Cloud never learns which box sent it. Cloud lists a day only once no
 report may still name it, four days after it ends, and only with at least
 five reports. The Worker parses that feed strictly, keeps the latest copy and
 shows the newest public day and the sum over the public days of the last 30.
-These are reports, not homes; never add them to the hourly usage cells.
+These are reports, not homes; never add them to the hourly usage cells. Once
+Core names the relay, the fleet report takes it too, as a separate message at
+its own time; `/v1/fleet/public` does not change.
 
 The signed legacy ingest route stays for compatibility. It accepts group
 counters only, never routed frames, room handles, box ids, serials, IP
