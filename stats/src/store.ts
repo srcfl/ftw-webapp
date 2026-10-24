@@ -1,5 +1,6 @@
 import type { AppEnv, FleetDay, FleetDimensions } from './types.ts'
 import { installationEstimate, type PublicFleetFeed } from './fleet.ts'
+import { energySummary, type PublicEnergyFeed } from './energy.ts'
 import { retentionCutoffs, utcDayCutoff } from './retention.ts'
 import { parseRepos } from './github.ts'
 
@@ -189,6 +190,7 @@ export async function dashboardData(
   const usageState = usagePaused ? 'paused' : usage ? 'connected' : 'pending'
   const cloudFleet = await env.DB.prepare('SELECT observed_at, view_json FROM cloud_fleet_view WHERE id=1').first<{ observed_at: string; view_json: string }>()
   const feed = cloudFleet ? JSON.parse(cloudFleet.view_json) as PublicFleetFeed : null
+  const cloudEnergy = await env.DB.prepare('SELECT view_json FROM cloud_energy_view WHERE id=1').first<{ view_json: string }>()
   const repoOrder = parseRepos(env.GITHUB_REPOS)
   const repositories = [...latest.results]
     .filter((row) => repoOrder.includes(row.repo))
@@ -247,6 +249,7 @@ export async function dashboardData(
     installation_estimate: installationEstimate(feed?.days ?? (fleetView['days'] as {date:string;reports:number|null}[] ?? []), nowMs, cloudFleet?.observed_at ?? freshness['fleet'] ?? null, feed ? 'cloud.ftw.energy' : 'retired relay archive'),
     fleet_current: feed,
     usage: { ...(usage ? JSON.parse(usage.view_json) as Record<string, unknown> : { minimum: 20 }), state: usageState },
+    energy_reports: energySummary(cloudEnergy ? JSON.parse(cloudEnergy.view_json) as PublicEnergyFeed : null, nowMs),
     github,
     site: siteSummary(siteTraffic.results, env.SITE_HOSTNAME, nowMs),
     fleet: fleetView,

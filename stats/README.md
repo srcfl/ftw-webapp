@@ -35,6 +35,15 @@ uses the Cloud view in place of the archive and never adds them together. The se
 policy below supplies installation, capacity and energy cells. Never merge
 these two report types or treat check-ins as people.
 
+Energy comes from FTW Cloud's anonymous daily energy reports, at
+`/v1/energy/public`. Each box sends one report per closed UTC day: the date
+and six whole-kWh sums. It goes through an independent Oblivious HTTP relay,
+so Cloud never learns which box sent it. Cloud lists a day only once no
+report may still name it, four days after it ends, and only with at least
+five reports. The Worker parses that feed strictly, keeps the latest copy and
+shows the newest public day and the sum over the public days of the last 30.
+These are reports, not homes; never add them to the hourly usage cells.
+
 The signed legacy ingest route stays for compatibility. It accepts group
 counters only, never routed frames, room handles, box ids, serials, IP
 addresses, site names or raw household reports.
