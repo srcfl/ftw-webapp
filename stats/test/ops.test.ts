@@ -97,6 +97,9 @@ describe('FTW Cloud ops feed', () => {
       ['a home on an energy day', f => { f.energy_days[0].home = 'x' }],
       ['an energy sum above a report\'s most', f => { f.energy_days[0].pv_generation_kwh = 2001 }],
       ['an energy day without reports', f => { f.energy_days[0].reports = 0 }],
+      // The public feed may withhold a sum few reports had (null); the exact
+      // internal feed never does.
+      ['a withheld energy sum', f => { f.energy_days[0].vehicle_charge_kwh = null }],
       ['an array for counters', f => { f.hours[0].counters = [] }],
       ['a health field alone', f => { f.fleet_days[0].plan_solve = { '0-1s': 2 } }],
       ['health with a word off the list', f => { Object.assign(f.fleet_days[0], health(), { update: { 'v0.155.0': 1 } }) }],
