@@ -3,8 +3,9 @@ import type { AppEnv } from './types.ts'
 
 // FTW Cloud's anonymous daily energy reports: one report per box and closed
 // UTC day, sent through an independent relay, so Cloud never learns which
-// box sent it. Cloud lists a date only once no report may still name it, and
-// a date with fewer than five reports shows null. These are reports, not homes.
+// box sent it. Cloud lists a date only once no report may still name it. A
+// date with fewer than five reports shows null, and so does a sum that
+// between one and four of them had any of. These are reports, not homes.
 export const energyFields = ['pv_generation_kwh', 'grid_import_kwh', 'grid_export_kwh', 'battery_charge_kwh', 'battery_discharge_kwh', 'vehicle_charge_kwh'] as const
 const PUBLIC_ENERGY_MINIMUM = 5
 // A box names one of the last three closed days, so the newest public date is
@@ -18,13 +19,15 @@ export interface PublicEnergyFeed { schema: 'ftw.energy-public/1'; minimum: numb
 export function parseEnergy(value: unknown, nowMs: number): PublicEnergyFeed {
   const v = value as Record<string, unknown>
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join() !== ['days','meaning','minimum','observed_at','schema'].join() || v['schema'] !== 'ftw.energy-public/1' || v['minimum'] !== PUBLIC_ENERGY_MINIMUM || v['meaning'] !== 'daily reports, not homes') throw new Error('invalid public energy')
-  const observed = Date.parse(String(v['observed_at']))
+  const observed = typeof v['observed_at'] === 'string' ? Date.parse(v['observed_at']) : NaN
   if (!Number.isFinite(observed) || Math.abs(nowMs-observed)>2*3600_000 || !Array.isArray(v['days']) || v['days'].length>31) throw new Error('invalid energy window')
-  const today = Math.floor(observed/86400_000)*86400_000
+  // The earlier of the two clocks: a feed stamped ahead of this Worker must
+  // not make a day still open for reports look closed.
+  const today = Math.floor(Math.min(observed, nowMs)/86400_000)*86400_000
   const newest = new Date(today-OPEN_DAYS*86400_000).toISOString().slice(0,10), oldest = new Date(today-30*86400_000).toISOString().slice(0,10)
   const seen = new Set()
   for (const item of v['days']) {
-    const d = item as Record<string, unknown>, date = String(d?.['date'])
+    const d = item as Record<string, unknown>, date = d && typeof d === 'object' && typeof d['date'] === 'string' ? d['date'] : ''
     if (!d || typeof d !== 'object' || Array.isArray(d) || Object.keys(d).sort().join() !== ['date','reports',...energyFields].sort().join() || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0,10)!==date || date>newest || date<oldest || seen.has(date)) throw new Error('invalid energy day')
     seen.add(date)
     const reports = d['reports']
@@ -33,7 +36,8 @@ export function parseEnergy(value: unknown, nowMs: number): PublicEnergyFeed {
       continue
     }
     if (!Number.isSafeInteger(reports) || (reports as number)<PUBLIC_ENERGY_MINIMUM || (reports as number)>MAX_REPORTS) throw new Error('small energy count')
-    for (const k of energyFields) if (!Number.isSafeInteger(d[k]) || (d[k] as number)<0 || (d[k] as number)>(reports as number)*MAX_KWH) throw new Error('invalid energy sum')
+    // A sum that one to four reports had any of is withheld as null.
+    for (const k of energyFields) if (d[k] !== null && (!Number.isSafeInteger(d[k]) || (d[k] as number)<0 || (d[k] as number)>(reports as number)*MAX_KWH)) throw new Error('invalid energy sum')
   }
   return v as unknown as PublicEnergyFeed
 }
@@ -56,17 +60,25 @@ export async function collectEnergy(env: AppEnv, nowMs = Date.now()) {
   } catch(e){await saveCollectorRun(env.DB,'cloud:energy',started,false,'energy source unavailable or invalid');throw e}
 }
 
-// The newest public date with a count, and the sum over the public dates
-// that have one. Never a value Cloud did not publish.
+// The newest public date with a count, and each sum over the public dates
+// that show it. Never a value Cloud did not publish. A daily feed is stale
+// after 48 hours, not the 2 of the hourly feeds: Cloud adds a day once a day.
+export const ENERGY_STALE_HOURS = 48
 export function energySummary(feed: PublicEnergyFeed | null, nowMs: number) {
   const meaning = 'daily reports, not homes'
-  if (!feed) return { state: 'pending', meaning, latest: null, window: null }
+  if (!feed) return { state: 'pending', stale: false, meaning, observed_at: null, latest: null, window: null }
   const counted = feed.days.filter(d => d.reports !== null).sort((a,b)=>a.date<b.date?1:-1)
-  const total = Object.fromEntries(energyFields.map(k => [k, counted.reduce((n,d)=>n+(d[k] as number),0)]))
+  const window: Record<string, unknown> = { days: counted.length, first: counted.at(-1)?.date ?? null, last: counted[0]?.date ?? null, reports: counted.reduce((n,d)=>n+(d.reports as number),0) }
+  for (const k of energyFields) {
+    const shown = counted.filter(d => d[k] !== null)
+    window[k] = shown.length ? shown.reduce((n,d)=>n+(d[k] as number),0) : null
+    window[k.replace(/_kwh$/, '_days')] = shown.length
+  }
   return {
-    state: nowMs-Date.parse(feed.observed_at) > 48*3600_000 ? 'stale' : counted.length ? 'connected' : 'withheld',
+    state: counted.length ? 'connected' : 'withheld',
+    stale: nowMs-Date.parse(feed.observed_at) > ENERGY_STALE_HOURS*3600_000,
     meaning, minimum: feed.minimum, observed_at: feed.observed_at,
     latest: counted[0] ?? null,
-    window: counted.length ? { days: counted.length, first: counted.at(-1)!.date, last: counted[0]!.date, reports: counted.reduce((n,d)=>n+(d.reports as number),0), ...total } : null,
+    window: counted.length ? window : null,
   }
 }

@@ -221,7 +221,9 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
   }
 
   function renderFreshness(freshness, privateMode) {
-    const labels = [['github', 'GitHub', 2], ['github_traffic', 'Repo traffic', 30], ['site', 'Web app', 2], ['cloud_fleet', 'Daily reports', 2], ['usage', 'Energy reports', 2]];
+    // The daily energy feed gains a day once a day, so it is stale after 48
+    // hours (ENERGY_STALE_HOURS); the hourly feeds after 2.
+    const labels = [['github', 'GitHub', 2], ['github_traffic', 'Repo traffic', 30], ['site', 'Web app', 2], ['cloud_fleet', 'Daily reports', 2], ['usage', 'Hourly energy', 2], ['cloud_energy', 'Daily energy', 48]];
 
     const host = $('freshness');
     host.replaceChildren();
@@ -301,19 +303,23 @@ export function dashboardDocument(privateView: boolean): DashboardDocument {
     const e = energy || {};
     const kwh = (n) => typeof n === 'number' ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n) : '—';
     const d = e.latest;
+    // Stale numbers stay readable but never pass for current ones.
+    const stale = e.stale ? ' · stale source' : '';
     setText('energy-reports', d ? number(d.reports) : '—');
-    setText('energy-day', d ? d.date + ' · UTC day' : 'Newest public day');
+    setText('energy-day', d ? d.date + ' · UTC day' + stale : 'Newest public day');
     setText('energy-solar', kwh(d && d.pv_generation_kwh));
     setText('energy-grid', kwh(d && d.grid_import_kwh) + ' / ' + kwh(d && d.grid_export_kwh));
     setText('energy-battery', kwh(d && d.battery_charge_kwh) + ' / ' + kwh(d && d.battery_discharge_kwh));
     setText('energy-vehicle', kwh(d && d.vehicle_charge_kwh));
     const w = e.window;
     setText('energy-window', w ? number(w.days) : '—');
-    setText('energy-window-note', w ? number(w.reports) + ' reports · ' + kwh(w.pv_generation_kwh) + ' kWh solar' : 'Last 30 days');
-    const rule = 'A day appears once it closes for reports, four days after it ends, and needs at least ' + (e.minimum || 5) + ' reports. These are reports, not homes.';
+    const solar = w && (w.pv_generation_days === w.days ? kwh(w.pv_generation_kwh) + ' kWh solar' : kwh(w.pv_generation_kwh) + ' kWh solar on ' + number(w.pv_generation_days) + ' of them');
+    setText('energy-window-note', w ? number(w.reports) + ' reports · ' + solar + stale : 'Last 30 days');
+    const rule = 'A day appears once it closes for reports, four days after it ends, and needs at least ' + (e.minimum || 5) + ' reports; a sum fewer than ' + (e.minimum || 5) + ' of them had any of shows —. These are reports, not homes.';
+    const source = e.stale ? ' Source is stale: last read ' + age(e.observed_at) + '. These are the last saved values.' : ' Source: FTW Cloud.';
     if (e.state === 'pending') setText('energy-note', 'Daily energy reports appear once FTW Cloud publishes them. ' + rule);
-    if (e.state === 'withheld') setText('energy-note', 'No public day yet. ' + rule);
-    if ((e.state === 'connected' || e.state === 'stale') && d) setText('energy-note', 'Newest public day ' + d.date + '. ' + rule + (e.state === 'stale' ? ' Source is stale; these are the last saved values.' : ' Source: FTW Cloud.'));
+    if (e.state === 'withheld') setText('energy-note', 'No public day yet. ' + rule + source);
+    if (e.state === 'connected' && d) setText('energy-note', 'Newest public day ' + d.date + '. ' + rule + source);
   }
 
   function renderRepositories(repositories, coverage) {
