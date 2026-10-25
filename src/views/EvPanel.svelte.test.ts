@@ -47,6 +47,13 @@ async function streaming(): Promise<SiteStore> {
   return site
 }
 
+/** A tap on a node of the ring, as a finger makes it. */
+function tap(node: string) {
+  const el = document.querySelector<HTMLElement>(`[data-node="${node}"]`)
+  expect(el, `no ${node} on the ring`).not.toBeNull()
+  el!.click()
+}
+
 describe('the charger behind its bubble', () => {
   afterEach(() => {
     document.body.replaceChildren()
@@ -62,11 +69,7 @@ describe('the charger behind its bubble', () => {
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
 
-    const hero = document.querySelector('ftw-energy-flow')!
-    expect(hero).not.toBeNull()
-    hero.dispatchEvent(
-      new CustomEvent('ftw-planet-click', { detail: { role: 'ev', id: 'ev' }, bubbles: true })
-    )
+    tap('car')
     await vi.advanceTimersByTimeAsync(500)
 
     const sheet = document.querySelector('[role="dialog"]')
@@ -87,9 +90,7 @@ describe('the charger behind its bubble', () => {
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
 
-    document
-      .querySelector('ftw-energy-flow')!
-      .dispatchEvent(new CustomEvent('ftw-planet-click', { detail: { role: 'battery' } }))
+    tap('battery')
     await vi.advanceTimersByTimeAsync(100)
 
     // The battery opens its live line, not the charger's controls.
@@ -106,9 +107,7 @@ describe('the charger behind its bubble', () => {
     const api = vi.spyOn(site, 'api')
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
-    document.querySelector('ftw-energy-flow')!.dispatchEvent(
-      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
-    )
+    tap('car')
     await vi.advanceTimersByTimeAsync(50)
     const sheet = document.querySelector('[role="dialog"]')!
     expect(sheet.textContent).toContain('Connecting to your box.')
@@ -129,9 +128,7 @@ describe('the charger behind its bubble', () => {
     const api = vi.spyOn(site, 'api')
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
-    document.querySelector('ftw-energy-flow')!.dispatchEvent(
-      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
-    )
+    tap('car')
     await vi.advanceTimersByTimeAsync(50)
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Charging controls are not available from this box yet.')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Open the box’s own page')
@@ -153,9 +150,7 @@ describe('the charger behind its bubble', () => {
     const command = vi.spyOn(site, 'command')
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
-    document.querySelector('ftw-energy-flow')!.dispatchEvent(
-      new CustomEvent('ftw-planet-click', { detail: { role: 'ev' }, bubbles: true })
-    )
+    tap('car')
     await vi.advanceTimersByTimeAsync(500)
     const sheet = document.querySelector('[role="dialog"]')!
     expect(sheet.textContent).toContain('Your box is busy')
@@ -174,11 +169,7 @@ describe('the charger behind its bubble', () => {
     render(Now, { props: { site } })
     await vi.advanceTimersByTimeAsync(50)
 
-    const open = () => {
-      document
-        .querySelector('ftw-energy-flow')!
-        .dispatchEvent(new CustomEvent('ftw-planet-click', { detail: { role: 'ev' } }))
-    }
+    const open = () => tap('car')
 
     open()
     await vi.advanceTimersByTimeAsync(100)

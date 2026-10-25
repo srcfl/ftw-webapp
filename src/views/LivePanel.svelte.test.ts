@@ -37,10 +37,10 @@ async function streaming(): Promise<SiteStore> {
   return site
 }
 
+/** A tap on the ring's node for this role. */
 function openBubble(role: string) {
-  document
-    .querySelector('ftw-energy-flow')!
-    .dispatchEvent(new CustomEvent('ftw-planet-click', { detail: { role }, bubbles: true }))
+  const node = ({ pv: 'solar', load: 'home' } as Record<string, string>)[role] ?? role
+  document.querySelector<HTMLElement>(`[data-node="${node}"]`)!.click()
 }
 
 describe('a live line behind a bubble', () => {

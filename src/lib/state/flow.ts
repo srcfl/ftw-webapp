@@ -1,17 +1,24 @@
-/* From a site snapshot to the energy-flow component's planets.
+/* From a site snapshot to the planets of the box's energy-flow component.
  *
  * The box's own dashboard builds this list in web/app.js from /api/status.
  * Frozen fields on the 1 Hz stream are the fallback: five aggregates, no
- * names, no kWh today. Same component, same corners and colours — "same
- * views" only holds if the caller speaks to it the same way.
+ * names, no kWh today. Same corners, colours and words as the box — "same
+ * views" only holds if both build them the same way. Now folds them into
+ * the ring's nodes (ring.ts).
  *
- * The component knows nothing about field ids or HTTP. Everything it is
- * told is decided here, which is what makes this file worth testing.
+ * Nothing downstream knows about field ids or HTTP. Everything it is told
+ * is decided here, which is what makes this file worth testing.
  */
 
 import { withControlMarks, type ControlMark } from '$vendor/ftw/control-feedback.js'
 import { FID } from '$lib/format/explanation'
-import { FLOW_IDLE_W } from '$vendor/ftw/ftw-energy-flow.js'
+
+/**
+ * At or below this a flow is idle: no light, no arc. The box's component
+ * uses the same 42 W, and a test holds the two equal, so the first frame
+ * need not load that whole component for one number.
+ */
+export const FLOW_IDLE_W = 42
 
 export interface FlowDailyPart {
   text: string
@@ -43,7 +50,8 @@ export interface FlowPlanet {
 }
 
 export interface FlowReadings {
-  load: number
+  /** The home's use in kW, or null when the box sends no such reading. */
+  load: number | null
   planets: FlowPlanet[]
   selfPoweredPctToday?: number | null
 }
@@ -192,7 +200,8 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     })
   }
 
-  return { load: (fields.get(FID.LOAD_W) ?? 0) / 1000, planets }
+  const loadW = fields.get(FID.LOAD_W)
+  return { load: loadW === undefined ? null : loadW / 1000, planets }
 }
 
 /**
@@ -428,13 +437,14 @@ export function flowReadingsFromStatus(status: SiteStatus, live = true): FlowRea
     }
   }
 
+  const loadW = num(status.load_w)
   let selfPoweredPctToday: number | null = null
   if (loadKwhTotal > 0.001) {
     selfPoweredPctToday = Math.max(0, Math.min(100, (1 - importKwh / loadKwhTotal) * 100))
   }
 
   return {
-    load: (num(status.load_w) ?? 0) / 1000,
+    load: loadW === null ? null : loadW / 1000,
     planets: withControlMarks(planets, status.control_feedback, live),
     selfPoweredPctToday,
   }

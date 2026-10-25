@@ -6,8 +6,8 @@
  * keeps the particles moving over readings a minute old, and a wire enum
  * reads as a fault code on the one screen that promises nothing is wrong.
  *
- * Everything is real: a Session, a SimBox, the loopback carrier, the box's
- * own <ftw-energy-flow>. Only the feed call is a spy.
+ * Everything is real: a Session, a SimBox, the loopback carrier and the
+ * ring. What the ring is fed is read off the page.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -16,15 +16,29 @@ import Now from './Now.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
 import { SimBox } from '$lib/sim/box'
-import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
 import { decodeFrame } from '$lib/protocol/frame'
-import { flowReadings, type FlowReadings } from '$lib/state/flow'
 
 /** Fixed so the simulated house is the same every run. */
 const NOON = new Date(2026, 6, 15, 12, 0, 0).getTime()
 
-function flowEl(): FtwEnergyFlowElement | null {
-  return document.querySelector('ftw-energy-flow')
+function ringEl(): HTMLElement | null {
+  return document.querySelector('.ring')
+}
+
+/** What the ring says, as a person reads it. */
+const ringText = () => ringEl()?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+
+/** Counts every change to the ring's page, so a feed shows up as work. */
+function watchRing(): { count: () => number; stop: () => void } {
+  let n = 0
+  const seen = new MutationObserver((records) => {
+    n += records.length
+  })
+  seen.observe(ringEl()!, { subtree: true, childList: true, characterData: true, attributes: true })
+  return {
+    count: () => (n += seen.takeRecords().length),
+    stop: () => seen.disconnect(),
+  }
 }
 
 describe('the Now screen', () => {
@@ -69,10 +83,10 @@ describe('the Now screen', () => {
     site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
 
     render(Now, { props: { site, active: true } })
-    for (let i = 0; i < 100 && !flowEl(); i++) await vi.advanceTimersByTimeAsync(20)
+    for (let i = 0; i < 100 && ringEl()?.dataset.live !== 'true'; i++) await vi.advanceTimersByTimeAsync(20)
 
-    expect(flowEl(), 'the house never drew at all').not.toBeNull()
-    expect(flowEl()!.hasAttribute('static'), 'a live stream was drawn still').toBe(false)
+    expect(ringEl(), 'the house never drew at all').not.toBeNull()
+    expect(ringEl()!.dataset.live, 'a live stream was drawn still').toBe('true')
 
     box.faults = { ...box.faults, sourceStates: { 'inverter.sungrow': 'stale' } }
     box.tick(1_000)
@@ -82,15 +96,12 @@ describe('the Now screen', () => {
       'streaming'
     )
     expect(site.srcState).not.toBe('live')
-    expect(
-      flowEl()!.hasAttribute('static'),
-      'particles kept flowing over readings that are not current'
-    ).toBe(true)
+    expect(ringEl()!.dataset.live, 'light kept running over readings that are not current').toBe('false')
   })
 
-  it('does not feed the diagram while hidden, and catches up on return', async () => {
+  it('does not feed the ring while hidden, and catches up on return', async () => {
     // Now stays mounted behind the other tabs, hidden by the shell. The
-    // stream keeps arriving either way; pushing it into a display:none SVG
+    // stream keeps arriving either way; pushing it into a display:none ring
     // at 1 Hz is work nobody can see. Coming back must start from the
     // present, not replay what was skipped.
     vi.useFakeTimers()
@@ -100,29 +111,30 @@ describe('the Now screen', () => {
     const site = new SiteStore('test')
     site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
 
-    const { rerender } = render(Now, { props: { site, active: false } })
-    for (let i = 0; i < 100 && !flowEl(); i++) await vi.advanceTimersByTimeAsync(20)
-    expect(flowEl()).not.toBeNull()
-    expect(flowEl()!.hasAttribute('static'), 'the hidden particle loop was still running').toBe(
-      true
-    )
+    const { rerender } = render(Now, { props: { site, active: true } })
+    for (let i = 0; i < 100 && !/Usage/.test(ringText()); i++) await vi.advanceTimersByTimeAsync(20)
+    await rerender({ active: false })
+    await vi.advanceTimersByTimeAsync(20)
+    const before = ringText()
+    const work = watchRing()
 
-    const fed = vi.spyOn(flowEl()!, 'setReadings')
-
-    // Ten seconds of live power into a view another tab is covering.
+    // An hour of changed power into a view another tab is covering.
+    vi.setSystemTime(NOON + 3_600_000)
     for (let i = 0; i < 10; i++) {
       box.tick()
       await vi.advanceTimersByTimeAsync(1_000)
     }
-    expect(fed, 'a hidden SVG was fed at 1 Hz').not.toHaveBeenCalled()
+    expect(work.count(), 'a hidden ring was fed at 1 Hz').toBe(0)
+    expect(ringText()).toBe(before)
 
     await rerender({ active: true })
     await vi.advanceTimersByTimeAsync(20)
-    expect(fed, 'coming back never caught the view up').toHaveBeenCalled()
-    expect(flowEl()!.hasAttribute('static'), 'the live view stayed frozen on return').toBe(false)
+    expect(ringText(), 'coming back never caught the view up').not.toBe(before)
+    expect(ringEl()!.dataset.live, 'the live view stayed still on return').toBe('true')
+    work.stop()
   })
 
-  it('does not rebuild the diagram for an unchanged cadence tick', async () => {
+  it('does not touch the ring for an unchanged cadence tick', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOON)
 
@@ -137,16 +149,15 @@ describe('the Now screen', () => {
     const site = new SiteStore('test')
     site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
     render(Now, { props: { site, active: true } })
-    for (let i = 0; i < 100 && (!flowEl() || site.session.phase !== 'streaming'); i++) {
+    for (let i = 0; i < 100 && (!/Usage/.test(ringText()) || site.session.phase !== 'streaming'); i++) {
       await vi.advanceTimersByTimeAsync(20)
     }
     await vi.advanceTimersByTimeAsync(20)
 
-    const fed = vi.spyOn(flowEl()!, 'setReadings')
     vi.setSystemTime(NOON)
     box.tick(0)
     await vi.advanceTimersByTimeAsync(100)
-    fed.mockClear()
+    const work = watchRing()
     types.length = 0
 
     vi.setSystemTime(NOON)
@@ -157,37 +168,13 @@ describe('the Now screen', () => {
     // Only these three message types can replace the telemetry being tested.
     const telemetry = types.filter(t => t === 'snap' || t === 'delta' || t === 'tick')
     expect(telemetry, 'the simulator sent changed readings, so this is not a tick').toEqual(['tick'])
-    expect(fed, 'an unchanged 1 Hz tick rebuilt the full shadow DOM').not.toHaveBeenCalled()
+    expect(work.count(), 'an unchanged 1 Hz tick changed the ring').toBe(0)
 
     vi.setSystemTime(NOON + 3_600_000)
     box.tick()
     await vi.advanceTimersByTimeAsync(100)
-    expect(fed, 'a changed reading did not reach the diagram').toHaveBeenCalledTimes(1)
-  })
-
-  it('draws kWh today on the hero once the dashboard snapshot arrives', async () => {
-    // Frozen fields are five aggregates. The box page is per-driver planets
-    // plus today's totals, from GET /api/status. This is the feed that makes
-    // those two screens the same diagram.
-    vi.useFakeTimers()
-    vi.setSystemTime(NOON)
-
-    const box = new SimBox({ now: () => Date.now() })
-    const site = new SiteStore('test')
-    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
-    render(Now, { props: { site, active: true } })
-    for (let i = 0; i < 100 && !flowEl(); i++) await vi.advanceTimersByTimeAsync(20)
-    expect(flowEl()).not.toBeNull()
-    box.tick(1_000)
-
-    const fed = vi.spyOn(flowEl()!, 'setReadings')
-    await vi.advanceTimersByTimeAsync(2_200)
-
-    const rich = fed.mock.calls
-      .map((c) => c[0] as { selfPoweredPctToday?: number | null; planets?: { id: string }[] })
-      .find((r) => r.selfPoweredPctToday != null)
-    expect(rich, 'the dashboard snapshot never reached the hero').toBeTruthy()
-    expect(rich!.planets?.some((p) => p.id === 'pv-sungrow')).toBe(true)
+    expect(work.count(), 'a changed reading did not reach the ring').toBeGreaterThan(0)
+    work.stop()
   })
 
   it('uses fresh telemetry after a status failure and restores details when status recovers', async () => {
@@ -196,12 +183,25 @@ describe('the Now screen', () => {
     const box = new SimBox({ now: () => Date.now() })
     const serve = box.api.serve.bind(box.api)
     let failStatus = false
+    // The box's snapshot carries a warning on the battery and a house use of
+    // its own. Only the snapshot says either, so the ring shows which source
+    // drew the house.
+    const warning = { driver: 'lynx', kind: 'battery', status: 'not_following', reason: 'setpoint_changed', severity: 'warning', evidence: 'accepted', readings_fresh: true }
     vi.spyOn(box.api, 'serve').mockImplementation(req => {
-      if (req.path === '/api/status' && failStatus) {
+      if (req.path !== '/api/status') return serve(req)
+      if (failStatus) {
         return { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
       }
-      return serve(req)
+      const res = serve(req)
+      if ('code' in res) return res
+      const body = JSON.parse(new TextDecoder().decode(res.body)) as Record<string, unknown>
+      // Copied into this realm's Uint8Array, or the frame encoder sees an
+      // array of numbers rather than bytes.
+      const bytes = Uint8Array.from(new TextEncoder().encode(JSON.stringify({ ...body, load_w: 12_345, control_feedback: [warning] })))
+      return { ...res, body: bytes }
     })
+    const marked = () => document.querySelector('[data-node="battery"] .mark') !== null
+    const fromSnapshot = () => /12 kW/.test(document.querySelector('[data-node="home"]')?.textContent ?? '')
     const site = new SiteStore('test')
     site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
     const view = render(Now, { props: { site } })
@@ -210,7 +210,8 @@ describe('the Now screen', () => {
       await vi.advanceTimersByTimeAsync(20)
     }
     expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
-    const fed = vi.spyOn(flowEl()!, 'setReadings')
+    expect(marked(), 'the box snapshot never reached the ring').toBe(true)
+    expect(fromSnapshot()).toBe(true)
 
     failStatus = true
     for (let i = 0; i < 4; i++) {
@@ -218,12 +219,9 @@ describe('the Now screen', () => {
       await vi.advanceTimersByTimeAsync(1_000)
     }
     expect(site.srcState).toBe('live')
-    expect(flowEl()!.shadowRoot!.textContent, 'old daily share remained in the live diagram').not.toContain('SELF-POWERED TODAY')
-    const fallback = fed.mock.lastCall?.[0] as FlowReadings
-    expect(fallback, 'stale status still supplied the diagram').toEqual({
-      ...flowReadings(site.session.fields), selfPoweredPctToday: null,
-    })
-    expect(flowEl()!.hasAttribute('static'), 'fresh telemetry should keep moving').toBe(false)
+    expect(ringEl()!.dataset.live, 'fresh telemetry should keep moving').toBe('true')
+    expect(marked(), 'a stale snapshot still drew the ring').toBe(false)
+    expect(fromSnapshot(), 'a stale snapshot still drew the ring').toBe(false)
     expect(document.body.textContent).toContain('Device details are out of date. Showing live totals.')
     expect(document.querySelector('.card.fuse')?.textContent).not.toContain('Live safety')
     expect(document.querySelector('.card.fuse time')?.getAttribute('datetime')).toBeTruthy()
@@ -234,10 +232,9 @@ describe('the Now screen', () => {
       box.tick(1_000)
       await vi.advanceTimersByTimeAsync(1_000)
     }
-    const recovered = fed.mock.lastCall?.[0] as FlowReadings
-    expect(recovered.planets.some(p => p.id === 'pv-sungrow')).toBe(true)
-    expect(recovered.selfPoweredPctToday).not.toBeNull()
-    expect(flowEl()!.shadowRoot!.textContent).toContain('SELF-POWERED TODAY')
+    expect(ringEl()!.dataset.live).toBe('true')
+    expect(marked(), 'the recovered snapshot did not reach the ring').toBe(true)
+    expect(fromSnapshot()).toBe(true)
     expect(document.body.textContent).not.toContain('Device details are out of date')
     expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
     expect(document.querySelector('#today-title')?.textContent).toBe('Today')

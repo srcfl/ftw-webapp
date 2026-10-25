@@ -27,9 +27,10 @@ test('opens the device panel with the answer first and keeps an open receipt thr
     const view=render(Now,{props:{site}})
     for(let i=0;i<200;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
     expect(view.queryByText('Are we in control?')).toBeNull()
-    const flow=document.querySelector('ftw-energy-flow')!
-    const button=flow.shadowRoot!.querySelector('.ef-layer[aria-hidden="false"] [data-role="battery"]')!
+    const button=document.querySelector<HTMLElement>('[data-node="battery"]')!
     expect(button.getAttribute('aria-label')).not.toMatch(/tier/i)
+    // Core's alarm on the charger reaches the ring from the box's snapshot.
+    expect(document.querySelector('[data-node="car"] .mark')?.getAttribute('data-tone')).toBe('alarm')
     button.dispatchEvent(new MouseEvent('click',{bubbles:true}))
     await vi.advanceTimersByTimeAsync(10)
     const dialog=document.querySelector('[role="dialog"]')!
@@ -60,7 +61,7 @@ test('an EV tap goes straight to charging controls even when status carries evid
  try {
   site.connect(new LoopbackCarrier(box,{latencyMs:0}));render(Now,{props:{site}});
   for(let i=0;i<200;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
-  document.querySelector('ftw-energy-flow')!.dispatchEvent(new CustomEvent('ftw-planet-click',{detail:{role:'ev',name:'easee'},bubbles:true}));
+  document.querySelector<HTMLElement>('[data-node="car"]')!.click();
   for(let i=0;i<200;i++){box.tick(20);await vi.advanceTimersByTimeAsync(20)}
   const dialog=document.querySelector('[role="dialog"]')!;
   expect(dialog?.getAttribute('aria-label')).toBe('EV charger');
