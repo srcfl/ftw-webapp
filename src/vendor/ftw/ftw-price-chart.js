@@ -1,4 +1,4 @@
-// Vendored from srcfl/ftw web/components/ftw-price-chart.js at fbd29b50781fbd7c11dd297cd3e9a3845c5b746f.
+// Vendored from srcfl/ftw web/components/ftw-price-chart.js at 6d8e8704ccc8ee801fce16efd717a596e39e76ad.
 // Do not edit here — change it upstream and re-copy. The app and the
 // box's own dashboard render this exact file; that is the point.
 // <ftw-price-chart> — full-width bar chart of known electricity prices
@@ -145,7 +145,7 @@ class FtwPriceChart extends FtwElement {
       cursor: pointer;
       transition: color 220ms ease;
     }
-    .toggle button.active { color: #0a0a0a; }
+    .toggle button.active { color: var(--on-accent); }
     .toggle button:not(.active):hover { color: var(--fg); }
 
     .chart-wrap {
@@ -199,8 +199,6 @@ class FtwPriceChart extends FtwElement {
       font-size: 14px;
       font-weight: 600;
     }
-    .tip-price.peak  { color: var(--red-e); }
-    .tip-price.low   { color: var(--green-e); }
     /* Component breakdown under the total, so the tooltip answers "why is
        it that much?" without a trip to the plan page. */
     .tip-parts {
@@ -317,7 +315,7 @@ class FtwPriceChart extends FtwElement {
     }
     .compact-low strong {
       margin-top: 3px;
-      color: var(--green-e);
+      color: var(--fg);
       font-family: var(--mono);
       font-size: 1rem;
       font-variant-numeric: tabular-nums;
@@ -361,11 +359,12 @@ class FtwPriceChart extends FtwElement {
     /* Bars rise from zero like the full chart's, so both views teach one
        reading: height is price. The dotted line is the average ahead — a
        bar's top is read against it, and colour only reinforces what the
-       geometry already says, so the strip survives greyscale. */
+       geometry already says, so the strip survives greyscale. A price is
+       a level, not a state: ink, the dearer the stronger. */
     .compact-profile rect { opacity: 0.85; }
-    .compact-profile rect.is-dear     { fill: var(--red-e); }
-    .compact-profile rect.is-cheap    { fill: var(--green-e); }
-    .compact-profile rect.is-flat     { fill: var(--fg-muted); }
+    .compact-profile rect.is-dear     { fill: color-mix(in srgb, var(--fg) 80%, transparent); }
+    .compact-profile rect.is-cheap    { fill: color-mix(in srgb, var(--fg) 32%, transparent); }
+    .compact-profile rect.is-flat     { fill: color-mix(in srgb, var(--fg) 50%, transparent); }
     .compact-profile rect.is-negative { fill: var(--yellow); }
     .compact-profile rect.is-current {
       fill: var(--accent-e);
@@ -395,7 +394,7 @@ class FtwPriceChart extends FtwElement {
       font-size: 10px;
     }
     .compact-stale {
-      color: var(--amber);
+      color: var(--fg-dim);
     }
     .compact-empty {
       display: flex;
@@ -461,8 +460,11 @@ class FtwPriceChart extends FtwElement {
     super.connectedCallback();
     if (!this.hasAttribute("fed")) {
       this._loadConfig();
-      this._loadPrices();
-      this._refreshTimer = setInterval(() => this._loadPrices(), 5 * 60 * 1000);
+      if (!this._onVisibility) {
+        this._onVisibility = () => this._syncPolling();
+        document.addEventListener("visibilitychange", this._onVisibility);
+      }
+      this._syncPolling();
     }
     // Re-render when the viewport crosses the small-screen breakpoint
     // — render() picks a different viewBox H per side, so a rotation
@@ -482,7 +484,21 @@ class FtwPriceChart extends FtwElement {
     window.addEventListener("ftw-price-mode-change", this._modeSyncListener);
   }
 
+  _syncPolling() {
+    if (this._refreshTimer) {
+      clearInterval(this._refreshTimer);
+      this._refreshTimer = null;
+    }
+    if (this.hasAttribute("fed") || !this.isConnected || document.hidden) return;
+    this._loadPrices();
+    this._refreshTimer = setInterval(() => this._loadPrices(), 5 * 60 * 1000);
+  }
+
   disconnectedCallback() {
+    if (this._onVisibility) {
+      document.removeEventListener("visibilitychange", this._onVisibility);
+      this._onVisibility = null;
+    }
     if (this._refreshTimer) {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
@@ -923,19 +939,17 @@ class FtwPriceChart extends FtwElement {
       // to zero). Either way, height is the absolute distance.
       const top = p < 0 ? zeroY : y;
       const h = Math.max(1, Math.abs(zeroY - y));
-      const dev = (p - meanP) / Math.max(1, maxP - minP);
+      const level = Math.min(1, Math.max(0, (p - minP) / Math.max(1, maxP - minP)));
       // Negative slots are flagged yellow regardless of where they
       // land in the lo/hi ranking — "they pay you to take it" reads
       // as a different category, not just "the cheapest hour today".
+      // Every other slot is ink by level, the dearer the stronger.
       const fill = p < 0 ? "var(--yellow)"
-                  : i === lo ? "var(--green-e)"
-                  : i === hi ? "var(--red-e)"
-                  : (p < meanP ? `color-mix(in srgb, var(--green-e) ${Math.round(40 - dev * 40)}%, transparent)`
-                              : `color-mix(in srgb, var(--red-e) ${Math.round(40 + dev * 40)}%, transparent)`);
+                  : `color-mix(in srgb, var(--fg) ${Math.round(32 + level * 48)}%, transparent)`;
       const stroke = (i === lo || i === hi) ? "currentColor" : "none";
       return `<rect x="${x + 0.5}" y="${top}" width="${Math.max(0.1, barW - 1)}" height="${h}"
                     fill="${fill}" data-idx="${i}"
-                    style="${i === lo ? 'color: var(--green-e)' : i === hi ? 'color: var(--red-e)' : ''}"
+                    style="${i === lo ? 'color: var(--fg-dim)' : i === hi ? 'color: var(--fg)' : ''}"
                     stroke="${stroke}" stroke-width="${stroke === 'none' ? 0 : 1}" />`;
     }).join("");
 
@@ -1007,9 +1021,9 @@ class FtwPriceChart extends FtwElement {
         const ty = pad.t + 6;
         dayBoundary = `
           <line x1="${x}" x2="${x}" y1="${pad.t}" y2="${pad.t + plotH}"
-                stroke="var(--yellow)" stroke-width="1.5" opacity="0.8" />
+                stroke="var(--fg-dim)" stroke-width="1.5" opacity="0.8" />
           <text x="${tx}" y="${ty}" text-anchor="start"
-                fill="var(--yellow)" font-family="var(--mono)" font-size="10"
+                fill="var(--fg-dim)" font-family="var(--mono)" font-size="10"
                 font-weight="600" letter-spacing="0.18em"
                 transform="rotate(90 ${tx} ${ty})">TOMORROW</text>
         `;
@@ -1048,8 +1062,8 @@ class FtwPriceChart extends FtwElement {
           ${bars}
           ${dayBoundary}
           ${nowMarker}
-          ${markBar(lo, "var(--green-e)", "▼")}
-          ${markBar(hi, "var(--red-e)",   "▲")}
+          ${markBar(lo, "var(--fg-dim)", "▼")}
+          ${markBar(hi, "var(--fg)",     "▲")}
           ${xTicks.join("")}
           ${yLabels}
           <line class="scrub-cursor" x1="0" x2="0" y1="${pad.t}" y2="${pad.t + plotH}"

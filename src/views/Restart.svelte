@@ -87,7 +87,7 @@
   }
 
   .problem {
-    color: var(--fresh-stale);
+    color: var(--alarm);
   }
 
   .quiet {
@@ -103,8 +103,8 @@
   }
 
   .danger {
-    border: 1px solid var(--fresh-stale);
-    color: var(--fresh-stale);
+    border: 1px solid var(--alarm);
+    color: var(--alarm);
     border-radius: var(--radius-sm);
     padding: 0 var(--space-5);
     font-weight: 500;

@@ -509,7 +509,7 @@
 
   .problem {
     color: var(--fg);
-    border-left: 2px solid var(--energy-generation);
+    border-left: 2px solid var(--alarm);
     padding-left: var(--space-3);
   }
 
@@ -530,11 +530,9 @@
     border-radius: var(--radius-md);
   }
 
+  /* Ink, not live green: a demo is not a reading the box confirmed. */
   .demo {
-    border-color: color-mix(in oklch, var(--energy-export) 45%, var(--line));
-    background:
-      radial-gradient(circle at 100% 0%, color-mix(in oklch, var(--energy-export) 12%, transparent), transparent 55%),
-      var(--surface-raised);
+    border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
   }
 
   .demo h2,
@@ -552,14 +550,14 @@
     font-size: 10px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--energy-export);
+    color: var(--fg-dim);
   }
 
   .demo-label span {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--energy-export);
+    background: var(--fg-muted);
   }
 
   .not-printed {

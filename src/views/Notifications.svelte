@@ -216,7 +216,7 @@
   }
 
   .problem {
-    color: var(--fresh-stale);
+    color: var(--alarm);
   }
 
   .quiet {

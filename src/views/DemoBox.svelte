@@ -74,7 +74,7 @@
     font-size: 11px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--energy-export);
+    color: var(--fg-muted);
   }
 
   .ident {

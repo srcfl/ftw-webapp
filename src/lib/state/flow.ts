@@ -107,10 +107,8 @@ export function planetColor(role: FlowColorRole, watts: number | undefined): str
     return idle(watts) ? 'var(--fg-muted)' : watts >= 0 ? 'var(--red-e)' : 'var(--green-e)'
   }
   if (role === 'pv') return idle(watts) ? 'var(--fg-muted)' : 'var(--amber)'
-  if (role === 'battery') {
-    return idle(watts) ? 'var(--cyan)' : watts >= 0 ? 'var(--green-e)' : 'var(--red-e)'
-  }
-  if (role === 'ev') return idle(watts) ? 'var(--white-s)' : 'var(--green-e)'
+  if (role === 'battery') return !idle(watts) && watts < 0 ? 'var(--energy-gives)' : 'var(--cyan)'
+  if (role === 'ev') return idle(watts) ? 'var(--white-s)' : 'var(--violet)'
   return 'var(--fg)'
 }
 
@@ -342,8 +340,8 @@ export function flowReadingsFromStatus(status: SiteStatus, live = true): FlowRea
     { text: `↑ ${fmtKwhShort(exportKwh)}`, color: 'var(--green-e)', bold: true },
   ]
   const batDailyParts: FlowDailyPart[] = [
-    { text: `↑ ${fmtKwhShort(batChargedKwh)}`, color: 'var(--green-e)', bold: true },
-    { text: `↓ ${fmtKwhShort(batDischargedKwh)}`, color: 'var(--red-e)', bold: true },
+    { text: `↑ ${fmtKwhShort(batChargedKwh)}`, color: 'var(--cyan)', bold: true },
+    { text: `↓ ${fmtKwhShort(batDischargedKwh)}`, color: 'var(--energy-gives)', bold: true },
   ]
 
   const gridW = num(status.grid_w)
