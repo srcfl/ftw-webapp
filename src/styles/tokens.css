@@ -18,48 +18,57 @@
 :root {
   color-scheme: dark;
 
-  /* ----- Surfaces, dark (default) ----- */
-  --surface: #0d0d0d;
-  --surface-sunken: #101010;
-  --surface-raised: #161616;
-  --surface-elevated: #1e1e1e;
+  /* ----- Surfaces, dark (default) -----
+   * The iOS app's palette: a blue-black ground, ink for the interface. */
+  --surface: #05080f;
+  --surface-sunken: #03060c;
+  --surface-raised: #0b111c;
+  --surface-elevated: #111a29;
 
-  --line: #2a2a2a;
-  --line-soft: #222222;
+  --line: #1b2433;
+  --line-soft: #141c29;
 
   /* Dim behind overlays and sheets. Darker in the dark theme so a modal
      still reads as lifted off a near-black page. */
   --scrim: oklch(0 0 0 / 0.45);
 
-  --fg: #e8e8e8;
-  --fg-label: #d8d8d8;
-  --fg-dim: #a0a0a0;
-  --fg-muted: #858585;
-  --on-accent: #0a0a0a;
+  --fg: #eef3ff;
+  --fg-label: #c4ccda;
+  --fg-dim: #9aa5b8;
+  --fg-muted: #727d90;
+  --on-accent: var(--surface);
 
   /* ----- Semantic energy colours -----
-   * Import is what the site draws from the grid, export what it pushes back.
-   * The sign convention is FTW's: positive watts flow INTO the site.
-   * Colour carries meaning here, so it is never decorative. */
-  --energy-import: oklch(0.72 0.18 20); /* red — drawing from grid */
-  --energy-export: oklch(0.78 0.16 150); /* green — pushing to grid */
-  --energy-generation: oklch(0.82 0.18 75); /* amber — PV producing */
-  --energy-storage: oklch(0.82 0.14 210); /* cyan — battery */
-  --energy-storage-dim: oklch(0.65 0.1 210);
-  --energy-mobility: oklch(0.8 0.14 300); /* violet — EV */
+   * Colour is energy. Each kind has one hue, the battery two: storage
+   * stores, gives gives. The grid is one hue both ways; the sign and the
+   * word say buying or selling. FTW's sign convention: positive watts flow
+   * INTO the site. Colour carries meaning here, so it is never decorative. */
+  --energy-import: #ff5fa8;
+  --energy-export: #ff5fa8;
+  --energy-generation: #ffe14d;
+  --energy-storage: #18d9ff;
+  --energy-storage-dim: #0f9db9;
+  --energy-gives: #ffb000;
+  --energy-mobility: #b69cff;
+
+  /* ----- States -----
+   * Never levels. Live is live or confirmed; alarm is refused, failed or
+   * blocked, and a warning that needs action. */
+  --live: #83f52c;
+  --alarm: #ff453a;
 
   /* ----- Accent -----
-   * One accent, hue-parameterised so light mode shifts lightness only. */
-  --accent-hue: 65;
-  --accent: oklch(0.82 0.16 var(--accent-hue));
-  --accent-strong: oklch(0.65 0.14 var(--accent-hue));
+   * The interface is ink, as on the phone: no orange accent. A primary
+   * button is ink with ground text. */
+  --accent: var(--fg);
+  --accent-strong: var(--fg-label);
 
   /* ----- Freshness -----
    * The app must never fake live. These three roles are the visual grammar
    * for how old a reading is, and they are used by exactly one component
    * (FreshnessMark) so the meaning cannot drift. */
-  --fresh-live: var(--energy-export);
-  --fresh-stale: var(--energy-generation);
+  --fresh-live: var(--live);
+  --fresh-stale: var(--fg-dim);
   --fresh-lost: var(--fg-muted);
 
   /* ----- Bridge to the box's component names -----
@@ -71,8 +80,8 @@
   --ink-raised: var(--surface-raised);
   --ink-elevated: var(--surface-elevated);
   --amber: var(--energy-generation);
-  /* The price chart's "they pay you to take it" colour, and its midnight
-     rule. The box aliases it to amber too — see theme.css. */
+  /* The price chart's "they pay you to take it" colour. The box aliases it
+     to amber too — see theme.css. */
   --yellow: var(--amber);
   --red-e: var(--energy-import);
   --green-e: var(--energy-export);
@@ -86,25 +95,21 @@
      their fallbacks and drift the moment either value changes. */
   --card-pad: var(--pad-card);
   --card-pad-tight: var(--pad-card-tight);
-  /* Consumed by the hero's stats row and defined in neither repo's theme —
-     its #f59e0b fallback escapes theming entirely. Pinned to the amber
-     role here until the box's theme.css names it too. */
-  --stat-warn: var(--energy-generation);
 
-  /* Hero surfaces for the energy flow, from the box's theme.css. */
-  --hero-bg-top: #1a1a1a;
-  --hero-bg-bot: #111111;
-  --hero-glow-a: oklch(0.4 0.15 var(--accent-hue) / 0.08);
-  --hero-line-base: #2a2a2a;
-  --hero-box-fill: rgb(22 22 22 / 95%);
-  --hero-box-border: #303030;
-  --hero-house-fill: #1c1c1c;
-  --hero-house-stroke: oklch(0.7 0.14 var(--accent-hue));
-  --hero-house-ring: oklch(0.55 0.1 var(--accent-hue));
-  --hero-load-text: oklch(0.9 0.08 var(--accent-hue));
-  --hero-label-text: #d8d8d8;
-  --hero-sub-text: #b8b8b8;
-  --hero-soc-track: #2a2a2a;
+  /* Hero surfaces for the energy flow, as in the box's theme.css. */
+  --hero-bg-top: var(--surface-raised);
+  --hero-bg-bot: var(--surface);
+  --hero-glow-a: transparent;
+  --hero-line-base: var(--line);
+  --hero-box-fill: rgb(11 17 28 / 95%);
+  --hero-box-border: var(--line);
+  --hero-house-fill: var(--surface-raised);
+  --hero-house-stroke: var(--fg);
+  --hero-house-ring: var(--fg-muted);
+  --hero-load-text: var(--fg);
+  --hero-label-text: var(--fg-label);
+  --hero-sub-text: var(--fg-dim);
+  --hero-soc-track: var(--line-soft);
 
   /* ----- Type -----
    * No CDN. Inter and JetBrains Mono lead the stack and are picked up when
@@ -149,46 +154,35 @@
 html[data-theme='light'] {
   color-scheme: light;
 
-  --surface: #f4f4f2;
-  --surface-sunken: #ecece8;
-  --surface-raised: #fafaf8;
+  --surface: #f5f6f8;
+  --surface-sunken: #eceef2;
+  --surface-raised: #ffffff;
   --surface-elevated: #ffffff;
 
-  --line: #cecec7;
-  --line-soft: #ddddd7;
+  --line: #dce0e7;
+  --line-soft: #e7eaf0;
 
   --scrim: oklch(0 0 0 / 0.32);
 
-  --fg: #191919;
-  --fg-label: #4f4f4b;
-  --fg-dim: #4f4f4b;
-  --fg-muted: #686862;
+  --fg: #0a0f1a;
+  --fg-label: #2e3646;
+  --fg-dim: #545e70;
+  --fg-muted: #677184;
 
-  /* Pulled darker so they hold contrast on paper without turning neon. */
-  --energy-import: oklch(0.55 0.2 20);
-  --energy-export: oklch(0.58 0.18 150);
-  --energy-generation: oklch(0.68 0.17 75);
-  --energy-storage: oklch(0.58 0.14 210);
-  --energy-storage-dim: oklch(0.48 0.1 210);
-  --energy-mobility: oklch(0.55 0.14 300);
+  /* Darker, so they hold contrast on paper. */
+  --energy-import: #c2186f;
+  --energy-export: #c2186f;
+  --energy-generation: #8a6c00;
+  --energy-storage: #00739a;
+  --energy-storage-dim: #3d8fae;
+  --energy-gives: #a35700;
+  --energy-mobility: #6a48d8;
 
-  --accent: oklch(0.68 0.16 var(--accent-hue));
-  --accent-strong: oklch(0.55 0.14 var(--accent-hue));
+  --live: #2f7a00;
+  --alarm: #d70015;
 
-  /* Hero surfaces in daylight, from the box's theme.css light block. */
-  --hero-bg-top: #fafaf8;
-  --hero-bg-bot: #ecece8;
-  --hero-glow-a: oklch(0.72 0.14 var(--accent-hue) / 0.1);
-  --hero-line-base: #cecec7;
+  /* Roles above that point at another (accent, hero) follow these. */
   --hero-box-fill: rgb(255 255 255 / 96%);
-  --hero-box-border: #cecec7;
-  --hero-house-fill: #fafaf8;
-  --hero-house-stroke: oklch(0.55 0.14 var(--accent-hue));
-  --hero-house-ring: oklch(0.72 0.1 var(--accent-hue));
-  --hero-load-text: oklch(0.4 0.18 var(--accent-hue));
-  --hero-label-text: #4f4f4b;
-  --hero-sub-text: #686862;
-  --hero-soc-track: #ddddd7;
 }
 
 @media (prefers-reduced-motion: reduce) {

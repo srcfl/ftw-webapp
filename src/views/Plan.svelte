@@ -551,10 +551,10 @@
   }
 
   .status.good {
-    color: var(--energy-export);
+    color: var(--live);
   }
   .status.warn {
-    color: var(--energy-generation);
+    color: var(--alarm);
   }
 
   .modes,
@@ -853,7 +853,7 @@
     background: var(--energy-storage);
   }
   .bar[data-action='discharge'] .fill {
-    background: var(--energy-generation);
+    background: var(--energy-gives);
   }
 
   .unit {

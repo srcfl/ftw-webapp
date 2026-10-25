@@ -443,11 +443,9 @@
     padding: 0 var(--space-4);
   }
 
-  /* The colour the app already uses for a reading that needs attention, not a
-     red invented for this one button. */
   .danger {
-    border: 1px solid var(--fresh-stale);
-    color: var(--fresh-stale);
+    border: 1px solid var(--alarm);
+    color: var(--alarm);
     border-radius: var(--radius-sm);
     padding: 0 var(--space-5);
     font-weight: 500;

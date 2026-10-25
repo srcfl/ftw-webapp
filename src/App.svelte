@@ -845,7 +845,7 @@
   }
 
   .demo-band[data-live='true'] .demo-dot {
-    background: var(--energy-export);
+    background: var(--live);
   }
 
   .demo-band button {

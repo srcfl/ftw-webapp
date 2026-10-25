@@ -247,11 +247,7 @@
         <div class="tile">
           <span>Saved <small class="ccy">{currency}</small></span>
           {#if savings.today.available}
-            <strong
-              class="num"
-              class:is-export={savings.today.savedMinor >= 0}
-              class:is-import={savings.today.savedMinor < 0}
-            >{formatCompactMinor(savings.today.savedMinor)}</strong>
+            <strong class="num">{formatCompactMinor(savings.today.savedMinor)}</strong>
           {:else}
             <strong class="num">—</strong>
           {/if}
@@ -285,9 +281,7 @@
             <div class="bar" aria-hidden="true">
               <div
                 class="fill"
-                class:warn={phase.pct >= 70}
                 class:crit={phase.pct >= 90}
-                class:is-out={phase.exporting}
                 style:width="{phase.pct}%"
               ></div>
             </div>
@@ -300,7 +294,6 @@
         <div class="bar" aria-hidden="true">
           <div
             class="fill"
-            class:warn={fuse.fallback.pct >= 70}
             class:crit={fuse.fallback.pct >= 90}
             style:width="{fuse.fallback.pct}%"
           ></div>
@@ -404,8 +397,8 @@
   }
 
   .badge[data-tone='active'] {
-    border-color: color-mix(in oklch, var(--energy-export) 55%, var(--line));
-    color: var(--energy-export);
+    border-color: color-mix(in oklab, var(--live) 55%, var(--line));
+    color: var(--live);
   }
 
   .badge[data-tone='warn'] {
@@ -529,11 +522,9 @@
     background: var(--energy-export);
   }
 
-  /* Direction first, load after: a phase that both exports and sits on
-     the fuse must still read as a warning, not as a calm storage colour. */
-  .fill.is-out { background: var(--energy-storage); }
-  .fill.warn { background: var(--energy-generation); }
-  .fill.crit { background: var(--energy-import); }
+  /* Grid power in the grid colour either way, as on the phone. Near the
+     fuse it takes the alarm. */
+  .fill.crit { background: var(--alarm); }
 
   .fallback {
     flex-direction: row;

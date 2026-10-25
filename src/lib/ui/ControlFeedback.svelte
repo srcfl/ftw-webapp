@@ -75,8 +75,8 @@
     margin: 0 0 10px;
     background: var(--surface-raised);
   }
-  .block[data-tone='warning'] { border-color: var(--amber); }
-  .block[data-tone='alarm'] { border-color: var(--red-e); }
+  .block[data-tone='warning'] { border-color: var(--alarm); }
+  .block[data-tone='alarm'] { border-color: var(--alarm); }
   .block[data-tone='stale'] { opacity: 0.75; }
   h3 {
     display: flex;
@@ -99,9 +99,9 @@
     background: var(--line);
     color: var(--fg-dim);
   }
-  [data-tone='ok'] .icon { background: color-mix(in srgb, var(--green-e) 22%, transparent); color: var(--green-e); }
-  [data-tone='warning'] .icon { background: color-mix(in srgb, var(--amber) 22%, transparent); color: var(--amber); }
-  [data-tone='alarm'] .icon { background: var(--red-e); color: var(--on-accent); }
+  [data-tone='ok'] .icon { background: color-mix(in srgb, var(--live) 22%, transparent); color: var(--live); }
+  [data-tone='warning'] .icon { background: color-mix(in srgb, var(--alarm) 22%, transparent); color: var(--alarm); }
+  [data-tone='alarm'] .icon { background: var(--alarm); color: var(--on-accent); }
   p { margin: 0; font-size: 0.92rem; line-height: 1.45; }
   .proof, .next { margin-top: 4px; font-size: 0.85rem; color: var(--fg-dim); }
   .next { color: var(--fg); }
@@ -111,9 +111,9 @@
   li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 8px; align-items: baseline; font-size: 0.85rem; overflow-wrap: anywhere; }
   .step { display: flex; align-items: center; gap: 6px; color: var(--fg-dim); }
   .step::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--fg-muted); }
-  li[data-state='done'] .step::before { background: var(--green-e); border-color: var(--green-e); }
+  li[data-state='done'] .step::before { background: var(--live); border-color: var(--live); }
   li[data-state='wait'] .step::before { border-style: dashed; }
-  li[data-state='fail'] .step::before { background: var(--red-e); border-color: var(--red-e); }
+  li[data-state='fail'] .step::before { background: var(--alarm); border-color: var(--alarm); }
   li[data-state='none'] { opacity: 0.65; }
   dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 6px 0; font-size: 0.82rem; }
   dt { color: var(--fg-dim); }

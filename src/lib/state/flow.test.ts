@@ -126,14 +126,16 @@ describe('flowReadings', () => {
   })
 
   it('colours grid and battery by direction, the way the dashboard does', () => {
+    // The battery gives in one hue and stores in another; the grid is one
+    // hue both ways, and the sign says which.
     const discharging = flowReadings(fields([[FID.BATTERY_W, -2_000]])).planets.find(
       (p) => p.id === 'battery'
     )!
-    expect(discharging.color).toBe('var(--red-e)')
+    expect(discharging.color).toBe('var(--energy-gives)')
     const charging = flowReadings(fields([[FID.BATTERY_W, 1_800]])).planets.find(
       (p) => p.id === 'battery'
     )!
-    expect(charging.color).toBe('var(--green-e)')
+    expect(charging.color).toBe('var(--cyan)')
     const exporting = flowReadings(fields([[FID.GRID_W, -800]])).planets[0]!
     expect(exporting.color).toBe('var(--green-e)')
     const importing = flowReadings(fields([[FID.GRID_W, 800]])).planets[0]!
