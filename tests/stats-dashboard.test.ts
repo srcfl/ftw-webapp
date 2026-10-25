@@ -65,7 +65,8 @@ describe('stats dashboard coverage', () => {
     await render()
     const items = [...document.querySelectorAll('#freshness .freshness-item')]
     expect(items.find((item) => item.textContent!.startsWith('Repo traffic'))!.querySelector('.dot.ok')).not.toBeNull()
-    expect(items.find((item) => item.textContent!.startsWith('GitHub'))!.querySelector('.dot.warn')).not.toBeNull()
+    // A stale source falls to ink2, as freshness does in the app.
+    expect(items.find((item) => item.textContent!.startsWith('GitHub'))!.querySelector('.dot.stale')).not.toBeNull()
     // The hourly usage feed and the daily energy feed each have their own dot.
     expect(items.find((item) => item.textContent!.startsWith('Hourly energy'))!.querySelector('.dot.idle')).not.toBeNull()
     expect(items.find((item) => item.textContent!.startsWith('Daily energy'))!.querySelector('.dot.idle')).not.toBeNull()
@@ -78,5 +79,13 @@ describe('stats dashboard coverage', () => {
     expect(document.getElementById('relay-title')!.textContent).toBe('Legacy relay load')
     expect(document.getElementById('relay-rooms')!.textContent).toBe('17')
     expect(document.getElementById('relay-note')!.textContent).toContain('do not measure FTW Cloud')
+  })
+
+  it('marks a failed collector as an alarm, not as stale', async () => {
+    const at = new Date().toISOString()
+    await render(true, { collectors: [{ source: 'github', ok: true, finished_at: at }, { source: 'cloud_ops', ok: false, finished_at: at }] })
+    const rows = [...document.querySelectorAll('#collectors li')]
+    expect(rows.find((row) => row.textContent!.includes('github'))!.querySelector('.dot.ok')).not.toBeNull()
+    expect(rows.find((row) => row.textContent!.includes('cloud_ops'))!.querySelector('.dot.alarm')).not.toBeNull()
   })
 })
