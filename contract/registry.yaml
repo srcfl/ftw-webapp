@@ -376,8 +376,8 @@ cloud_transports: [quic, websocket]
 # History resolutions backed by what the box actually stores.
 # ---------------------------------------------------------------------------
 resolutions:
-  '5m': { tile_span_ms: 43200000, retention_days: 30, source: energy_ledger }
-  '1h': { tile_span_ms: 604800000, retention_days: 730, source: hourly_rollup }
+  '5m': { tile_span_ms: 43200000, retention_days: 30, source: power_history }
+  '1h': { tile_span_ms: 604800000, retention_days: 730, source: power_history }
 
 # ---------------------------------------------------------------------------
 # What an agent may put in each op it can name (docs/agents.md in srcfl/ftw,
