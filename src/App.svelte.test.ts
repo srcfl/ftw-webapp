@@ -126,7 +126,7 @@ async function houseOnScreen() {
 
 /** Open the one screen that can leave, and answer the question it asks. */
 async function confirmSignOut() {
-  ;(await screen.findByRole('button', { name: /^box$/i })).click()
+  ;(await screen.findByRole('button', { name: /^home$/i })).click()
   ;(await screen.findByRole('button', { name: /^sign out$/i })).click()
 
   // The question, which has to be on screen before anything is cleared.
@@ -184,7 +184,7 @@ describe('the public demo', () => {
     ;(await screen.findByRole('button', { name: /try the live demo/i }, { timeout: 4_000 })).click()
 
     await screen.findByText(/Live demo · simulated home/i, undefined, { timeout: 4_000 })
-    expect(screen.getAllByRole('button', { name: /^(now|plan|history|box)$/i })).toHaveLength(4)
+    expect(screen.getAllByRole('button', { name: /^(now|plan|history|home)$/i })).toHaveLength(4)
     expect(localStorage.getItem('ftw.site')).toBeNull()
     expect(globalThis.ftwSim, 'the public demo exposed the development control').toBeUndefined()
 
@@ -194,7 +194,7 @@ describe('the public demo', () => {
     ;(await screen.findByRole('button', { name: /^history$/i })).click()
     await screen.findByText(/Last 7 days/i, undefined, { timeout: 4_000 })
 
-    ;(await screen.findByRole('button', { name: /^box$/i })).click()
+    ;(await screen.findByRole('button', { name: /^home$/i })).click()
     await screen.findByRole('heading', { name: /demo home/i }, { timeout: 4_000 })
     expect(screen.queryByRole('button', { name: /^sign out$/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /turn on notifications/i })).toBeNull()
@@ -437,10 +437,10 @@ describe('signing out, from the phone', () => {
     // target has mounted hidden. There is no empty promise branch to paint.
     expectOne()
 
-    ;(await screen.findByRole('button', { name: /^box$/i })).click()
+    ;(await screen.findByRole('button', { name: /^home$/i })).click()
     await screen.findByText(/Your FTW box/i, undefined, { timeout: 4_000 })
     expectOne()
-    expect(screen.getByRole('button', { name: /^box$/i }).getAttribute('aria-current')).toBe(
+    expect(screen.getByRole('button', { name: /^home$/i }).getAttribute('aria-current')).toBe(
       'page'
     )
   })
@@ -596,7 +596,7 @@ describe('a paired phone that cannot reach its box', () => {
 
     // The tab bar is the app's own answer to whether this phone has a home,
     // and it says yes — so no screen inside it may say no.
-    const boxTab = await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    const boxTab = await screen.findByRole('button', { name: /^home$/i }, { timeout: 4_000 })
 
     expect(
       screen.queryByText(/Nothing paired yet/i),
@@ -614,7 +614,7 @@ describe('a paired phone that cannot reach its box', () => {
 
   it('says what is happening instead of showing a house with nothing in it', async () => {
     render(App)
-    await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /^home$/i }, { timeout: 4_000 })
 
     // Never a reading, never a claim to be live. What is left to say is what
     // this phone is doing about it, which is the only thing the person can
@@ -765,7 +765,7 @@ describe('the way back, for a phone that cannot get in', () => {
 
     // The shell believes this phone has a home — that is the whole bug — and
     // the screen it shows says why it cannot open it.
-    await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /^home$/i }, { timeout: 4_000 })
     await vi.waitFor(() => expect(said()).toMatch(/no key for that home/i), { timeout: 4_000 })
 
     await takeTheWayBack(/get this phone back in/i)
@@ -881,7 +881,7 @@ describe('the way back, for a phone that cannot get in', () => {
     await screen.findByRole('button', { name: /scan the pairing qr/i }, { timeout: 4_000 })
 
     buttonSaying(/^\s*Not now\s*$/)!.click()
-    await screen.findByRole('button', { name: /^box$/i }, { timeout: 4_000 })
+    await screen.findByRole('button', { name: /^home$/i }, { timeout: 4_000 })
     expect(said()).toMatch(/no key for that home/i)
   })
 })
