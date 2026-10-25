@@ -50,7 +50,8 @@ export interface FlowPlanet {
 }
 
 export interface FlowReadings {
-  load: number
+  /** The home's use in kW, or null when the box sends no such reading. */
+  load: number | null
   planets: FlowPlanet[]
   selfPoweredPctToday?: number | null
 }
@@ -199,7 +200,8 @@ export function flowReadings(fields: ReadonlyMap<number, number>): FlowReadings 
     })
   }
 
-  return { load: (fields.get(FID.LOAD_W) ?? 0) / 1000, planets }
+  const loadW = fields.get(FID.LOAD_W)
+  return { load: loadW === undefined ? null : loadW / 1000, planets }
 }
 
 /**
@@ -435,13 +437,14 @@ export function flowReadingsFromStatus(status: SiteStatus, live = true): FlowRea
     }
   }
 
+  const loadW = num(status.load_w)
   let selfPoweredPctToday: number | null = null
   if (loadKwhTotal > 0.001) {
     selfPoweredPctToday = Math.max(0, Math.min(100, (1 - importKwh / loadKwhTotal) * 100))
   }
 
   return {
-    load: (num(status.load_w) ?? 0) / 1000,
+    load: loadW === null ? null : loadW / 1000,
     planets: withControlMarks(planets, status.control_feedback, live),
     selfPoweredPctToday,
   }

@@ -10,7 +10,7 @@
   import { controlForPlanet, type ControlScope } from '$vendor/ftw/control-feedback.js'
   import { onMount, untrack } from 'svelte'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
-  import { ringReadings, type RingReading } from '$lib/state/ring'
+  import { ringKey, ringReadings, type RingReading } from '$lib/state/ring'
   import EnergyRing from './EnergyRing.svelte'
   import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
@@ -124,7 +124,8 @@
     status && (statusLive || !live) ? flowReadingsFromStatus(status, statusLive) : flowReadings(flowFields)
   )
 
-  // The ring's nodes, replaced only when what they show changes. Only while
+  // The ring's nodes, replaced only when what they show changes: the
+  // figures as drawn, not the watts behind them. Only while
   // this view is the one on screen — fed hidden it is 1 Hz of work nobody
   // can see — and because the effect reads the fields as they are when
   // `active` returns, coming back starts from the present.
@@ -133,7 +134,7 @@
   $effect(() => {
     if (!active) return
     const next = ringReadings(liveReadings, live)
-    const key = JSON.stringify(next)
+    const key = ringKey(next)
     if (key === ringShown) return
     ringShown = key
     ring = next

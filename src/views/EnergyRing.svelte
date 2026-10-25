@@ -18,7 +18,7 @@
   import type { ControlScope } from '$vendor/ftw/control-feedback.js'
   import { formatPower } from '$lib/format/power'
   import {
-    NODE_TITLE, doing, flowHeight, flowing, labelHeight, nodeWidth, onAxis, quantisedHolding,
+    NODE_TITLE, doing, flowHeight, flowing, labelHeight, nodeWidth, onAxis, quantised, quantisedHolding,
     ringArc, ringFill, ringGeometry, ringSpot, type RingNode, type RingReading, type RingSpot,
   } from '$lib/state/ring'
   import { ArcMotion, WAVELENGTH, alpha, depth, wave, type ArcFrame, type ArcTarget } from '$lib/state/ring-motion'
@@ -65,7 +65,7 @@
   function spoken(r: RingReading): string {
     const parts = [NODE_TITLE[r.node]]
     if (r.watts != null) {
-      const f = formatPower(r.watts)
+      const f = formatPower(quantised(r.watts))
       parts.push(`${f.text} ${f.unit}`)
     }
     parts.push(r.word)
@@ -90,7 +90,8 @@
 
   const arcs = $derived<Arc[]>(
     corners.map(({ r, spot }) => {
-      const kw = (r.watts ?? 0) / 1000
+      // The figure as drawn, so a 1 W wobble is the same drawing.
+      const kw = (r.watts !== null && Number.isFinite(r.watts) ? quantised(r.watts) : 0) / 1000
       return {
         node: r.node,
         spot,
@@ -99,7 +100,6 @@
       }
     })
   )
-  // A tick with the same readings is the same drawing.
   const drawn = $derived(JSON.stringify(arcs))
 
   let root = $state<HTMLDivElement | undefined>()
@@ -121,35 +121,49 @@
   let dark = true
   const colors = new Map<string, RGBA>()
 
-  /** The page's colours as numbers, for a canvas that cannot read tokens. */
-  function resolveColors() {
-    if (!canvas) return
+  /** One small canvas to read colours with, made once. */
+  let probe: CanvasRenderingContext2D | null | undefined
+
+  /** A colour as numbers, for a canvas that cannot read tokens. */
+  function parse(css: string, fallback: RGBA): RGBA {
+    if (!canvas) return fallback
     const style = getComputedStyle(canvas)
-    const probe = document.createElement('canvas').getContext('2d')
-    const parse = (css: string, fallback: RGBA): RGBA => {
-      const value = css.replace(/var\((--[\w-]+)\)/g, (_, name: string) => style.getPropertyValue(name).trim())
-      if (!probe || !value) return fallback
-      probe.fillStyle = '#000'
-      probe.fillStyle = value
-      const out = String(probe.fillStyle)
-      const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(out)
-      if (hex) {
-        const [, r = '0', g = '0', b = '0'] = hex
-        return [parseInt(r, 16), parseInt(g, 16), parseInt(b, 16), 1]
-      }
-      const rgb = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(out)
-      if (rgb) {
-        const [, r = '0', g = '0', b = '0', a = '1'] = rgb
-        return [+r, +g, +b, +a]
-      }
-      return fallback
+    const value = css.replace(/var\((--[\w-]+)\)/g, (_, name: string) => style.getPropertyValue(name).trim())
+    probe ??= document.createElement('canvas').getContext('2d')
+    if (!probe || !value) return fallback
+    // A value the canvas cannot read leaves the one before it in place.
+    const unset = '#010203'
+    probe.fillStyle = unset
+    probe.fillStyle = value
+    const out = String(probe.fillStyle)
+    if (out === unset) return fallback
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(out)
+    if (hex) {
+      const [, r = '0', g = '0', b = '0'] = hex
+      return [parseInt(r, 16), parseInt(g, 16), parseInt(b, 16), 1]
     }
+    const rgb = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(out)
+    if (rgb) {
+      const [, r = '0', g = '0', b = '0', a = '1'] = rgb
+      return [+r, +g, +b, +a]
+    }
+    return fallback
+  }
+
+  /** The theme's ink and ground, read again when the theme changes. */
+  function resolveTheme() {
     ink = parse('var(--fg)', ink)
     ink2 = parse('var(--fg-dim)', ink2)
     const ground = parse('var(--surface)', [5, 8, 15, 1])
     dark = 0.2126 * ground[0] + 0.7152 * ground[1] + 0.0722 * ground[2] < 128
     colors.clear()
-    for (const a of arcs) colors.set(a.color, parse(a.color, ink))
+  }
+
+  /** An arc's colour, read once per theme. */
+  function hueOf(css: string): RGBA {
+    let c = colors.get(css)
+    if (!c) colors.set(css, (c = parse(css, ink)))
+    return c
   }
 
   const rgba = (c: RGBA, opacity = 1) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${Math.max(0, Math.min(1, c[3] * opacity))})`
@@ -216,7 +230,7 @@
       const k = 1 - f.idle
       const lit = ringArc(a.spot, f.fill).lit
       if (k <= 0.01 || !lit) continue
-      const hue = colors.get(a.color) ?? ink
+      const hue = hueOf(a.color)
       if (glows && f.light > 0.004) {
         for (const [wide, strength] of [[2.8, 0.12], [1.8, 0.25]] as const) {
           ctx.lineWidth = g.thickness * wide
@@ -305,7 +319,6 @@
     played = key
     untrack(() => {
       settleUntil = performance.now() + SETTLE_MS
-      resolveColors()
       kick()
     })
   })
@@ -319,7 +332,7 @@
       reduceMotion = motion?.matches ?? false
       reduceTransparency = transparency?.matches ?? false
       pageVisible = document.visibilityState !== 'hidden'
-      resolveColors()
+      resolveTheme()
       kick()
     }
     sync()
@@ -338,11 +351,12 @@
     // Guarded rather than bound: a test's DOM has no ResizeObserver.
     const size = typeof ResizeObserver === 'function'
       ? new ResizeObserver(([e]) => {
-          if (e) width = e.contentRect.width
+          // Hidden, the view measures 0; keep the width it had.
+          if (e && e.contentRect.width > 0) width = e.contentRect.width
         })
       : null
     if (root) {
-      width = root.clientWidth
+      if (root.clientWidth > 0) width = root.clientWidth
       size?.observe(root)
     }
     return () => {

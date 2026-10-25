@@ -26,6 +26,10 @@ describe('the ring', () => {
   afterEach(() => {
     document.body.replaceChildren()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    HTMLCanvasElement.prototype.getContext = (() => null) as never
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    document.documentElement.removeAttribute('style')
   })
 
   it('draws each node as text on the ground with the home in the middle', () => {
@@ -90,4 +94,103 @@ describe('the ring', () => {
     await tick()
     expect(frames).not.toHaveBeenCalled()
   })
+
+  it('keeps running while a live arc flows, and rests when the page or the view goes away', async () => {
+    const frames = stubFrames()
+    const later = performance.now() + 10_000
+    const view = render(EnergyRing, { props: { readings: house(), active: true } })
+    await tick()
+    vi.spyOn(performance, 'now').mockReturnValue(later)
+    frames.run()
+    expect(frames.asked(), 'a live flowing arc stopped its light').toBe(1)
+
+    visibility('hidden')
+    frames.run()
+    expect(frames.asked(), 'the loop ran on a hidden page').toBe(0)
+    visibility('visible')
+    expect(frames.asked()).toBe(1)
+
+    await view.rerender({ readings: house(), active: false })
+    frames.run()
+    expect(frames.asked(), 'the loop ran behind another tab').toBe(0)
+  })
+
+  it('glows only while live, and draws a cache in ink', async () => {
+    // The page's ink and the sun's colour, as the theme would give them.
+    document.documentElement.style.setProperty('--fg-dim', '#9aa5b8')
+    document.documentElement.style.setProperty('--energy-generation', '#ffe14d')
+    const strokes = recordStrokes()
+    const frames = stubFrames()
+    const view = render(EnergyRing, { props: { readings: house(), active: true } })
+    await tick()
+    frames.run()
+    expect(strokes.wide(), 'a live arc did not glow').toBeGreaterThan(0)
+    expect(strokes.colours.has('rgba(255, 225, 77)'), 'a live sun was not in its colour').toBe(true)
+
+    strokes.clear()
+    await view.rerender({ readings: house(false), active: true })
+    await tick()
+    // Well past the cooling, the light is out.
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 10_000)
+    frames.run()
+    expect(strokes.list.length, 'nothing was drawn').toBeGreaterThan(0)
+    expect(strokes.wide(), 'a cached arc glowed').toBe(0)
+    expect(Math.max(...strokes.stops), 'a cached arc kept its full strength').toBeLessThanOrEqual(0.35 + 1e-6)
+    expect([...strokes.colours], 'a cached arc kept its colour').toEqual(['rgba(154, 165, 184)'])
+  })
 })
+
+/** A frame queue the test drives by hand. */
+function stubFrames() {
+  let queue: FrameRequestCallback[] = []
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (queue.push(cb), queue.length))
+  vi.stubGlobal('cancelAnimationFrame', () => { queue = [] })
+  return {
+    asked: () => queue.length,
+    run() {
+      const now = queue
+      queue = []
+      for (const cb of now) cb(0)
+    },
+  }
+}
+
+function visibility(state: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+/** A 2D context that keeps each stroke's width and each colour stop's alpha. */
+function recordStrokes() {
+  const list: { width: number }[] = []
+  const stops: number[] = []
+  const colours = new Set<string>()
+  const alphaOf = (c: string) => Number(/,\s*([\d.]+)\)$/.exec(c)?.[1] ?? 1)
+  const ctx = {
+    lineWidth: 1, strokeStyle: '' as unknown, fillStyle: '#000', lineCap: '', lineJoin: '',
+    setTransform() {}, clearRect() {}, beginPath() {}, arc() {}, moveTo() {}, lineTo() {}, save() {}, restore() {},
+    stroke() { list.push({ width: this.lineWidth }) },
+    createConicGradient() {
+      return {
+        addColorStop: (_: number, c: string) => {
+          stops.push(alphaOf(c))
+          colours.add(c.replace(/,\s*[\d.]+\)$/, ')'))
+        },
+      }
+    },
+  }
+  HTMLCanvasElement.prototype.getContext = (() => ctx) as never
+  return {
+    list,
+    stops,
+    /** The colours of the stops, without their alpha. */
+    colours,
+    /** Strokes wider than an arc: the glow. */
+    wide: () => list.filter((s) => s.width > 20).length,
+    clear() {
+      list.length = 0
+      stops.length = 0
+      colours.clear()
+    },
+  }
+}

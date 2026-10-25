@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  doing, flowHeight, labelHeight, nodeWidth, quantised, quantisedHolding, ringArc, ringFill, ringGeometry, ringReadings,
+  doing, flowHeight, labelHeight, nodeWidth, quantised, quantisedHolding, ringArc, ringFill, ringGeometry, ringKey, ringReadings,
   ringSpot, type RingReading,
 } from './ring'
 import { FLOW_IDLE_W, flowReadingsFromStatus, type FlowPlanet, type FlowReadings } from './flow'
@@ -29,7 +29,7 @@ describe('the ring’s nodes', () => {
       load: 2,
       planets: [
         planet({ id: 'grid', role: 'grid', kw: 0, toHub: true }),
-        planet({ id: 'bat-a', role: 'battery', name: 'a', kw: -1, toHub: true, soc: 40 }),
+        planet({ id: 'bat-a', role: 'battery', name: 'a', kw: 1, toHub: true, soc: 40 }),
         planet({ id: 'bat-b', role: 'battery', name: 'b', kw: 1, toHub: true, soc: 60 }),
         planet({ id: 'bat-c', role: 'battery', name: 'c', kw: 0.5, toHub: false, soc: null }),
       ],
@@ -41,6 +41,54 @@ describe('the ring’s nodes', () => {
     expect(bat.color).toBe('var(--energy-gives)')
     expect(bat.levelPct).toBe(50)
     expect(bat.scope).toEqual({ role: 'battery', name: null, id: 'agg-battery' })
+  })
+
+  it('folds batteries the same way from the box’s snapshot, where watts are signed', () => {
+    const rs = ringReadings(flowReadingsFromStatus({
+      grid_w: 0, load_w: 2_000,
+      drivers: { a: { status: 'ok', bat_w: -1_000, bat_soc: 0.4 }, b: { status: 'ok', bat_w: 500, bat_soc: 0.6 } },
+    }), true)
+    const bat = node(rs, 'battery')!
+    expect([bat.watts, bat.word, bat.towardHome, bat.levelPct]).toEqual([500, 'giving power', true, 50])
+  })
+
+  it('does not call a sum live when one device of the kind has no reading', () => {
+    const rs = ringReadings(flowReadingsFromStatus({
+      grid_w: 0, load_w: 500,
+      drivers: { a: { status: 'ok', bat_w: -1_000 }, b: { status: 'ok', bat_w: 0 } },
+      control_feedback: [{ driver: 'b', kind: 'battery', status: 'no_contact', reason: 'readings_lost', severity: 'info', evidence: 'accepted', readings_fresh: false }],
+    }), true)
+    const bat = node(rs, 'battery')!
+    expect(bat.watts).toBe(1_000)
+    expect(bat.live).toBe(false)
+  })
+
+  it('opens nothing from a placeholder the box would not open', () => {
+    const rs = ringReadings({
+      load: 1,
+      planets: [
+        planet({ id: 'grid', role: 'grid', kw: 1 }),
+        planet({ id: 'control-battery-x', role: 'battery', name: 'x', placeholder: true, sub: 'no data' }),
+      ],
+    }, true)
+    expect(node(rs, 'battery')!.scope).toBeNull()
+    const marked = ringReadings({
+      load: 1,
+      planets: [planet({ id: 'control-battery-x', role: 'battery', name: 'x', placeholder: true, controlMark: { tone: 'alarm', label: 'Lost' } })],
+    }, true)
+    expect(node(marked, 'battery')!.scope).toEqual({ role: 'battery', name: 'x', id: 'control-battery-x' })
+  })
+
+  it('shows the home as unknown when the box sends no use, not as a live 0 W', () => {
+    const home = node(ringReadings(flowReadingsFromStatus({ grid_w: 100 }), true), 'home')!
+    expect(home.watts).toBeNull()
+    expect(home.live).toBe(false)
+    expect(home.word).toBe('no reading')
+  })
+
+  it('treats a reading that is not a number as none', () => {
+    const rs = ringReadings({ load: 1, planets: [planet({ id: 'grid', role: 'grid' }), planet({ id: 'pv', role: 'pv', kw: Number.NaN })] }, true)
+    expect(node(rs, 'solar')!.watts).toBeNull()
   })
 
   it('names the grid buying or selling, one colour both ways, never a sign', () => {
@@ -128,6 +176,16 @@ describe('the room it takes', () => {
     }
   })
 
+  it('keeps the whole ring and its glow inside the flow at any width', () => {
+    for (const width of [320, 560, 580, 600, 700, 900]) {
+      for (const axis of [false, true]) {
+        const height = flowHeight(width, axis)
+        const g = ringGeometry(width, height, labelHeight(), nodeWidth(width), axis)
+        expect(g.diameter + 3 * g.thickness, `${width} px, axis ${axis}`).toBeLessThanOrEqual(height)
+      }
+    }
+  })
+
   it('shrinks the labels rather than let them touch the least ring', () => {
     const g = ringGeometry(320, 240, labelHeight(), nodeWidth(320), true)
     expect(g.diameter).toBe(120)
@@ -148,6 +206,12 @@ describe('the figures', () => {
     for (const w of [1_440, 1_460, 1_449]) shown = quantisedHolding(w, shown)
     expect(shown).toBe(1_500)
     expect(quantisedHolding(1_380, shown)).toBe(1_400)
+  })
+
+  it('keys a reading by what it draws, so a 1 W wobble is the same ring', () => {
+    const at = (w: number) => ringReadings({ load: 1, planets: [planet({ id: 'grid', role: 'grid', kw: w / 1000 })] }, true)
+    expect(ringKey(at(1_401))).toBe(ringKey(at(1_402)))
+    expect(ringKey(at(1_401))).not.toBe(ringKey(at(1_480)))
   })
 
   it('writes what a node does with its level', () => {

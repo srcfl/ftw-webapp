@@ -183,12 +183,25 @@ describe('the Now screen', () => {
     const box = new SimBox({ now: () => Date.now() })
     const serve = box.api.serve.bind(box.api)
     let failStatus = false
+    // The box's snapshot carries a warning on the battery and a house use of
+    // its own. Only the snapshot says either, so the ring shows which source
+    // drew the house.
+    const warning = { driver: 'lynx', kind: 'battery', status: 'not_following', reason: 'setpoint_changed', severity: 'warning', evidence: 'accepted', readings_fresh: true }
     vi.spyOn(box.api, 'serve').mockImplementation(req => {
-      if (req.path === '/api/status' && failStatus) {
+      if (req.path !== '/api/status') return serve(req)
+      if (failStatus) {
         return { status: 503, contentType: 'application/json', body: new TextEncoder().encode('{}') }
       }
-      return serve(req)
+      const res = serve(req)
+      if ('code' in res) return res
+      const body = JSON.parse(new TextDecoder().decode(res.body)) as Record<string, unknown>
+      // Copied into this realm's Uint8Array, or the frame encoder sees an
+      // array of numbers rather than bytes.
+      const bytes = Uint8Array.from(new TextEncoder().encode(JSON.stringify({ ...body, load_w: 12_345, control_feedback: [warning] })))
+      return { ...res, body: bytes }
     })
+    const marked = () => document.querySelector('[data-node="battery"] .mark') !== null
+    const fromSnapshot = () => /12 kW/.test(document.querySelector('[data-node="home"]')?.textContent ?? '')
     const site = new SiteStore('test')
     site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
     const view = render(Now, { props: { site } })
@@ -197,6 +210,8 @@ describe('the Now screen', () => {
       await vi.advanceTimersByTimeAsync(20)
     }
     expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
+    expect(marked(), 'the box snapshot never reached the ring').toBe(true)
+    expect(fromSnapshot()).toBe(true)
 
     failStatus = true
     for (let i = 0; i < 4; i++) {
@@ -205,6 +220,8 @@ describe('the Now screen', () => {
     }
     expect(site.srcState).toBe('live')
     expect(ringEl()!.dataset.live, 'fresh telemetry should keep moving').toBe('true')
+    expect(marked(), 'a stale snapshot still drew the ring').toBe(false)
+    expect(fromSnapshot(), 'a stale snapshot still drew the ring').toBe(false)
     expect(document.body.textContent).toContain('Device details are out of date. Showing live totals.')
     expect(document.querySelector('.card.fuse')?.textContent).not.toContain('Live safety')
     expect(document.querySelector('.card.fuse time')?.getAttribute('datetime')).toBeTruthy()
@@ -216,6 +233,8 @@ describe('the Now screen', () => {
       await vi.advanceTimersByTimeAsync(1_000)
     }
     expect(ringEl()!.dataset.live).toBe('true')
+    expect(marked(), 'the recovered snapshot did not reach the ring').toBe(true)
+    expect(fromSnapshot()).toBe(true)
     expect(document.body.textContent).not.toContain('Device details are out of date')
     expect(document.querySelector('.card.fuse')?.textContent).toContain('Live safety')
     expect(document.querySelector('#today-title')?.textContent).toBe('Today')

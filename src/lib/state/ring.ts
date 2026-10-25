@@ -68,18 +68,23 @@ const ROLE: Record<Exclude<RingNode, 'home'>, FlowPlanet['role']> = {
 const idle = (w: number) => Math.abs(w) <= FLOW_IDLE_W
 
 /** A planet that only holds a place: no reading behind it. */
-const empty = (p: FlowPlanet) => p.placeholder === true || p.sub === 'no data'
+const empty = (p: FlowPlanet) => p.placeholder === true || p.sub === 'no data' || !Number.isFinite(p.kw)
+
+/** The box's hero's rule for a planet that opens something: a control mark
+ *  always does, a placeholder never does otherwise. */
+const opens = (p: FlowPlanet) => p.clickable !== false && (!!p.controlMark || (!p.placeholder && !!p.role))
 
 /** Several devices of one kind fold into one node, as on the phone. */
 function fold(node: Exclude<RingNode, 'home'>, first: FlowPlanet, group: FlowPlanet[], live: boolean): RingReading {
   const real = group.filter((p) => !empty(p))
-  const scope: ControlScope | null = group.every((p) => p.clickable === false)
+  const scope: ControlScope | null = !group.some(opens)
     ? null
     : group.length === 1
       ? { role: first.role, name: first.name ?? null, id: first.id }
       : { role: first.role, name: null, id: `agg-${first.role}` }
   const mark = strongest(group)
-  const base = { node, mark, scope, live: live && real.length > 0 }
+  // A sum with a device missing is not the whole reading, so it is not live.
+  const base = { node, mark, scope, live: live && real.length === group.length }
   if (real.length === 0) {
     return { ...base, watts: null, word: 'no reading', color: color(node, 0), towardHome: node !== 'car', levelPct: null }
   }
@@ -152,9 +157,12 @@ export function ringReadings(r: FlowReadings, live: boolean): RingReading[] {
   const out: RingReading[] = []
   for (const node of ORDER) {
     if (node === 'home') {
+      const load = r.load
+      const known = load !== null && Number.isFinite(load)
       out.push({
-        node, watts: Math.max(0, r.load * 1000), word: 'using', color: color('home', 0), towardHome: false,
-        levelPct: null, live, mark: null, scope: { role: 'load' },
+        node, watts: known ? Math.max(0, load * 1000) : null, word: known ? 'using' : 'no reading',
+        color: color('home', 0), towardHome: false, levelPct: null, live: live && known, mark: null,
+        scope: { role: 'load' },
       })
       continue
     }
@@ -268,6 +276,10 @@ const LEAST_SCALE = 0.7
 
 const thick = (d: number) => Math.max(7, Math.round(d * 0.042))
 
+/** The height the ring itself takes: its stroke and the glow around it,
+ *  1.4 strokes either side of the middle of the arc. */
+const ringRoom = (d: number) => d + 3 * thick(d)
+
 /** How far above the middle a corner label's inner edge clears the ring. */
 function clearance(d: number, dx: number): number {
   const reach = d / 2 + thick(d) / 2 + 10
@@ -284,7 +296,7 @@ export function ringGeometry(width: number, height: number, label: number, label
   const dx = axis ? 0 : Math.max(0, width / 2 - labelWidth)
   const box = (d: number) => 2 * (clearance(d, dx) + label)
   let d = Math.min(width * 0.62, 300)
-  while (d > LEAST_RING && box(d) > height) d = Math.max(LEAST_RING, d - 2)
+  while (d > LEAST_RING && (box(d) > height || ringRoom(d) > height)) d = Math.max(LEAST_RING, d - 2)
   const room = height / 2 - clearance(d, dx)
   const labelScale = box(d) > height && label > 0 ? Math.min(1, Math.max(LEAST_SCALE, room / label)) : 1
   return {
@@ -294,20 +306,23 @@ export function ringGeometry(width: number, height: number, label: number, label
     radius: d / 2,
     thickness: thick(d),
     hub: d * 0.62,
-    box: Math.min(height, 2 * (clearance(d, dx) + label * labelScale)),
+    // Where the labels sit beside the ring, the box still spans it, so they
+    // keep to its corners rather than meet in the middle.
+    box: Math.min(height, Math.max(2 * (clearance(d, dx) + label * labelScale), ringRoom(d))),
     labelScale,
   }
 }
 
 /**
  * The flow's height for its width: what the largest ring and its labels
- * need, from 232 px to 420 px. A function of the width and the home's shape
+ * need, or the ring alone where the labels sit beside it, from 232 px to
+ * 420 px. A function of the width and the home's shape
  * alone, so nothing on the page moves when a reading arrives.
  */
 export function flowHeight(width: number, axis: boolean, label = labelHeight()): number {
   const dx = axis ? 0 : Math.max(0, width / 2 - nodeWidth(width))
   const d = Math.min(width * 0.62, 300)
-  return Math.min(420, Math.max(232, Math.ceil(2 * (clearance(d, dx) + label))))
+  return Math.min(420, Math.max(232, Math.ceil(Math.max(2 * (clearance(d, dx) + label), ringRoom(d)))))
 }
 
 // ---------- the figures ----------
@@ -345,4 +360,16 @@ export function doing(r: RingReading): string {
   if (r.levelPct == null) return w || ' '
   const pct = `${Math.round(r.levelPct)}%`
   return w ? `${w} · ${pct}` : pct
+}
+
+/**
+ * What a reading looks like on screen, as one string: the figures as they
+ * are drawn, not the watts behind them. Two ticks with the same key draw the
+ * same ring, so a 1 W wobble repaints nothing.
+ */
+export function ringKey(readings: readonly RingReading[]): string {
+  return JSON.stringify(readings.map((r) => [
+    r.node, r.watts === null ? null : quantised(r.watts), r.word, r.color, r.towardHome,
+    r.levelPct === null ? null : Math.round(r.levelPct), r.live, r.mark, r.scope,
+  ]))
 }
