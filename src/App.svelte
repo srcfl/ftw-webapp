@@ -180,18 +180,18 @@
 
   /** The URL changes at once; the visible panel changes only when it is ready. */
   let displayedRoute = $state<Route | null>(
-    router.current === 'history' || router.current === 'box' ? null : router.current
+    router.current === 'history' || router.current === 'home' ? null : router.current
   )
   /** Which way the incoming panel slides, read off the tab order. */
   let viewDir = $state<'fwd' | 'back'>('fwd')
   let seen = $state({
     plan: router.current === 'plan',
     history: false,
-    box: false,
+    home: false,
   })
   let routeRequest = 0
   let routeSavedFrom: Route | null = null
-  const scrollByRoute: Record<Route, number> = { now: 0, plan: 0, history: 0, box: 0 }
+  const scrollByRoute: Record<Route, number> = { now: 0, plan: 0, history: 0, home: 0 }
 
   function loadView(route: Route): Promise<void> {
     if (route === 'history') {
@@ -204,7 +204,7 @@
         })
       return historyLoad
     }
-    if (route === 'box') {
+    if (route === 'home') {
       boxLoad ??= import('$views/Box.svelte')
         .then((module) => {
           BoxView = module.default
@@ -220,7 +220,7 @@
   function markSeen(route: Route): void {
     if (route === 'plan') seen.plan = true
     if (route === 'history') seen.history = true
-    if (route === 'box') seen.box = true
+    if (route === 'home') seen.home = true
   }
 
   /**
@@ -396,7 +396,7 @@
     connectHelp = null
     restoringHome = false
     resolvingSite = false
-    seen = { plan: false, history: false, box: false }
+    seen = { plan: false, history: false, home: false }
     displayedRoute = 'now'
     go('now')
   }
@@ -431,7 +431,7 @@
       // chunks can now parse off-screen, so the first tab tap never waits on
       // an import even when it comes from the service worker cache.
       warmTimer = setTimeout(() => {
-        void Promise.all([loadView('history'), loadView('box')])
+        void Promise.all([loadView('history'), loadView('home')])
       }, 350)
     })
     // Not on the first-frame path. The gesture is installed from its cached
@@ -622,7 +622,7 @@
       // stopped. The route has not moved, so the screen being looked at is
       // rebuilt in place against the restored store.
       leaveFailed = true
-      seen = { plan: false, history: false, box: false }
+      seen = { plan: false, history: false, home: false }
       displayedRoute = null
       void showRoute(router.current)
       throw err
@@ -637,7 +637,7 @@
     site = new SiteStore(__APP_BUILD__)
     siteId = null
     // A view kept from the old store would come back holding the old home.
-    seen = { plan: false, history: false, box: false }
+    seen = { plan: false, history: false, home: false }
     displayedRoute = null
     go('now')
   }
@@ -743,10 +743,10 @@
         </div>
       {/if}
 
-      {#if seen.box}
+      {#if seen.home}
         <!-- Opened by hand a handful of times in the life of an install, so it
              is loaded when someone asks for it and never before. -->
-        <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'box'}>
+        <div class="view" data-dir={viewDir} hidden={displayedRoute !== 'home'}>
           {#if demoActive && DemoBoxView}
             <DemoBoxView {site} onExit={exitDemo} />
           {:else if BoxView}
@@ -777,28 +777,41 @@
        way back to them is a button on that screen. -->
   {#if hasHome && !recovering}
     <nav aria-label="Views">
+      <!-- The iPhone's four tabs: a symbol over a word, the one shown in ink. -->
       <button
         type="button"
         aria-current={router.current === 'now' ? 'page' : undefined}
-        onclick={() => go('now')}>Now</button
+        onclick={() => go('now')}
       >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.2 2.2 4.6 13.1c-.4.5 0 1.2.6 1.2h5.3l-1.3 7.2c-.1.7.8 1.1 1.2.5l8.6-10.9c.4-.5 0-1.2-.6-1.2h-5.3l1.3-7.2c.1-.7-.8-1.1-1.2-.5Z" /></svg>
+        <span>Now</span>
+      </button>
       <button
         type="button"
         aria-current={router.current === 'plan' ? 'page' : undefined}
-        onclick={() => go('plan')}>Plan</button
+        onclick={() => go('plan')}
       >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M7 2.5a1 1 0 0 1 1 1V4h8v-.5a1 1 0 1 1 2 0V4h.5A2.5 2.5 0 0 1 21 6.5v12a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18.5v-12A2.5 2.5 0 0 1 5.5 4H6v-.5a1 1 0 0 1 1-1ZM5 9v9.5c0 .3.2.5.5.5h13c.3 0 .5-.2.5-.5V9H5Zm2 2.5h2v2H7v-2Zm4 0h2v2h-2v-2Zm4 0h2v2h-2v-2Zm-8 4h2v2H7v-2Zm4 0h2v2h-2v-2Z" /></svg>
+        <span>Plan</span>
+      </button>
       <button
         type="button"
         aria-current={router.current === 'history' ? 'page' : undefined}
         onpointerdown={() => void loadView('history')}
-        onclick={() => go('history')}>History</button
+        onclick={() => go('history')}
       >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="11" width="4.5" height="9.5" rx="1.2" /><rect x="9.75" y="7" width="4.5" height="13.5" rx="1.2" /><rect x="16" y="3.5" width="4.5" height="17" rx="1.2" /></svg>
+        <span>History</span>
+      </button>
       <button
         type="button"
-        aria-current={router.current === 'box' ? 'page' : undefined}
-        onpointerdown={() => void loadView('box')}
-        onclick={() => go('box')}>Box</button
+        aria-current={router.current === 'home' ? 'page' : undefined}
+        onpointerdown={() => void loadView('home')}
+        onclick={() => go('home')}
       >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.3 2.8a1.1 1.1 0 0 1 1.4 0l8.4 7.1c.5.4.2 1.2-.5 1.2H19v8.4c0 .8-.7 1.5-1.5 1.5H15v-5.2c0-.6-.4-1-1-1h-4c-.6 0-1 .4-1 1V21H6.5C5.7 21 5 20.3 5 19.5v-8.4H3.4c-.7 0-1-.8-.5-1.2l8.4-7.1Z" /></svg>
+        <span>Home</span>
+      </button>
     </nav>
   {/if}
 
@@ -1031,11 +1044,14 @@
 
   nav button {
     flex: 1;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 6px 0 4px;
     border-radius: var(--radius-sm);
-    font-family: var(--mono);
+    font-family: var(--sans);
     font-size: 11px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    font-weight: 500;
     color: var(--fg-muted);
     touch-action: manipulation;
     transition:
@@ -1044,13 +1060,19 @@
       transform var(--motion-fast) var(--ease);
   }
 
+  nav svg {
+    width: 24px;
+    height: 24px;
+    fill: currentColor;
+  }
+
   nav button:active {
     background: var(--surface-raised);
     transform: scale(0.97);
   }
 
   nav button[aria-current='page'] {
-    background: var(--surface-elevated);
+    background: var(--surface-raised);
     color: var(--fg);
   }
 </style>

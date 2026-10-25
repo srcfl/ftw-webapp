@@ -9,9 +9,9 @@
  * to the first frame. The History view itself is loaded on demand.
  */
 
-export type Route = 'now' | 'plan' | 'history' | 'box'
+export type Route = 'now' | 'plan' | 'history' | 'home'
 
-const ROUTES: Route[] = ['now', 'plan', 'history', 'box']
+const ROUTES: Route[] = ['now', 'plan', 'history', 'home']
 
 /** Position of a route in the tab bar. The shell reads slide direction from
  * it: a tap further down the bar arrives from the right, back up it from
@@ -22,6 +22,9 @@ export function routeIndex(route: Route): number {
 
 function fromHash(hash: string): Route {
   const name = hash.replace(/^#\/?/, '').split('?')[0]
+  // The fourth tab was Box until the app took the iPhone's four tabs; a
+  // link or bookmark to it still lands there.
+  if (name === 'box') return 'home'
   return ROUTES.find((r) => r === name) ?? 'now'
 }
 
