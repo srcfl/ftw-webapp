@@ -8,12 +8,10 @@
 -->
 <script lang="ts">
   import { controlForPlanet, type ControlScope } from '$vendor/ftw/control-feedback.js'
-  // The box's own hero component, vendored verbatim. Importing registers
-  // <ftw-energy-flow>; the app and the on-box dashboard render one file.
   import { onMount, untrack } from 'svelte'
-  import '$vendor/ftw/ftw-energy-flow.js'
-  import type { FtwEnergyFlowElement } from '$vendor/ftw/ftw-energy-flow.js'
   import { flowReadings, flowReadingsFromStatus, withLoadpointEv, type SiteStatus } from '$lib/state/flow'
+  import { ringReadings, type RingReading } from '$lib/state/ring'
+  import EnergyRing from './EnergyRing.svelte'
   import { explain } from '$lib/format/explanation'
   import { CAP_API_PASSTHROUGH } from '$lib/protocol/contract'
   import LivePanel, { type LiveRole } from './LivePanel.svelte'
@@ -126,24 +124,19 @@
     status && (statusLive || !live) ? flowReadingsFromStatus(status, statusLive) : flowReadings(flowFields)
   )
 
-  let flow = $state<FtwEnergyFlowElement | null>(null)
-  let lastFlow: FtwEnergyFlowElement | null = null
-  let lastReadings: typeof liveReadings | null = null
-
-  // The component takes data by method, the way the dashboard feeds it.
-  // An effect rather than an attribute because setReadings() is the
-  // component's whole API, and inventing a second one would fork it. Only
-  // while this view is the one on screen — fed hidden it is 1 Hz of work
-  // nobody can see — and because the effect reads the fields as they are
-  // when `active` returns, coming back starts from the present.
+  // The ring's nodes, replaced only when what they show changes. Only while
+  // this view is the one on screen — fed hidden it is 1 Hz of work nobody
+  // can see — and because the effect reads the fields as they are when
+  // `active` returns, coming back starts from the present.
+  let ring = $state.raw<RingReading[]>([])
+  let ringShown = ''
   $effect(() => {
-    const readings = liveReadings
-    if (!active || !flow || (flow === lastFlow && readings === lastReadings)) return
-    // The component retains an omitted daily share. Clear it when only
-    // telemetry totals remain, so old status details cannot survive fallback.
-    flow.setReadings({ ...readings, selfPoweredPctToday: readings.selfPoweredPctToday ?? null })
-    lastFlow = flow
-    lastReadings = readings
+    if (!active) return
+    const next = ringReadings(liveReadings, live)
+    const key = JSON.stringify(next)
+    if (key === ringShown) return
+    ringShown = key
+    ring = next
   })
 
   /** The charger's sheet, opened by a tap on its bubble. Loaded on demand
@@ -218,19 +211,6 @@
     if (scope.role === 'ev') { selectedCharger = null; selectedDriver = scope.id?.startsWith('agg-') ? null : scope.name ?? null; evOpen = true }
     else if (scope.role && LIVE_ROLES.has(scope.role) && live) liveRole = scope.role as LiveRole
   }
-
-  // Preserve a charger tap while the saved home reconnects. The panel shows
-  // connection progress, then checks the capabilities the box reports.
-  $effect(() => {
-    const el = flow
-    if (!el) return
-    const onPlanet = (e: Event) => {
-      const scope = (e as CustomEvent<ControlScope>).detail ?? {}
-      openPlanetControls(scope)
-    }
-    el.addEventListener('ftw-planet-click', onPlanet)
-    return () => el.removeEventListener('ftw-planet-click', onPlanet)
-  })
 
   // A newly mounted dialog can still pull the scroller to itself on some
   // WebKits. Hold the house where it was for that frame.
@@ -353,10 +333,10 @@
   </section>
 
   <div class="flow">
-    <!-- static is the honesty switch: a cached view holds still, because a
-         moving particle claims power is flowing at this very moment. -->
-    <ftw-energy-flow bind:this={flow} embedded static={live && active ? undefined : true}
-    ></ftw-energy-flow>
+    <!-- A tap opens the node: the charger's sheet for the car, a live line
+         for the rest. It works while the saved home reconnects; the panel
+         shows the progress, then checks what the box can do. -->
+    <EnergyRing readings={ring} {active} onopen={openPlanetControls} />
     {#if status && !statusLive}
       <p class="note" role="status">Device details are out of date.{live ? ' Showing live totals.' : ''}</p>
     {/if}
