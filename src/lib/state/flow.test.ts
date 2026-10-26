@@ -151,21 +151,30 @@ describe('withLoadpointEv', () => {
     expect(flowReadings(out).planets.find((p) => p.id === 'ev')!.kw).toBeCloseTo(7.2)
   })
 
-  it('splits a silent stream so the car is not the house', () => {
-    // The phone bug: field 10 at 0 W, house holding house+car (~12.7 kW).
-    const folded = fields([
+  it('adds the charger to a silent stream and leaves Core’s load alone', () => {
+    // Field 10 at 0 W while a loadpoint charges: the car gets its node, and
+    // the house keeps the load the box sent. Core decides what that load
+    // holds; the app subtracting the car from it guessed for the box.
+    const silent = fields([
       [FID.GRID_W, 0],
       [FID.PV_W, -3300],
       [FID.BATTERY_W, -9900],
       [FID.LOAD_W, 12_700],
       [FID.EV_W, 0],
     ])
-    const out = withLoadpointEv(folded, 11_400)
+    const out = withLoadpointEv(silent, 11_400)
     const r = flowReadings(out)
-    expect(r.load).toBeCloseTo(1.3)
+    expect(r.load).toBeCloseTo(12.7)
     const ev = r.planets.find((p) => p.id === 'ev')!
     expect(ev.kw).toBeCloseTo(11.4)
     expect(ev.sub).toBe('charging')
+  })
+
+  it('keeps a missing or zero load as the box sent it', () => {
+    const missing = fields([[FID.GRID_W, 0], [FID.EV_W, 0]])
+    expect(withLoadpointEv(missing, 7_200).has(FID.LOAD_W)).toBe(false)
+    const zero = fields([[FID.GRID_W, 0], [FID.LOAD_W, 0], [FID.EV_W, 0]])
+    expect(withLoadpointEv(zero, 7_200).get(FID.LOAD_W)).toBe(0)
   })
 
   it('draws the EV node when the stream never sent field 10', () => {
