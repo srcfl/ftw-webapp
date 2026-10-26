@@ -220,12 +220,12 @@ export function loadpointChargeW(points: readonly { powerW: number }[]): number 
 }
 
 /**
- * Put the car back on its own node when the 1 Hz stream folded it into the
- * house.
+ * Add the charger's reading when the stream has no active EV field.
  *
  * The overlay fires only when the stream is silent or idle and a loadpoint
  * is not. A box that already sends field 10 is left alone, so the two
- * sources cannot fight.
+ * sources cannot fight. Core owns the house load: it stays as the box sent
+ * it, missing and zero included, as on the phone.
  */
 export function withLoadpointEv(
   fields: ReadonlyMap<number, number>,
@@ -236,9 +236,7 @@ export function withLoadpointEv(
   if (wire !== undefined && Math.abs(wire) > FLOW_IDLE_W) return fields
 
   const out = new Map(fields)
-  const load = out.get(FID.LOAD_W) ?? 0
   out.set(FID.EV_W, Math.round(evW))
-  out.set(FID.LOAD_W, Math.max(0, load - evW))
   return out
 }
 
