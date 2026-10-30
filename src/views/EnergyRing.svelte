@@ -3,15 +3,19 @@
   Quiet, chosen by Fredrik on 24 October 2026): the home's use in the middle
   of a ring, each other node as text on the ground in its corner, and the
   quarter of the ring that faces it lit from its middle out, longer with
-  more power. A soft wave of light runs along a lit arc, clockwise for power
-  coming into the home and the other way for power leaving it.
+  more power. Steady flow (J, chosen on 30 October 2026): the arc is
+  brightest over its middle third, each reading from the box sends one swell
+  along it, and thin lines of light run all the time between the arc and the
+  home's circle, in toward the home for power coming into it and out for
+  power leaving it. In the dark the arcs and lines glow in two blurred
+  passes for the whole ring.
 
   Light means live. Only a reading the box confirms live glows or moves; a
   cached or quiet arc is a faint still arc in ink, and a node at rest shows
   only its quarter's track. The loop runs only while an arc is live and
   flowing, or for a moment after a change so an arc can grow or cool, and
-  only while this view is on screen. Under reduced motion the light holds
-  still and a chevron on the arc says which way it flows.
+  only while this view is on screen. Under reduced motion nothing runs or
+  swells, and a still chevron on the way to the home says which way it flows.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
@@ -21,17 +25,20 @@
     NODE_TITLE, doing, flowHeight, flowing, labelHeight, nodeWidth, onAxis, quantised, quantisedHolding,
     ringArc, ringFill, ringGeometry, ringSpot, type RingNode, type RingReading, type RingSpot,
   } from '$lib/state/ring'
-  import { ArcMotion, WAVELENGTH, alpha, depth, wave, type ArcFrame, type ArcTarget } from '$lib/state/ring-motion'
+  import { ArcMotion, alpha, ringEase, ringLines, ringStrength, ringSwell, type ArcTarget } from '$lib/state/ring-motion'
 
   interface Props {
     readings: RingReading[]
     /** Whether this view is the one on screen. Hidden, nothing draws. */
     active?: boolean
+    /** When the newest reading from the box came, in ms. Each new one sends
+     *  a swell along the live arcs. */
+    readingAt?: number | null
     /** A tap on a node, with the scope the box's own hero would send. */
     onopen?: (scope: ControlScope) => void
   }
 
-  let { readings, active = true, onopen }: Props = $props()
+  let { readings, active = true, readingAt = null, onopen }: Props = $props()
 
   let width = $state(0)
   // jsdom and a first frame before layout have no width; draw a phone's.
@@ -104,6 +111,9 @@
 
   let root = $state<HTMLDivElement | undefined>()
   let canvas = $state<HTMLCanvasElement | undefined>()
+  // The glow in two passes for the whole ring, each blurred once.
+  let halo = $state<HTMLCanvasElement | undefined>()
+  let near = $state<HTMLCanvasElement | undefined>()
   const motions = new Map<RingNode, ArcMotion>()
   let frameId = 0
   let settleUntil = 0
@@ -189,109 +199,136 @@
     frameId = 0
     if (!active) return
     const now = performance.now()
-    draw(now / 1000)
-    if (running(now)) frameId = requestAnimationFrame(tick)
+    const moving = running(now)
+    draw(now / 1000, moving)
+    if (moving) frameId = requestAnimationFrame(tick)
   }
 
-  function draw(t: number) {
-    const ctx = canvas?.getContext('2d')
-    if (!canvas || !ctx) return
-    const g = ring
-    const dpr = window.devicePixelRatio || 1
+  /** A canvas sized to the ring and cleared, or null. */
+  function layer(c: HTMLCanvasElement | undefined, dpr: number): CanvasRenderingContext2D | null {
+    const ctx = c?.getContext('2d')
+    if (!c || !ctx) return null
     const pw = Math.round(w * dpr)
     const ph = Math.round(height * dpr)
-    if (canvas.width !== pw || canvas.height !== ph) {
-      canvas.width = pw
-      canvas.height = ph
+    if (c.width !== pw || c.height !== ph) {
+      c.width = pw
+      c.height = ph
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, height)
     ctx.lineCap = 'round'
-    ctx.lineWidth = g.thickness
+    return ctx
+  }
 
-    const path = (range: [number, number]) => {
-      ctx.beginPath()
-      ctx.arc(g.cx, g.cy, g.radius, rad(range[0]), rad(range[1]), false)
-    }
+  function draw(t: number, animating: boolean) {
+    const dpr = window.devicePixelRatio || 1
+    const ctx = layer(canvas, dpr)
+    if (!ctx) return
+    const glows = dark && !reduceTransparency
+    const haloCtx = layer(halo, dpr)
+    const nearCtx = layer(near, dpr)
+    const g = ring
+    const th = g.thickness
+    const r = g.radius
 
     // Each node's quarter, the track its arc lights.
+    ctx.lineWidth = th
     ctx.strokeStyle = rgba(ink, dark ? 0.13 : 0.09)
     for (const a of arcs) {
-      path(ringArc(a.spot, 1).track)
+      const [lo, hi] = ringArc(a.spot, 1).track
+      ctx.beginPath()
+      ctx.arc(g.cx, g.cy, r, rad(lo), rad(hi), false)
       ctx.stroke()
     }
 
-    const glows = dark && !reduceTransparency
-    const cap = ((g.thickness / 2 / g.radius) * 180) / Math.PI
+    // The way between the arcs and the home's circle, where the lines run.
+    const outer = r - th / 2 - 4
+    const inner = g.hub / 2 + 4
+    const reading = untrack(() => readingAt)
     for (const a of arcs) {
       let m = motions.get(a.node)
-      if (!m) motions.set(a.node, (m = new ArcMotion(a.target, t)))
-      const f = m.step(a.target, t, reduceMotion)
+      if (!m) motions.set(a.node, (m = new ArcMotion(a.target, t, reading)))
+      const f = m.step(a.target, t, reduceMotion, reading, animating)
       const k = 1 - f.idle
       const lit = ringArc(a.spot, f.fill).lit
       if (k <= 0.01 || !lit) continue
-      const hue = hueOf(a.color)
-      if (glows && f.light > 0.004) {
-        for (const [wide, strength] of [[2.8, 0.12], [1.8, 0.25]] as const) {
-          ctx.lineWidth = g.thickness * wide
-          ctx.strokeStyle = rgba(hue, strength * f.light * k)
-          path(lit)
-          ctx.stroke()
-        }
-        ctx.lineWidth = g.thickness
-      }
+      const light = Math.min(1, f.light)
       // Light means live: the arc's colour while the box confirms it, ink
       // once it does not, crossing over as the phosphor ignites or cools.
-      const color = mix(ink2, hue, f.light)
-      // With no glow, full-strength colour says live alone: the wave runs
-      // shallower and the arc keeps its colour between crests.
-      ctx.strokeStyle = gradient(ctx, lit, a.target.towardHome, f, color, k, cap, glows ? 1 : 0.35)
-      path(lit)
-      ctx.stroke()
-      if (reduceMotion && a.target.flowing) chevron(ctx, lit, a.target.towardHome, alpha(f) * k)
+      const color = mix(ink2, hueOf(a.color), light)
+      const strength = ringStrength(a.target.kw)
+      const half = (((lit[1] - lit[0]) / 2) * r * Math.PI) / 180
+      const swell = (s: number) => (f.swell === null ? 0 : ringSwell(s, f.swell, half))
+      // A live arc leaves the swell the room it needs.
+      const base = 1 - (reduceMotion ? 0.1 : 0.3) * light
+      const end = dark ? 0.14 : 0.32
+      soft(ctx, lit, r, th, color, (u, s) => alpha(f) * k * ringEase(u, end) * (base + (1 - base) * swell(s)))
+      if (glows && light > 0.004) {
+        const g0 = light * k
+        if (haloCtx) soft(haloCtx, lit, r, th * 1.6, color, (u, s) => 0.9 * g0 * ringEase(u, 0) * (0.5 + 0.6 * strength * swell(s)))
+        if (nearCtx) soft(nearCtx, lit, r, th * 1.1, color, (u, s) => 0.65 * g0 * ringEase(u, 0) * (0.5 + 0.6 * strength * swell(s)))
+      }
+      const mid = (lit[0] + lit[1]) / 2
+      if (reduceMotion) {
+        if (a.target.flowing) chevron(ctx, mid, (outer + inner) / 2, a.target.towardHome, alpha(f) * k)
+        continue
+      }
+      // The lines keep their angle, so they narrow as they near the home and
+      // widen as they leave it, and fade in and out at the ends of the way.
+      if (light <= 0.004) continue
+      const spread = Math.max(8, (lit[1] - lit[0]) / 2)
+      for (const toHome of ringLines(f.phase, outer - inner, a.target.towardHome)) {
+        const rr = outer + (inner - outer) * toHome
+        const hs = spread * (1 - 0.4 * toHome)
+        const line = (dark ? 0.6 : 0.55) * strength * Math.pow(Math.sin(Math.PI * toHome), 1.2) * light * k
+        const range: [number, number] = [mid - hs, mid + hs]
+        soft(ctx, range, rr, th * 0.4, color, (u) => (dark ? 1 : 0.85) * line * ringEase(u, 0))
+        if (glows && nearCtx) soft(nearCtx, range, rr, th * 0.8, color, (u) => 0.75 * line * ringEase(u, 0))
+      }
     }
   }
 
   /**
-   * The core's brightness along the arc as a conic gradient that starts
-   * `lead` degrees before the arc's first angle, so the round cap there
-   * takes the arc's first colour. Stops sit ten to a wavelength, close
-   * enough that a crest running past keeps its height within 4 %.
+   * A soft arc at `radius` over `range`: `color` at `strength(u, s)` along
+   * it, `u` from -1 at its first angle to 1 at its last and `s` px from its
+   * middle, on a conic gradient that starts half the stroke's width before
+   * the arc, so each round cap takes the colour of the end it closes. Stops
+   * sit 6 px apart, close enough for light this soft.
    */
-  function gradient(ctx: CanvasRenderingContext2D, lit: [number, number], clockwise: boolean, f: ArcFrame, color: RGBA, k: number, lead: number, scale: number): CanvasGradient | string {
-    const span = lit[1] - lit[0]
-    const strength = (deg: number) => {
-      // From where the light starts: the first angle when it runs
-      // clockwise, the last when it runs back.
-      const s = ((clockwise ? deg : span - deg) * ring.radius * Math.PI) / 180
-      return alpha(f) * (1 - depth(f) * scale * (1 - wave(s, f.phase))) * k
+  function soft(ctx: CanvasRenderingContext2D, range: [number, number], radius: number, width: number, color: RGBA, strength: (u: number, s: number) => number) {
+    const [lo, hi] = range
+    const span = hi - lo
+    if (span <= 0.2) return
+    const perDegree = (radius * Math.PI) / 180
+    const lead = width / 2 / perDegree
+    const at = (deg: number) => rgba(color, strength(span > 0 ? (deg / span) * 2 - 1 : 0, Math.abs(deg - span / 2) * perDegree))
+    ctx.lineWidth = width
+    if (typeof ctx.createConicGradient === 'function') {
+      const grad = ctx.createConicGradient(rad(lo - lead), ring.cx, ring.cy)
+      grad.addColorStop(0, at(0))
+      const step = Math.max(0.5, Math.min(span / 8, 6 / perDegree))
+      for (let d = 0; d < span; d += step) grad.addColorStop((d + lead) / 360, at(d))
+      grad.addColorStop(Math.min(1, (span + lead) / 360), at(span))
+      grad.addColorStop(1, at(span))
+      ctx.strokeStyle = grad
+    } else {
+      ctx.strokeStyle = at(span / 2)
     }
-    if (typeof ctx.createConicGradient !== 'function') return rgba(color, strength(span / 2))
-    const grad = ctx.createConicGradient(rad(lit[0] - lead), ring.cx, ring.cy)
-    const at = (deg: number) => (deg + lead) / 360
-    grad.addColorStop(0, rgba(color, strength(0)))
-    grad.addColorStop(at(0), rgba(color, strength(0)))
-    const perDegree = (ring.radius * Math.PI) / 180
-    if (depth(f) * scale > 0.001 && span * perDegree > 1) {
-      const step = WAVELENGTH / 10 / perDegree
-      for (let d = step; d < span; d += step) grad.addColorStop(at(d), rgba(color, strength(d)))
-    }
-    grad.addColorStop(at(span), rgba(color, strength(span)))
-    // Past the arc only the end's round cap is drawn; it keeps the end's colour.
-    grad.addColorStop(1, rgba(color, strength(span)))
-    return grad
+    ctx.beginPath()
+    ctx.arc(ring.cx, ring.cy, radius, rad(lo), rad(hi), false)
+    ctx.stroke()
   }
 
-  /** A still chevron at the middle of an arc, pointing the way the light
-   *  would run, in ink. */
-  function chevron(ctx: CanvasRenderingContext2D, lit: [number, number], clockwise: boolean, opacity: number) {
+  /** A still chevron on the way between an arc and the home, at the arc's
+   *  middle, pointing the way the lines would run, in ink. */
+  function chevron(ctx: CanvasRenderingContext2D, angle: number, radius: number, inward: boolean, opacity: number) {
     const g = ring
-    const mid = rad((lit[0] + lit[1]) / 2)
-    const cx = g.cx + g.radius * Math.cos(mid)
-    const cy = g.cy + g.radius * Math.sin(mid)
-    const dir = clockwise ? 1 : -1
-    const ux = -Math.sin(mid) * dir
-    const uy = Math.cos(mid) * dir
+    const a = rad(angle)
+    const cx = g.cx + radius * Math.cos(a)
+    const cy = g.cy + radius * Math.sin(a)
+    const dir = inward ? -1 : 1
+    const ux = Math.cos(a) * dir
+    const uy = Math.sin(a) * dir
     const size = Math.max(6, g.thickness * 0.6 + 3)
     ctx.save()
     ctx.lineWidth = 1.75
@@ -443,8 +480,12 @@
   bind:this={root}
   style:height="{height}px"
   style:--scale={ring.labelScale}
+  style:--halo="{ring.thickness * 1.3}px"
+  style:--near="{ring.thickness * 0.5}px"
   data-live={anyLive}
 >
+  <canvas class="halo" bind:this={halo} style:width="{w}px" style:height="{height}px" aria-hidden="true"></canvas>
+  <canvas class="near" bind:this={near} style:width="{w}px" style:height="{height}px" aria-hidden="true"></canvas>
   <canvas bind:this={canvas} style:width="{w}px" style:height="{height}px" aria-hidden="true"></canvas>
 
   <div class="box" style:top="{ring.cy - ring.box / 2}px" style:height="{ring.box}px">
@@ -507,6 +548,16 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+  }
+
+  .halo {
+    filter: blur(var(--halo));
+    mix-blend-mode: plus-lighter;
+  }
+
+  .near {
+    filter: blur(var(--near));
+    mix-blend-mode: plus-lighter;
   }
 
   .box {

@@ -337,7 +337,7 @@
     <!-- A tap opens the node: the charger's sheet for the car, a live line
          for the rest. It works while the saved home reconnects; the panel
          shows the progress, then checks what the box can do. -->
-    <EnergyRing readings={ring} {active} onopen={openPlanetControls} />
+    <EnergyRing readings={ring} {active} readingAt={site.lastFrameAtMs} onopen={openPlanetControls} />
     {#if status && !statusLive}
       <p class="note" role="status">Device details are out of date.{live ? ' Showing live totals.' : ''}</p>
     {/if}

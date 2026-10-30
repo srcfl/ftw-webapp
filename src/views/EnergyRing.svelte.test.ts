@@ -124,7 +124,7 @@ describe('the ring', () => {
     const view = render(EnergyRing, { props: { readings: house(), active: true } })
     await tick()
     frames.run()
-    expect(strokes.wide(), 'a live arc did not glow').toBeGreaterThan(0)
+    expect(strokes.glow(), 'a live arc did not glow').toBeGreaterThan(0)
     expect(strokes.colours.has('rgba(255, 225, 77)'), 'a live sun was not in its colour').toBe(true)
 
     strokes.clear()
@@ -134,7 +134,7 @@ describe('the ring', () => {
     vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 10_000)
     frames.run()
     expect(strokes.list.length, 'nothing was drawn').toBeGreaterThan(0)
-    expect(strokes.wide(), 'a cached arc glowed').toBe(0)
+    expect(strokes.glow(), 'a cached arc glowed').toBe(0)
     expect(Math.max(...strokes.stops), 'a cached arc kept its full strength').toBeLessThanOrEqual(0.35 + 1e-6)
     expect([...strokes.colours], 'a cached arc kept its colour').toEqual(['rgba(154, 165, 184)'])
   })
@@ -160,16 +160,16 @@ function visibility(state: DocumentVisibilityState) {
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
-/** A 2D context that keeps each stroke's width and each colour stop's alpha. */
+/** 2D contexts that keep each stroke's layer and each colour stop's alpha. */
 function recordStrokes() {
-  const list: { width: number }[] = []
+  const list: { glow: boolean }[] = []
   const stops: number[] = []
   const colours = new Set<string>()
   const alphaOf = (c: string) => Number(/,\s*([\d.]+)\)$/.exec(c)?.[1] ?? 1)
-  const ctx = {
+  const context = (glow: boolean) => ({
     lineWidth: 1, strokeStyle: '' as unknown, fillStyle: '#000', lineCap: '', lineJoin: '',
     setTransform() {}, clearRect() {}, beginPath() {}, arc() {}, moveTo() {}, lineTo() {}, save() {}, restore() {},
-    stroke() { list.push({ width: this.lineWidth }) },
+    stroke() { list.push({ glow }) },
     createConicGradient() {
       return {
         addColorStop: (_: number, c: string) => {
@@ -178,15 +178,20 @@ function recordStrokes() {
         },
       }
     },
-  }
-  HTMLCanvasElement.prototype.getContext = (() => ctx) as never
+  })
+  const glowing = context(true)
+  const plain = context(false)
+  // The glow's own blurred layers, and the cores.
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
+    return this.classList.contains('halo') || this.classList.contains('near') ? glowing : plain
+  } as never
   return {
     list,
     stops,
     /** The colours of the stops, without their alpha. */
     colours,
-    /** Strokes wider than an arc: the glow. */
-    wide: () => list.filter((s) => s.width > 20).length,
+    /** Strokes on the glow's layers. */
+    glow: () => list.filter((s) => s.glow).length,
     clear() {
       list.length = 0
       stops.length = 0

@@ -1,5 +1,5 @@
 /* The ring on Now, as the iOS app draws it (Ring / Quiet, chosen by Fredrik
- * on 24 October 2026).
+ * on 24 October 2026, with steady flow, J, on 30 October 2026).
  *
  * The home's use sits in the middle of a ring. The sun is top left, the
  * battery top right, the grid bottom left and the car bottom right, each as
@@ -229,15 +229,15 @@ export function ringArc(spot: RingSpot, fill: number): RingArc {
 }
 
 /**
- * How much of its quarter a node's arc lights: none at rest, a fifth at
- * 0.6 kW, half at 1.8 kW, nine tenths at 6 kW. One curve for every node, so
+ * How much of its quarter a node's arc lights: none at rest, at least a
+ * quarter, half at 1.8 kW, nine tenths at 6 kW. One curve for every node, so
  * arcs compare across the ring, and it saturates, so an 11 kW charger never
  * swallows the rest.
  */
 export function ringFill(kw: number): number {
   const a = Math.abs(kw)
   if (!Number.isFinite(a) || a * 1000 <= FLOW_IDLE_W) return 0
-  return Math.min(1, Math.max(0.12, 1 - Math.exp(-a / 2.5)))
+  return Math.min(1, Math.max(0.25, 1 - Math.exp(-a / 2.5)))
 }
 
 // ---------- the room it takes ----------
