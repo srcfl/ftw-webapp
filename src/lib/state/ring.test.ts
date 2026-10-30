@@ -150,10 +150,11 @@ describe('where the nodes sit', () => {
     expect(ringArc('top', 0).lit).toBeNull()
   })
 
-  it('lights a fifth at 0.6 kW, half at 1.8 kW and nine tenths at 6 kW', () => {
+  it('lights at least a quarter, half at 1.8 kW and nine tenths at 6 kW', () => {
     expect(ringFill(0.04)).toBe(0)
-    expect(ringFill(0.05)).toBe(0.12)
-    expect(ringFill(0.6)).toBeCloseTo(0.21, 2)
+    expect(ringFill(0.05)).toBe(0.25)
+    expect(ringFill(0.7)).toBe(0.25)
+    expect(ringFill(0.8)).toBeGreaterThan(0.25)
     expect(ringFill(1.8)).toBeCloseTo(0.51, 2)
     expect(ringFill(6)).toBeCloseTo(0.91, 2)
     expect(ringFill(-6)).toBe(ringFill(6))
