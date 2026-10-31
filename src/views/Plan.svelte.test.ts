@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { cleanup, render } from '@testing-library/svelte'
 import Plan from './Plan.svelte'
 import { SiteStore } from '$lib/state/site.svelte'
 import { LoopbackCarrier } from '$lib/carrier/loopback'
@@ -27,17 +27,21 @@ function chart(): Element | null {
   return document.querySelector('ftw-price-chart')
 }
 
+// destroy() the view. Emptying the document leaves $effects and asks
+// running; a late {#if} patch then throws Comment is not defined, which
+// is how CI went red with every test still green.
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
 describe('the Plan view, against the simulator', () => {
   let fetched: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
     vi.spyOn(Date, 'now').mockReturnValue(MORNING)
     fetched = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
-  })
-
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.restoreAllMocks()
   })
 
   async function mount() {
@@ -156,11 +160,6 @@ describe('a viewer on the Plan screen', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no origin'))
   })
 
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.restoreAllMocks()
-  })
-
   it('cannot press a mode, and is told why in the right words', async () => {
     // Not hidden: which mode the house runs in is a reading, and a viewer is
     // entitled to it. What must not happen is a live button the box will
@@ -224,11 +223,6 @@ describe('a viewer on the Plan screen', () => {
 })
 
 describe('the Plan screen before the box has answered', () => {
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.restoreAllMocks()
-  })
-
   it('says nothing about what the box supports', async () => {
     // A cold start paints from cache with no carrier yet: `caps` is empty
     // because nobody has asked, not because the box said so. Both sentences
@@ -248,12 +242,6 @@ describe('the Plan screen before the box has answered', () => {
 })
 
 describe('a price window as the day moves under it', () => {
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-  })
-
   /** Real box, real wire, and a clock the test drives. */
   async function drawn() {
     vi.useFakeTimers()
@@ -337,12 +325,6 @@ describe('a price window as the day moves under it', () => {
  */
 describe('a plan the box could not answer', () => {
   const rows = () => document.querySelectorAll('section.timeline li').length
-
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-  })
 
   it('is asked for again on its own, without the session ever moving', async () => {
     vi.useFakeTimers()
@@ -467,12 +449,6 @@ describe('a plan the box could not answer', () => {
 describe('a plan and a price window the wire cut short', () => {
   const rows = () => document.querySelectorAll('section.timeline li').length
 
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-  })
-
   it('arrive on their own once the carrier is back', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(MORNING)
@@ -530,12 +506,6 @@ describe('a plan and a price window the wire cut short', () => {
  * clock can be moved without a box in the way.
  */
 describe('when the Plan view asks for prices', () => {
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.useRealTimers()
-    vi.restoreAllMocks()
-  })
-
   /** A store that believes it is streaming from a box that has prices. */
   function streamingStore() {
     const site = new SiteStore('test')
@@ -815,11 +785,6 @@ describe('when the Plan view asks for prices', () => {
 describe('the notice under the price chart', () => {
   const MIDNIGHT = new Date(2026, 6, 15, 0, 0, 0).getTime()
 
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.restoreAllMocks()
-  })
-
   /** An hourly window over `hours`, skipping any hour in `missing`. */
   function window(hours: number, missing: readonly number[] = []): Prices {
     const slots = []
@@ -908,11 +873,6 @@ describe('the notice under the price chart', () => {
  * card greying out on send read as the tap having done nothing.
  */
 describe('switching how the home is run', () => {
-  afterEach(() => {
-    document.body.replaceChildren()
-    vi.restoreAllMocks()
-  })
-
   function choice(label: string): HTMLButtonElement | undefined {
     return [...document.querySelectorAll('button.choice')].find((b) =>
       b.textContent?.includes(label)
