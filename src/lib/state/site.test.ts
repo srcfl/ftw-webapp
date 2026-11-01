@@ -249,3 +249,36 @@ describe('a carrier that finishes connecting after sign-out', () => {
     site.destroy()
   })
 })
+
+describe('the household clock', () => {
+  function onDevice(zone: string) {
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (
+      this: Intl.DateTimeFormat,
+    ) {
+      return { ...real.call(this), timeZone: zone }
+    })
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('offers the phone zone to a box on UTC, once', async () => {
+    onDevice('Europe/Stockholm')
+    const box = new SimBox({ tz: 'UTC' })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(box.tz).toBe('Europe/Stockholm'), { timeout: 2_000 })
+    site.destroy()
+  })
+
+  it('leaves a zone the box keeps alone', async () => {
+    onDevice('America/New_York')
+    const box = new SimBox({ tz: 'Europe/Stockholm' })
+    const site = new SiteStore('test')
+    site.connect(new LoopbackCarrier(box, { latencyMs: 0 }))
+    await vi.waitFor(() => expect(site.session.phase).toBe('streaming'), { timeout: 2_000 })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(box.tz).toBe('Europe/Stockholm')
+    site.destroy()
+  })
+})

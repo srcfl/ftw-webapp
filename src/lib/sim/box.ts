@@ -41,6 +41,7 @@ import {
   API_CHUNK_BYTES,
   API_MAX_BYTES,
   OP_PLANNER_PREFS_SET,
+  OP_SITE_TIME_ZONE_PROPOSE,
   OP_SET_MODE,
   OP_BATTERY_HOLD,
   OP_LOADPOINT_HOLD,
@@ -242,6 +243,7 @@ const DEFAULT_MODE: SiteMode = 'planner_passive_arbitrage'
 const OP_SCOPES: Record<string, string> = {
   [OP_SET_MODE]: 'ftw.mode.write',
   [OP_PLANNER_PREFS_SET]: 'ftw.mode.write',
+  [OP_SITE_TIME_ZONE_PROPOSE]: 'ftw.setup.write',
   [OP_BATTERY_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_HOLD]: 'ftw.dispatch.write',
   [OP_LOADPOINT_BOOST]: 'ftw.dispatch.write',
@@ -327,6 +329,8 @@ export interface SimBoxOptions {
    * gets wrong and cannot notice.
    */
   scopes?: string[]
+  /** The zone the box runs on. A Docker box says UTC. */
+  tz?: string
   /** False models a box from before hello could carry a subscription. */
   inlineSubscribe?: boolean
   cloud?: HelloOk['cloud']
@@ -342,6 +346,8 @@ export interface SimBoxOptions {
 export class SimBox {
   readonly house: HouseConfig
   faults: SimFaults
+  /** The zone hello names. */
+  tz: string
 
   #now: () => number
   #startedAtMs: number
@@ -410,6 +416,7 @@ export class SimBox {
     this.#role = opts.role ?? ROLE_OWNER
     this.#scopes = opts.scopes ?? null
     this.#inlineSubscribe = opts.inlineSubscribe ?? true
+    this.tz = opts.tz ?? 'Europe/Stockholm'
     this.#cloud = opts.cloud
     if (opts.mode && MODE_KEYS.includes(opts.mode)) this.#mode = opts.mode
     this.#api = new SimApi({
@@ -635,7 +642,7 @@ export class SimBox {
     const b: HelloOk = {
       proto,
       mode: this.faults.booting ? 'booting' : proto === PROTO_FLOOR ? 'floor' : 'full',
-      box: { id: 'sim-0001', build: 'sim', tz: 'Europe/Stockholm' },
+      box: { id: 'sim-0001', build: 'sim', tz: this.tz },
       clock: { source: 'ntp', syncedAtMs: this.#startedAtMs, uptimeMs: this.uptimeMs },
       caps: proto === PROTO_FLOOR ? ['status.core'] : this.#cloud ? [...CAPS, CAP_CLOUD_TUN] : CAPS,
       ...(this.#cloud ? { cloud: this.#cloud } : {}),
@@ -805,6 +812,24 @@ export class SimBox {
     // The echo of a requested value is never confirmation. Real confirmation
     // is the driver reading the value back, which may simply not happen.
     if (this.faults.neverConfirm) return
+
+    // The household clock. Taken only while the box keeps none; a real box
+    // then restarts, and the next hello names it.
+    if (cmd.op === OP_SITE_TIME_ZONE_PROPOSE) {
+      const tz = cmd.args['tz']
+      if (typeof tz !== 'string' || tz === '' || tz === 'Local') {
+        this.#cmdResult(cmd.cmdId, 'rejected', {
+          code: 'E_UNKNOWN_OP',
+          args: { op: cmd.op, arg: 'tz', value: tz ?? null },
+        })
+      } else if (this.tz === 'UTC' || this.tz === 'Etc/UTC') {
+        this.tz = tz
+        this.#cmdResult(cmd.cmdId, 'applied')
+      } else {
+        this.#cmdResult(cmd.cmdId, 'rejected', { code: 'E_PRECONDITION', args: { op: cmd.op, tz: this.tz } })
+      }
+      return
+    }
 
     if (cmd.op === OP_SET_MODE) {
       this.#cmdResult(cmd.cmdId, 'applied', undefined, {

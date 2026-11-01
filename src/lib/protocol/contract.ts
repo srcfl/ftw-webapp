@@ -93,6 +93,9 @@ export function roleHasScope(role: string, scope: string): boolean {
 /** The scope the box checks for OP_SET_MODE. */
 export const SCOPE_MODE_WRITE: Scope = 'ftw.mode.write'
 
+/** The scope the box checks for OP_SITE_TIME_ZONE_PROPOSE. */
+export const SCOPE_SETUP_WRITE: Scope = 'ftw.setup.write'
+
 /** The capability a box offers when its optimizer accepts dispatch. */
 export const CAP_PLAN_DISPATCH = 'plan.dispatch'
 

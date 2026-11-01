@@ -486,6 +486,12 @@ export function carriesOverSession(contentType: string | undefined): boolean {
  */
 export const OP_SET_MODE = 'site.mode.set'
 export const OP_PLANNER_PREFS_SET = 'planner.prefs.set'
+/**
+ * Offer this device's time zone as the household clock. The box takes it only
+ * while it keeps none, and restarts to run on it. A box that keeps one answers
+ * E_PRECONDITION with the zone it keeps in args.tz.
+ */
+export const OP_SITE_TIME_ZONE_PROPOSE = 'site.time_zone.propose'
 export const OP_BATTERY_HOLD = 'battery.hold'
 export const OP_LOADPOINT_HOLD = 'loadpoint.hold'
 export const OP_LOADPOINT_BOOST = 'loadpoint.boost'

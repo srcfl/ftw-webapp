@@ -14,7 +14,8 @@
 import { Session, type SessionState, type ApiResponse } from '$lib/protocol/session'
 import type { Fid } from '$lib/protocol/types'
 import type { Plan, PriceQuery, Prices, CmdResult, Guard, ApiReq, Role } from '$lib/protocol/messages'
-import { ROLE_OWNER } from '$lib/protocol/messages'
+import { OP_SITE_TIME_ZONE_PROPOSE, ROLE_OWNER } from '$lib/protocol/messages'
+import { deviceTimeZone, timeZoneToOffer } from './time-zone-offer'
 import type { HistQuery, HistChunk, HistEnd } from '$lib/protocol/messages'
 import type { Carrier } from '$lib/carrier/carrier'
 import { explain, FID, type Explanation } from '$lib/format/explanation'
@@ -93,6 +94,8 @@ export class SiteStore {
   /** Invalidates cache reads started for an older home or a dead store. */
   #startGeneration = 0
   #markedLive = false
+  /** Boxes this run has offered the device's time zone, by box id. */
+  #zoneOffered = new Set<string>()
   /** Set for good in destroy(). A dead store must not accept a carrier. */
   #destroyed = false
   /** Wall clock when the last frame arrived. Null until one does. */
@@ -170,6 +173,7 @@ export class SiteStore {
         this.cachedAtMs = null
         const siteId = this.#siteId
         if (siteId) this.#writer.offer(() => snapshotFromSession(siteId, s))
+        this.#offerTimeZone(s)
       }
     })
   }
@@ -350,6 +354,21 @@ export class SiteStore {
    */
   command(op: string, args: Record<string, unknown>, guards: Guard[] = []): Promise<CmdResult> {
     return this.#session.command(op, args, guards).promise
+  }
+
+  /**
+   * Offer this device's zone to a box on UTC, once per box per run. A Docker
+   * box keeps no household clock, so a car goal of 17:00 was met at 18:00 in
+   * a Stockholm winter. The box decides whether to take it; a refusal names
+   * the zone it keeps, and the next hello says which one it runs on.
+   */
+  #offerTimeZone(s: SessionState): void {
+    const box = s.box
+    if (!box || this.#zoneOffered.has(box.id)) return
+    const zone = timeZoneToOffer(box.tz, deviceTimeZone(), s.scopes)
+    if (!zone) return
+    this.#zoneOffered.add(box.id)
+    this.#session.command(OP_SITE_TIME_ZONE_PROPOSE, { tz: zone }).promise.catch(() => {})
   }
 
   get paired(): boolean {
