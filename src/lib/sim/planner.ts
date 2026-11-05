@@ -40,7 +40,7 @@ export function priceAt(hourOfDay: number): number {
  * the wire carries a total per slot at all.
  */
 const SIM_GRID_TARIFF_MINOR = 70
-const SIM_VAT_PCT = 25
+export const SIM_VAT_PCT = 25
 
 /**
  * What a kilowatt-hour costs to import: spot plus tariff, taxed.

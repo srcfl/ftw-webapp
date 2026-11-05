@@ -202,6 +202,15 @@ the box computes it because the box holds that configuration. An app that
 multiplied spot by its own guess would put a different number under the same
 hour than the box's own dashboard does.
 
+`vatPermille` is the VAT rate the box taxed `totalMinor` at, in permille: 250
+is 25 %. Like every ratio on the wire it is an integer, rounded once on the
+box. It is the rate after the box's default, so 0 means no VAT. An older box
+leaves it out, and absent means unknown, never zero. It is what lets an app
+show spot with VAT, `spotMinor × (1 + vatPermille / 1000)`, at the box's own
+rate. The box taxes a slot when it stores it and rewrites today and tomorrow
+every hour, so for an hour after the rate changes, and for older days, a
+total can carry the old rate.
+
 Times are wall clock, unlike every age in this protocol: prices are about
 hours a person plans around rather than about the box.
 

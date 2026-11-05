@@ -60,7 +60,7 @@ import {
 import { SAFETY_K_DEFAULT, clampSafetyK, trustFromSafetyK, type BatteryExport } from '$lib/format/plan-prefs'
 import { SimApi, evPluggedIn } from './api'
 import { roleHasScope, ROLE_SCOPES, CAP_CLOUD_TUN } from '$lib/protocol/contract'
-import { buildPlan, priceAt, importTotalMinor } from './planner'
+import { buildPlan, priceAt, importTotalMinor, SIM_VAT_PCT } from './planner'
 import {
   RESOLUTIONS,
   DEFAULT_MAX_POINTS,
@@ -1141,6 +1141,8 @@ export class SimBox {
       // walks one unbroken hour at a time. Read the contract, not this line,
       // for what `stale` means.
       stale: last === undefined || last.startMs + last.durationMs < q.toMs,
+      // The rate importTotalMinor taxed the totals at, as the box sends it.
+      vatPermille: Math.round(SIM_VAT_PCT * 10),
     }
 
     this.#send(

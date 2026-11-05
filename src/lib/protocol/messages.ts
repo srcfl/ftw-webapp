@@ -336,6 +336,15 @@ export interface Prices {
    * apart.
    */
   stale: boolean
+  /**
+   * The VAT rate the box taxed `totalMinor` at, in permille: 250 is 25 %.
+   *
+   * Integer permille like every other ratio on the wire, and the rate after
+   * the box's default, so 0 means no VAT. A box older than the field leaves it
+   * out, and absent is unknown, never zero. With it a client can show spot
+   * with VAT at the box's own rate instead of a guess.
+   */
+  vatPermille?: number
 }
 
 // --------------------------------------------------------------------------

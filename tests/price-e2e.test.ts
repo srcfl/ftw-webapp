@@ -94,6 +94,25 @@ describe('prices on the wire', () => {
     }
   })
 
+  it('names the VAT rate the totals were taxed at', async () => {
+    // What lets a client show spot with VAT at the box's rate rather than a
+    // guess. Integer permille, like every other ratio on the wire.
+    const box = new SimBox({ now: () => MORNING })
+    const session = connect(box)
+    await settle()
+
+    const prices = await session.prices({ fromMs: today(MORNING), toMs: MORNING + 48 * HOUR_MS })
+    const vat = prices.vatPermille!
+    expect(Number.isInteger(vat)).toBe(true)
+    expect(vat).toBe(250)
+
+    // Taken back out of each total at that rate, what is left above spot is
+    // the same tariff in every hour. A wrong rate leaves a tariff that follows
+    // the market.
+    const tariffs = prices.slots.map((s) => s.totalMinor / (1 + vat / 1000) - s.spotMinor)
+    expect(Math.max(...tariffs) - Math.min(...tariffs)).toBeLessThan(1)
+  })
+
   it('is self-consistent: slots are contiguous and aligned', async () => {
     const box = new SimBox({ now: () => MORNING })
     const session = connect(box)
